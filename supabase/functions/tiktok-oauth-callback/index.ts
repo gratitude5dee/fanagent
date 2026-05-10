@@ -72,9 +72,17 @@ Deno.serve(async (request) => {
         tiktok_display_name: creatorNickname ?? creatorUsername,
         tiktok_creator_info: creatorInfo,
         status: "connected",
+        is_primary: true,
       })
       .eq("id", state.accountId);
     if (updated.error) throw updated.error;
+
+    // V1: enforce one primary per artist by demoting any others.
+    await supabase
+      .from("accounts")
+      .update({ is_primary: false })
+      .eq("platform", "tiktok")
+      .neq("id", state.accountId);
 
     return redirect(
       `${siteUrl()}?tiktok=connected&accountId=${
