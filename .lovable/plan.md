@@ -1,89 +1,77 @@
-## Fanpage Autopilot — Implementation Plan (v2)
+## Fanpage Autopilot — Final Plan
 
-Builds the autopilot lane on the existing `fanagent` codebase. Reuses `create-generation-batch`, `process-generation-due`, `publish-tiktok-due`, `tiktok-oauth-callback`, and the GMI Seedance helpers. Adds stock-first generation, ElevenLabs Scribe v2 word-timed transcription, Remotion karaoke composition, and cron-driven daily publishing.
+Builds the autopilot lane on the existing `fanagent` codebase. **Renderer**: hosted Remotion SaaS (single API key — `REMOTION_RENDER_API_KEY` + `REMOTION_RENDER_ENDPOINT`). **OAuth**: extend the existing `tiktok-oauth-callback` rather than fork.
 
-### Phase 1 — Apply pending DB migration + storage
+### Phase 1 — DB + storage
 
-1. Apply `supabase/migrations/20260510161218_fanagent_core.sql` (currently unapplied — source of every `PGRST205` in the dashboard).
+1. Apply pending migration `20260510161218_fanagent_core.sql` (source of every dashboard `PGRST205`).
 2. New migration adds:
-   - `accounts.is_primary boolean` (V1 enforces one TikTok account per user).
-   - `generation_batches.cadence = 'daily'` default + `next_run_at timestamptz`.
-   - `generation_items.stock_clip_url`, `render_job_id`, `render_provider`, `transcript_id` columns.
-   - `media_assets.transcript jsonb` (Scribe v2 word array).
-   - `publish_attempts` table (TikTok publish_id, status, error, raw response).
-   - `worker_runs` table (run_id, function name, started/ended, items processed, errors).
+   - `accounts.is_primary boolean` (V1: one TikTok account per user, partial unique index).
+   - `accounts.creator_info jsonb`, `accounts.encrypted_access_token`, `encrypted_refresh_token`, `token_expires_at`.
+   - `generation_batches.next_run_at timestamptz`, `paused_at timestamptz`.
+   - `generation_items.stock_clip_url`, `render_provider`, `render_job_id`, `render_callback_token`.
+   - `media_assets.transcript jsonb` (Scribe v2 word array + language).
+   - New tables: `publish_attempts` (post_id, tiktok_publish_id, status, error, raw_response), `worker_runs` (function, started/ended, items, errors).
 3. Storage buckets (private, signed URLs): `audio-uploads`, `stock-cache`, `renders`. RLS scoped to `auth.uid()`.
 4. Enable `pg_cron` + `pg_net`. Add `CRON_SECRET` runtime secret.
 
-### Phase 2 — Stock source layer (default)
+### Phase 2 — Stock source layer
 
-`supabase/functions/_shared/stock.ts` exposes `searchStock({query, durationSec, aspect, count})` with three providers:
+`supabase/functions/_shared/stock.ts` exposes `searchStock({query, durationSec, aspect, count})` over three providers behind one ranker:
 - **User library** — `media_assets` where `kind='video'`, `source='upload'`.
 - **Pexels Videos** (`PEXELS_API_KEY`).
 - **Pixabay Videos** (`PIXABAY_API_KEY`).
-- **fal.ai stock search** (`FAL_KEY`, also reused for Seedance fallback).
+- **fal.ai stock** (`FAL_KEY`, also reused for Seedance fallback).
 
-Ranks by duration ≥ 15s, vertical-friendly aspect, query relevance. Caches downloaded MP4s into `stock-cache` bucket so repeat picks don't re-fetch.
+Caches downloaded MP4s into `stock-cache` bucket so repeat picks don't re-fetch.
 
 ### Phase 3 — Scribe v2 transcription
 
 New edge function `transcribe-audio`:
-- Pulls audio from `audio-uploads` bucket → POSTs to ElevenLabs `scribe_v2` (multipart, no diarize).
-- Persists `{words:[{text,start,end,confidence}], language}` to `media_assets.transcript`.
-- Auto-invoked at the end of `create-generation-batch` once the audio asset is registered.
-- Idempotent: skips if `transcript` already populated.
+- Pulls audio from `audio-uploads` → POSTs to ElevenLabs `scribe_v2` (multipart, no diarize).
+- Persists `{words:[{text,start,end,confidence}], language}` into `media_assets.transcript`.
+- Auto-invoked at the end of `create-generation-batch`. Idempotent.
 
 ### Phase 4 — Remotion karaoke composition
 
 `remotion/` project (sibling to `supabase/`):
-- `KaraokeFanpage.tsx` — composition props: `{ audioUrl, stockClipUrl, transcript, durationFrames=450, fps=30 }` (15s × 30fps).
-- TikTok-style word-by-word: active word scaled + accent color, prior dim, next muted; safe-area padded for TikTok UI overlays; cut flash on every Nth word boundary.
-- `Root.tsx` registers it; `scripts/render.mjs` is the programmatic render entry (per the remotion-video skill: `chromeMode: "chrome-for-testing"`, `muted: true`, compositor symlink fix for NixOS).
-- Versioned in repo so re-renders are deterministic.
+- `KaraokeFanpage.tsx` — composition props `{ audioUrl, stockClipUrl, transcript, durationFrames=450, fps=30 }` (15s × 30fps).
+- TikTok-style word-by-word karaoke: active word scaled + accent color, prior dim, next muted; safe-area padded; cut flash on word boundaries.
+- `Root.tsx` registers it; bundle is uploaded to the hosted Remotion service once and pinned by `REMOTION_SERVE_URL`.
 
-### Phase 5 — Render host (DECISION REQUIRED — pick one)
+### Phase 5 — Render pipeline (hosted SaaS)
 
-`render-karaoke` edge function dispatches the job and writes `generation_items.render_job_id`. Options:
+`render-karaoke` edge function:
+- POSTs `{ serveUrl, composition: 'KaraokeFanpage', inputProps, webhook }` to `REMOTION_RENDER_ENDPOINT` with `Authorization: Bearer ${REMOTION_RENDER_API_KEY}`.
+- Stores returned job id into `generation_items.render_job_id`, sets status `rendering`.
 
-- **A. Remotion Lambda** (recommended) — fastest, ~1¢/15s render. One-time `npx remotion lambda sites create` + `functions deploy`. Needs `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `REMOTION_LAMBDA_FUNCTION_NAME`, `REMOTION_SERVE_URL`.
-- **B. Cloud Run job** — single GCP service-account JSON; runs `@remotion/renderer` headless.
-- **C. Hosted Remotion-as-a-Service** (nodes.studio / remotion.pro) — single API key, no infra.
+`render-callback` edge function (no JWT, signed by `render_callback_token`):
+- Receives webhook with final MP4 URL.
+- Streams MP4 into the `renders` bucket → sets `generation_items.video_url` + status `ready`.
 
-Webhook back to `render-callback` edge function → uploads MP4 to `renders` bucket → sets `generation_items.video_url` + status `ready`.
+### Phase 6 — Workers
 
-QCut is excluded — it's a browser editor, not a render service, and breaks autopilot.
+- `fanpage-campaign` (auth via Supabase JWT) — wraps `create-generation-batch`; adds `list`, `pause`, `resume`, `updateSchedule`, `skipPost`, `regeneratePost`.
+- `fanpage-generate-due` (accepts `x-cron-secret`) — replaces `process-generation-due`. For each due item: `stock` → `pick-stock-clip` → `render-karaoke`; `seedance` → existing GMI → `render-karaoke`; `hybrid` → stock first, fall back. Writes `worker_runs`.
+- `fanpage-publish-due` (accepts `x-cron-secret`) — wraps `publish-tiktok-due`; uses Direct Post `FILE_UPLOAD` builders from `src/lib/fanagent/tiktok.ts`. Writes `publish_attempts`.
+- `tiktok-oauth-callback` (extended) — capture `creator_info`, encrypt + store tokens via `_shared/crypto.ts`, mark `accounts.is_primary=true`.
 
-### Phase 6 — Worker rewiring + new edge functions
+### Phase 7 — Cron (insert, not migration)
 
-Rename / add:
-- `fanpage-campaign` — wraps current `create-generation-batch`; adds `listCampaigns`, `pauseCampaign`, `resumeCampaign`, `updateSchedule`, `skipPost`, `regeneratePost`. Auth via Supabase JWT.
-- `fanpage-generate-due` — replaces / wraps `process-generation-due`. For each due item: `stock` → `pick-stock-clip` → `render-karaoke`; `seedance` → existing GMI path → `render-karaoke` overlay; `hybrid` → stock first, fall back if no candidate ≥ confidence threshold. Accepts `x-cron-secret`.
-- `fanpage-publish-due` — wraps current `publish-tiktok-due`; uses TikTok Direct Post `FILE_UPLOAD` chunked init from `src/lib/fanagent/tiktok.ts`. Writes `publish_attempts`. Accepts `x-cron-secret`.
-- `fanpage-tiktok-oauth-callback` — current `tiktok-oauth-callback` extended to capture `creator_info` and store encrypted tokens (already partially present via `_shared/crypto.ts`).
-- `transcribe-audio`, `pick-stock-clip`, `render-karaoke`, `render-callback` — new.
-
-### Phase 7 — Cron
-
-Insert (not migration — contains URL + anon key):
 ```sql
-select cron.schedule('fanpage-generate-due', '*/5 * * * *', $$
+select cron.schedule('fanpage-generate-due','*/5 * * * *', $$
   select net.http_post(
-    url := 'https://zjbiulirzrctfmakqjwk.supabase.co/functions/v1/fanpage-generate-due',
-    headers := '{"Content-Type":"application/json","x-cron-secret":"<CRON_SECRET>"}'::jsonb,
-    body := '{}'::jsonb
-  );
+    url:='https://zjbiulirzrctfmakqjwk.supabase.co/functions/v1/fanpage-generate-due',
+    headers:='{"Content-Type":"application/json","x-cron-secret":"<CRON_SECRET>"}'::jsonb,
+    body:='{}'::jsonb);
 $$);
-select cron.schedule('fanpage-publish-due', '*/5 * * * *', ...);
+select cron.schedule('fanpage-publish-due','*/5 * * * *', ... );
 ```
 
-### Phase 8 — Frontend lane
+### Phase 8 — Frontend
 
-A new `/autopilot` route with a 4-step setup wizard (Connect TikTok → Upload audio → Choose source mode + cadence → Confirm), then a queue/calendar view (reuse `FanAgentCalendar.tsx`) with pause/skip/regenerate, transcription + render status badges, and a `@remotion/player` preview. Existing Kanvas pages remain untouched.
+A new `/autopilot` route with a 4-step wizard (Connect TikTok → Upload audio → Source mode + cadence → Confirm), then a queue/calendar view (reuse `FanAgentCalendar.tsx`) with pause/skip/regenerate, transcription + render status badges, and a `@remotion/player` preview.
 
 ### Secrets to request after approval
 
-`ELEVENLABS_API_KEY`, `PEXELS_API_KEY`, `PIXABAY_API_KEY`, `FAL_KEY`, `CRON_SECRET`, `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, plus host credentials per Phase 5 choice.
-
-### Open question (blocking)
-
-**Which render host: A (Remotion Lambda), B (Cloud Run), or C (hosted SaaS)?**
+`ELEVENLABS_API_KEY`, `PEXELS_API_KEY`, `PIXABAY_API_KEY`, `FAL_KEY`, `CRON_SECRET`, `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `REMOTION_RENDER_API_KEY`, `REMOTION_RENDER_ENDPOINT`, `REMOTION_SERVE_URL`, plus a `TOKEN_ENCRYPTION_KEY` if not already present.
