@@ -1,10 +1,11 @@
 import { lazy, Suspense, useEffect, useMemo, useState, useTransition } from "react";
 import type { EventDropArg, EventInput } from "@fullcalendar/core";
-import { CalendarDays, PlugZap, RefreshCcw, Send, UploadCloud, WandSparkles } from "lucide-react";
+import { CalendarDays, PlugZap, RefreshCcw, Send, Sparkles, UploadCloud, WandSparkles } from "lucide-react";
 import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
 import type { Account, DashboardPost, GenerationBatch, SourceMode } from "@/lib/fanagent/types";
 
 const FanAgentCalendar = lazy(() => import("@/components/FanAgentCalendar"));
+const AutopilotPanel = lazy(() => import("@/components/AutopilotPanel"));
 
 const privacyLevels = [
   "SELF_ONLY",
@@ -52,6 +53,7 @@ function tiktokConnectUrl(accountId: string): string {
 }
 
 export default function App() {
+  const [mode, setMode] = useState<"autopilot" | "studio">("autopilot");
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [posts, setPosts] = useState<DashboardPost[]>([]);
   const [batches, setBatches] = useState<GenerationBatch[]>([]);
@@ -197,29 +199,55 @@ export default function App() {
           <p>React + Supabase audio-to-TikTok queue</p>
         </div>
         <div className="topbar-actions">
-          <select
-            value={accountId}
-            onChange={(event) => setAccountId(event.target.value)}
-            aria-label="Account"
-          >
-            {accounts.length === 0 ? <option value="">No accounts</option> : null}
-            {accounts.map((account) => (
-              <option key={account.id} value={account.id}>
-                {account.handle || account.tiktok_display_name || account.id.slice(0, 8)}
-              </option>
-            ))}
-          </select>
-          {accountId ? (
-            <a className="button ghost" href={tiktokConnectUrl(accountId)}>
-              <PlugZap size={16} />{" "}
-              {selectedAccount?.tiktok_connected_at ? "Reconnect" : "Connect TikTok"}
-            </a>
+          <div className="mode-switch" role="tablist" aria-label="Mode">
+            <button
+              type="button"
+              className={`button ${mode === "autopilot" ? "primary" : "ghost"}`}
+              onClick={() => setMode("autopilot")}
+            >
+              <Sparkles size={14} /> Autopilot
+            </button>
+            <button
+              type="button"
+              className={`button ${mode === "studio" ? "primary" : "ghost"}`}
+              onClick={() => setMode("studio")}
+            >
+              <WandSparkles size={14} /> Studio
+            </button>
+          </div>
+          {mode === "studio" ? (
+            <>
+              <select
+                value={accountId}
+                onChange={(event) => setAccountId(event.target.value)}
+                aria-label="Account"
+              >
+                {accounts.length === 0 ? <option value="">No accounts</option> : null}
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.handle || account.tiktok_display_name || account.id.slice(0, 8)}
+                  </option>
+                ))}
+              </select>
+              {accountId ? (
+                <a className="button ghost" href={tiktokConnectUrl(accountId)}>
+                  <PlugZap size={16} />{" "}
+                  {selectedAccount?.tiktok_connected_at ? "Reconnect" : "Connect TikTok"}
+                </a>
+              ) : null}
+            </>
           ) : null}
         </div>
       </header>
 
       {setupError ? <div className="banner bad">{setupError}</div> : null}
       {message ? <div className="banner">{message}</div> : null}
+
+      {mode === "autopilot" ? (
+        <Suspense fallback={<div className="calendar-loading">Loading autopilot…</div>}>
+          <AutopilotPanel />
+        </Suspense>
+      ) : (
 
       <section className="dashboard-grid">
         <aside className="panel create-panel">
@@ -419,6 +447,7 @@ export default function App() {
           )}
         </aside>
       </section>
+      )}
     </main>
   );
 }
