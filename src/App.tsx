@@ -447,6 +447,7 @@ export default function App() {
           )}
         </aside>
       </section>
+      )}
     </main>
   );
 }
