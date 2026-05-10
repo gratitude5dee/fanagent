@@ -2,3 +2,12 @@ project_id = "zjbiulirzrctfmakqjwk"
 
 [functions.tiktok-oauth-callback]
 verify_jwt = false
+
+[functions.render-callback]
+verify_jwt = false
+
+[functions.fanpage-generate-due]
+verify_jwt = false
+
+[functions.fanpage-publish-due]
+verify_jwt = false
