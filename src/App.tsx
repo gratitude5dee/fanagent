@@ -1,10 +1,11 @@
 import { lazy, Suspense, useEffect, useMemo, useState, useTransition } from "react";
 import type { EventDropArg, EventInput } from "@fullcalendar/core";
-import { CalendarDays, PlugZap, RefreshCcw, Send, UploadCloud, WandSparkles } from "lucide-react";
+import { CalendarDays, PlugZap, RefreshCcw, Send, Sparkles, UploadCloud, WandSparkles } from "lucide-react";
 import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
 import type { Account, DashboardPost, GenerationBatch, SourceMode } from "@/lib/fanagent/types";
 
 const FanAgentCalendar = lazy(() => import("@/components/FanAgentCalendar"));
+const AutopilotPanel = lazy(() => import("@/components/AutopilotPanel"));
 
 const privacyLevels = [
   "SELF_ONLY",
