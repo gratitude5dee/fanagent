@@ -53,6 +53,7 @@ function tiktokConnectUrl(accountId: string): string {
 }
 
 export default function App() {
+  const [mode, setMode] = useState<"autopilot" | "studio">("autopilot");
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [posts, setPosts] = useState<DashboardPost[]>([]);
   const [batches, setBatches] = useState<GenerationBatch[]>([]);
