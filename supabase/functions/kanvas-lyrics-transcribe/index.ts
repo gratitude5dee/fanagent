@@ -86,16 +86,16 @@ Deno.serve(async (req) => {
   try {
     const auth = req.headers.get("Authorization") ?? "";
     const token = auth.replace(/^Bearer\s+/i, "");
-    if (!token) return errorResponse("Missing auth", 401);
-
-    const userClient = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: `Bearer ${token}` } } },
-    );
-    const { data: userRes } = await userClient.auth.getUser();
-    if (!userRes.user) return errorResponse("Not authenticated", 401);
-    const userId = userRes.user.id;
+    let userId = "00000000-0000-0000-0000-000000000000";
+    if (token) {
+      const userClient = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_ANON_KEY")!,
+        { global: { headers: { Authorization: `Bearer ${token}` } } },
+      );
+      const { data: userRes } = await userClient.auth.getUser();
+      if (userRes?.user) userId = userRes.user.id;
+    }
 
     const body = await req.json() as { templateId: string; force?: boolean };
 
