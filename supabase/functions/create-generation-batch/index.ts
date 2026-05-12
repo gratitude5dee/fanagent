@@ -41,9 +41,12 @@ function validatePayload(body: CreateBatchRequest) {
     5,
     Math.min(Math.floor(Number(body.cadenceMinutes ?? 240)), 10_080),
   );
-  const sourceMode = body.sourceMode === "remote_render"
-    ? "remote_render"
-    : "gmi_seedance";
+  const allowedDurations = [15, 30, 45, 60, 75, 90];
+  const requestedDuration = Math.floor(Number(body.durationSeconds ?? 15));
+  const durationSeconds = allowedDurations.includes(requestedDuration) ? requestedDuration : 15;
+  const sourceMode: "stock" | "seedance" | "mixed" =
+    body.sourceMode === "seedance" ? "seedance" :
+    body.sourceMode === "mixed" ? "mixed" : "stock";
   const audioMimeType = body.audioMimeType || "audio/mpeg";
   const startAt = new Date(body.startAt ?? Date.now() + 30 * 60_000);
 
