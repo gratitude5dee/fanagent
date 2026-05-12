@@ -17,7 +17,7 @@ Deno.serve(async (request) => {
   const opt = handleOptions(request);
   if (opt) return opt;
 
-  if (!isAuthorizedCronCall(request)) {
+  if (!await isAuthorizedCronCall(request)) {
     return errorResponse("Unauthorized cron call", 401);
   }
 

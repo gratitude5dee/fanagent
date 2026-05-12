@@ -330,7 +330,8 @@ export default function App() {
               className="button"
               disabled={isPending}
               onClick={() =>
-                runAction("Generation worker", () => invokeFunction("process-generation-due"))
+                runAction("Generation worker", () =>
+                  invokeFunction("fanpage-campaign", { action: "runGenerationWorkers" }))
               }
             >
               <RefreshCcw size={16} /> Generate due
@@ -339,7 +340,8 @@ export default function App() {
               className="button"
               disabled={isPending}
               onClick={() =>
-                runAction("Publish worker", () => invokeFunction("publish-tiktok-due"))
+                runAction("Publish worker", () =>
+                  invokeFunction("fanpage-campaign", { action: "runPublishWorker" }))
               }
             >
               <Send size={16} /> Publish due

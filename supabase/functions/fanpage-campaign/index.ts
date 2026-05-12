@@ -27,6 +27,21 @@ async function callChild(name: string, body: unknown): Promise<Response> {
   });
 }
 
+async function callWorker(name: string, body: unknown): Promise<Response> {
+  const url = `${optionalEnv("SUPABASE_URL")}/functions/v1/${name}`;
+  const serviceKey = optionalEnv("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const cronSecret = optionalEnv("CRON_SECRET") ?? "";
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${serviceKey}`,
+      "Content-Type": "application/json",
+      "x-cron-secret": cronSecret,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
 Deno.serve(async (request) => {
   const opt = handleOptions(request);
   if (opt) return opt;
@@ -104,6 +119,25 @@ Deno.serve(async (request) => {
         const j = await r.json();
         if (!r.ok) return errorResponse(j.error ?? "prompts failed", 500);
         return jsonResponse(j);
+      }
+
+      case "runGenerationWorkers": {
+        const [processRes, stockRes] = await Promise.all([
+          callChild("process-generation-due", {}),
+          callWorker("fanpage-generate-due", {}),
+        ]);
+        const processJson = await processRes.json().catch(() => ({}));
+        const stockJson = await stockRes.json().catch(() => ({}));
+        if (!processRes.ok) return errorResponse(processJson.error ?? "process-generation-due failed", 500);
+        if (!stockRes.ok) return errorResponse(stockJson.error ?? "fanpage-generate-due failed", 500);
+        return jsonResponse({ process: processJson, stock: stockJson });
+      }
+
+      case "runPublishWorker": {
+        const res = await callWorker("fanpage-publish-due", {});
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) return errorResponse(json.error ?? "fanpage-publish-due failed", 500);
+        return jsonResponse(json);
       }
 
       case "pause": {
