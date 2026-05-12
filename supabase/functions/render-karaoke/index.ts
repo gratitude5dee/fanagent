@@ -130,6 +130,15 @@ Deno.serve(async (request) => {
       });
     }
 
+    // Best-effort thumbnail extraction; never block readiness on failure.
+    let thumbnailUrl: string | null = null;
+    try {
+      const frame = await extractFrame(finalUrl, "middle");
+      thumbnailUrl = frame.url;
+    } catch (err) {
+      console.warn(`[render-karaoke] extractFrame failed for ${body.itemId}: ${err}`);
+    }
+
     const upd = await supabase
       .from("generation_items")
       .update({
