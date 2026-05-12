@@ -61,6 +61,9 @@ export async function trimAudio(
   const data = await ff.readFile(outName);
   await ff.deleteFile(inName).catch(() => {});
   await ff.deleteFile(outName).catch(() => {});
-  const bytes = data instanceof Uint8Array ? data : new TextEncoder().encode(String(data));
-  return new Blob([bytes], { type: "audio/mpeg" });
+  const src = data instanceof Uint8Array ? data : new TextEncoder().encode(String(data));
+  // Copy into a fresh ArrayBuffer to satisfy Blob's BlobPart typing (avoids SharedArrayBuffer typing).
+  const buf = new ArrayBuffer(src.byteLength);
+  new Uint8Array(buf).set(src);
+  return new Blob([buf], { type: "audio/mpeg" });
 }

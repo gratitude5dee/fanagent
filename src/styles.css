@@ -551,3 +551,33 @@ video {
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .autopilot-panel { display: flex; flex-direction: column; gap: 16px; }
+
+.audio-trimmer { display: grid; gap: 10px; }
+.audio-trimmer__label {
+  align-items: center; color: var(--fanagent-muted); display: flex; gap: 6px;
+  font-size: 12px; font-weight: 800; text-transform: uppercase;
+}
+.audio-trimmer__card {
+  background: #0b0f1a; border: 1px solid #1f2937; border-radius: 16px;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03), 0 10px 30px -18px rgba(0,0,0,0.6);
+  padding: 18px 16px 14px;
+}
+.audio-trimmer__wave { width: 100%; }
+.audio-trimmer__controls {
+  align-items: center; display: flex; gap: 10px; justify-content: center;
+  margin-top: 10px; color: rgba(255,255,255,0.7);
+}
+.audio-trimmer__controls .button {
+  background: transparent; border-color: rgba(255,255,255,0.18); color: rgba(255,255,255,0.85);
+  min-height: 36px; padding: 6px 10px;
+}
+.audio-trimmer__controls .button.primary.round {
+  background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.3); color: #fff;
+  border-radius: 999px; height: 44px; width: 44px; padding: 0;
+}
+.audio-trimmer__time { color: rgba(255,255,255,0.6); font-size: 12px; margin-left: 8px; }
+.audio-trimmer__footer {
+  align-items: center; display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap;
+}
+.audio-trimmer__footer .muted { color: var(--fanagent-muted); font-weight: 500; }
+.banner.warn { background: #fef3c7; border-color: #fcd34d; color: #92400e; }
