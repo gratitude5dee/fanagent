@@ -16,6 +16,10 @@ npm install
 npm run dev
 ```
 
+Open the local app at `http://127.0.0.1:5173/`.
+
+Console messages from `chrome-extension://...`, Lovable Add-ons, Firestore/Firebase, RudderStack, Facebook Pixel, or LinkedIn pixels are emitted by the browser/preview shell or blocked analytics scripts, not by FanAgent. Verify app errors against scripts served from `127.0.0.1:5173`.
+
 The frontend reads the checked-in Supabase project URL and publishable key from `src/integrations/supabase/client.ts`. Keep private credentials out of React and set them as Supabase Edge Function secrets.
 
 ## Supabase Secrets
