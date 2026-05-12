@@ -162,19 +162,29 @@ export async function cacheStockClip(clip: StockClip): Promise<string> {
     // HEAD check would be ideal; we trust the signed URL.
     return existing.data.signedUrl;
   }
-  const dl = await fetch(clip.url);
-  if (!dl.ok) throw new Error(`Stock download failed: ${dl.status}`);
-  const bytes = new Uint8Array(await dl.arrayBuffer());
-  const upload = await supabase.storage.from("stock-cache").upload(
-    path,
-    bytes,
-    { contentType: "video/mp4", upsert: true, cacheControl: "604800" },
-  );
-  if (upload.error) throw upload.error;
-  const signed = await supabase.storage.from("stock-cache").createSignedUrl(
-    path,
-    60 * 60 * 24 * 7,
-  );
-  if (signed.error || !signed.data) throw signed.error;
-  return signed.data.signedUrl;
+  try {
+    const dl = await fetch(clip.url);
+    if (!dl.ok) throw new Error(`Stock download failed: ${dl.status}`);
+    const bytes = new Uint8Array(await dl.arrayBuffer());
+    // Skip caching files larger than 45 MB — Supabase storage rejects them.
+    if (bytes.byteLength > 45 * 1024 * 1024) {
+      console.warn(`stock cache skip (too large: ${bytes.byteLength}B) ${clip.url}`);
+      return clip.url;
+    }
+    const upload = await supabase.storage.from("stock-cache").upload(
+      path,
+      bytes,
+      { contentType: "video/mp4", upsert: true, cacheControl: "604800" },
+    );
+    if (upload.error) throw upload.error;
+    const signed = await supabase.storage.from("stock-cache").createSignedUrl(
+      path,
+      60 * 60 * 24 * 7,
+    );
+    if (signed.error || !signed.data) throw signed.error;
+    return signed.data.signedUrl;
+  } catch (err) {
+    console.warn(`stock cache fallback (${err instanceof Error ? err.message : String(err)}) → using origin url`);
+    return clip.url;
+  }
 }
