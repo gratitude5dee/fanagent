@@ -1,81 +1,72 @@
-# Lyrics Template → Autopilot Render Pipeline
+# Make the render pipeline actually finish a video
 
-Wire the standalone Lyrics Template Builder into the Autopilot pipeline so each generated post can render against word-level timing and cut markers from a saved template.
+## What's broken (confirmed from DB + logs)
 
-## Scope
+- All `provider: stock` items are getting picked up by `process-generation-due`, which always calls GMI Seedance and fails with `Missing required secret: GMI_API_KEY`. Every failure in `generation_items.error_message` is that string.
+- There are **two overlapping orchestrators**: `process-generation-due` (GMI path) and `fanpage-generate-due` (fal.ai stock + ffmpeg path). The fal path has `FAL_KEY` and works, but it never runs end-to-end because:
+  - `process-generation-due` keeps stealing items first.
+  - `fanpage-generate-due` stops at `stitch-segments` and never creates a `posts` row, so nothing reaches publish.
+- `render-karaoke` is currently a Remotion stub that's not invoked from the fal path at all, so lyrics templates aren't applied.
+- `pending` items only get picked up when `scheduled_at <= now+1h` — current queue is at 16:01 UTC; that's fine, the worker just keeps failing on GMI.
 
-- New "Lyrics" tab inside `AutopilotPanel.tsx`.
-- Per-batch lyrics template selection at campaign launch.
-- Per-item override on the queue list.
-- `render-karaoke` consumes the chosen template's `lyric_blocks` + `cut_markers`.
-- Marker-aware stock clip switching pass in stitch step (one clip per cut segment when markers exist).
+## Fix scope
 
-Out of scope: editing templates from inside Autopilot (link out to `/lyrics/templates/:id`), Remotion composition rewrite, multi-track audio.
+Single, fal.ai-only render path. Drop the GMI/Remotion code paths from the live pipeline (keep files; just stop using them).
 
-## Database (one migration)
+## Edge function changes
 
-- `generation_batches`: add `lyric_template_id uuid null` (no FK; soft ref).
-- `generation_items`: add `lyric_template_id uuid null` (overrides batch).
-- Index both columns.
-- No RLS changes (tables are service-managed; existing read policies stay).
+1. **`process-generation-due`** — stop processing stock items.
+   - Filter the `due` query to `provider in ('gmi_seedance','remote_render')` only. Items with `provider: stock` (the default for fanpage campaigns) are owned by `fanpage-generate-due`.
+   - No other behavior change; this leaves the GMI path intact for anyone who configures `GMI_API_KEY` later.
 
-## Edge functions
+2. **`render-karaoke`** — rewrite as fal.ai compose pass.
+   - Inputs: `itemId`. Loads `generation_items.stock_clip_url` (the stitched output) + resolved `lyric_template_id`.
+   - If no template: pass through (`status='ready'`, `render_provider='passthrough'`, copy stock_clip_url to post).
+   - If template present:
+     - Convert `lyric_blocks` → SRT string (per-word groups, snapped to `selection_start_ms`).
+     - Build a fal `fal-ai/ffmpeg-api/compose` call with two tracks:
+       - video keyframes split at `cut_markers` (re-cuts the same clip at marker boundaries for visual rhythm)
+       - subtitle/text overlay via `drawtext` filter or a `subtitles` track using the SRT
+     - Store final URL on `generation_items.final_asset_id` (after downloading + uploading via `createMediaAssetFromBytes`).
+   - Set `render_provider='fal_ffmpeg'`, `status='ready'`.
 
-1. `fanpage-campaign`
-   - `list`: also return `lyric_templates` (id, title, status, total_duration_ms, selection_duration_ms) for the current `auth.uid()`.
-   - `create`: accept optional `lyricTemplateId`; persist on the new batch + cascade to each generated `generation_items` row.
-   - New action `setLyricTemplate { itemId | batchId, lyricTemplateId | null }`.
+3. **`fanpage-generate-due`** — extend the chain.
+   - After `stitch-segments`, call `render-karaoke` for every item.
+   - After `render-karaoke` succeeds, create the `posts` row (mirroring `createPostFromVideo` from `process-generation-due`): `final_asset_id`, `video_url`, caption/hashtags from `input_payload.prompt_plan`, `scheduled_at`, `status='pending'`, `publish_status='ready'`.
+   - Mark item `status='complete'` and link `post_id`.
 
-2. `create-generation-batch`: thread `lyricTemplateId` through to the inserted batch + items.
+4. **`stitch-segments`** — small fix.
+   - Stop updating `posts` directly (currently a no-op anyway since the post doesn't exist yet). Just write `stock_clip_url` and leave status as `stitched`.
 
-3. `render-karaoke`
-   - Resolve template id: `item.lyric_template_id ?? batch.lyric_template_id`.
-   - If set, fetch `kanvas_lyric_templates` row, build:
-     ```
-     inputProps = {
-       ...existing,
-       lyrics: { blocks: lyric_blocks, markers: cut_markers,
-                 selectionStartMs, selectionDurationMs }
-     }
-     ```
-   - Stub fallback: same passthrough as today, but record `lyric_template_id` on the input_payload for traceability.
-
-4. `stitch-segments`
-   - When `cut_markers.length > 0` and `segments.length === 1`, split the single stock clip into N sub-clips at marker timestamps before stitching against audio (uses existing ffmpeg helper).
-   - When stitching multiple Seedance segments, snap segment boundaries to nearest marker (±200ms) for cleaner cuts.
+5. **`_shared/fal.ts`** — add a helper that accepts an SRT URL or raw text and returns a composed video URL with subtitles burned in. Implementation: write SRT to a temporary signed URL via Supabase Storage `renders` bucket, then pass to fal compose's `subtitles` track.
 
 ## Frontend
 
-`src/components/AutopilotPanel.tsx`
-- Top-level tab bar: **Campaign** (current UI) / **Lyrics**.
-- `Lyrics` tab body: list of templates from the new `list` payload with status pill, duration, "Edit in builder" link to `/lyrics/templates/:id`, and a "+ New template" button → `/lyrics/new`.
-- Step 2 form: new field **Lyrics template (optional)** — `<select>` populated from same list, "None" default. Persists to `lyricTemplateId` in the `create` payload.
-- Queue row (Step 3): show template title chip when set; popover `<select>` to override per item, calls `setLyricTemplate`.
+No new UI. The Lyrics tab from the previous turn already lets users attach a template per batch/item; this just makes that template actually drive the render.
 
-`src/lib/lyrics/api.ts`: add `listTemplatesForAutopilot()` (thin wrapper over campaign list), keep current builder API untouched.
+## DB
 
-Styling: reuse existing `.panel`, `.status-pill`, `.batch-row` tokens. No new CSS variables.
+No schema changes. New status values reused: `stitched` (intermediate) and `ready` (final).
 
-## Types / generated files
+## What I'm NOT doing
 
-After the migration the generated `src/integrations/supabase/types.ts` updates automatically. Frontend types:
-- `Batch` and `Item` in `AutopilotPanel.tsx` gain `lyric_template_id: string | null`.
-- New `LyricTemplateSummary` type in `src/lib/lyrics/types.ts`.
+- Not configuring `GMI_API_KEY`. The GMI path stays dormant unless the user adds the secret.
+- Not touching Remotion SaaS dispatch or `REMOTION_RENDER_*` envs.
+- Not changing the Autopilot UI.
 
-## Testing checklist
+## Verification
 
-- Launch campaign without a template → unchanged behavior, render-karaoke uses stub passthrough.
-- Launch with template → `generation_items.lyric_template_id` populated, render-karaoke logs include `lyric_template_id`, `input_payload.render.lyrics` present.
-- Override on a single queue item → only that item's `lyric_template_id` changes.
-- Template with 3 markers + 1 stock clip → stitched output has 3 cuts at the correct timestamps.
-- Template deleted after use → render falls back to stub passthrough with a warning logged (no crash).
+After deploy, the next `fanpage-generate-due` cron tick should:
+- Move stock items through `transcribing → planning → stitched → ready`.
+- Insert a `posts` row per item with `video_url` set.
+- For items with a `lyric_template_id`, the rendered MP4 has captions burned in at the template's word timings + cut markers.
 
-## File touch list
+I'll re-query `generation_items` and `posts` after the change to confirm.
 
-- migration: `supabase/migrations/<ts>_lyric_template_links.sql`
-- edit: `supabase/functions/fanpage-campaign/index.ts`
-- edit: `supabase/functions/create-generation-batch/index.ts`
-- edit: `supabase/functions/render-karaoke/index.ts`
-- edit: `supabase/functions/stitch-segments/index.ts`
-- edit: `src/components/AutopilotPanel.tsx`
-- edit: `src/lib/lyrics/api.ts`, `src/lib/lyrics/types.ts`
+## Files touched
+
+- `supabase/functions/process-generation-due/index.ts`
+- `supabase/functions/render-karaoke/index.ts` (full rewrite)
+- `supabase/functions/fanpage-generate-due/index.ts`
+- `supabase/functions/stitch-segments/index.ts`
+- `supabase/functions/_shared/fal.ts`
