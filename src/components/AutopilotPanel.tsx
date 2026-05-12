@@ -204,23 +204,43 @@ export default function AutopilotPanel() {
               <input type="file" accept="audio/*" onChange={(e) => setAudio(e.target.files?.[0] ?? null)} required />
             </label>
             <label>
-              Visual prompt
-              <textarea rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+              Post duration
+              <div className="action-row" style={{ flexWrap: "wrap", gap: 6 }}>
+                {DURATIONS.map((d) => (
+                  <button
+                    type="button"
+                    key={d}
+                    className={`button ${duration === d ? "primary" : "ghost"}`}
+                    onClick={() => setDuration(d)}
+                  >
+                    {d}s
+                  </button>
+                ))}
+              </div>
+            </label>
+            <label>
+              Theme / visual prompt (AI will generate per-post shot prompts)
+              <textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
             </label>
             <div className="split">
               <label>
-                Source mode
+                Source
                 <select value={sourceMode} onChange={(e) => setSourceMode(e.target.value as SourceMode)}>
-                  <option value="stock">Stock footage (default)</option>
-                  <option value="hybrid">Stock + Seedance fallback</option>
+                  <option value="stock">Stock footage (Pexels + Pixabay)</option>
+                  <option value="mixed">Mixed: stock + Seedance 2</option>
                   <option value="seedance">Seedance 2 only</option>
                 </select>
               </label>
               <label>
                 Posts to queue
-                <input type="number" min={1} max={60} value={postCount} onChange={(e) => setPostCount(Number(e.target.value))} />
+                <input type="number" min={1} max={50} value={postCount} onChange={(e) => setPostCount(Number(e.target.value))} />
               </label>
             </div>
+            {duration > 15 ? (
+              <div className="banner">
+                {Math.ceil(duration / 15)} clips per post will be stitched together with ffmpeg.
+              </div>
+            ) : null}
             <button className="button primary" disabled={busy || !audio} type="submit">
               {busy ? <Loader2 className="spin" size={16} /> : <CalendarClock size={16} />} Launch daily campaign
             </button>
