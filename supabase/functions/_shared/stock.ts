@@ -16,7 +16,53 @@ export type StockClip = {
   score: number;
 };
 
-const TARGET_DURATION = 15;
+export type StockSettings = {
+  providers?: Array<"library" | "pexels" | "pixabay">;
+  keywords?: string[];
+  negativeKeywords?: string[];
+  category?: string;
+  mood?: string;
+  portraitOnly?: boolean;
+  minDurationSec?: number;
+  maxDurationSec?: number;
+  perProviderLimit?: number;
+};
+
+const DEFAULT_TARGET_DURATION = 15;
+
+function normalizeSettings(settings?: StockSettings): Required<StockSettings> {
+  const providers: Array<"library" | "pexels" | "pixabay"> = settings?.providers?.length
+    ? settings.providers
+    : ["library", "pexels", "pixabay"];
+  return {
+    providers,
+    keywords: settings?.keywords ?? [],
+    negativeKeywords: settings?.negativeKeywords ?? [],
+    category: settings?.category ?? "",
+    mood: settings?.mood ?? "",
+    portraitOnly: settings?.portraitOnly ?? true,
+    minDurationSec: Math.max(1, Number(settings?.minDurationSec ?? DEFAULT_TARGET_DURATION - 1)),
+    maxDurationSec: Math.max(1, Number(settings?.maxDurationSec ?? 120)),
+    perProviderLimit: Math.max(3, Math.min(Number(settings?.perProviderLimit ?? 20), 80)),
+  };
+}
+
+function buildQuery(query: string, settings: Required<StockSettings>): string {
+  const terms = [query, settings.category, settings.mood, ...settings.keywords]
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  let cleaned = terms || "cinematic vertical lifestyle music";
+  for (const negative of settings.negativeKeywords) {
+    const word = negative.trim();
+    if (!word) continue;
+    cleaned = cleaned.replace(
+      new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "ig"),
+      "",
+    );
+  }
+  return cleaned.replace(/\s+/g, " ").trim().slice(0, 100) || "cinematic vertical lifestyle music";
+}
 
 function aspectScore(width: number, height: number): number {
   if (!width || !height) return 0;
@@ -27,28 +73,40 @@ function aspectScore(width: number, height: number): number {
   return Math.max(0, ratio * 0.4);
 }
 
-function rankClips(clips: StockClip[]): StockClip[] {
+function rankClips(clips: StockClip[], settings: Required<StockSettings>): StockClip[] {
+  const seen = new Set<string>();
   return clips
-    .filter((c) => c.durationSec >= TARGET_DURATION - 1)
+    .filter((c) => {
+      if (seen.has(`${c.provider}:${c.externalId}`) || seen.has(c.url)) return false;
+      seen.add(`${c.provider}:${c.externalId}`);
+      seen.add(c.url);
+      if (c.durationSec < settings.minDurationSec || c.durationSec > settings.maxDurationSec) {
+        return false;
+      }
+      if (settings.portraitOnly && c.height <= c.width) return false;
+      return true;
+    })
     .map((c) => ({
       ...c,
-      score: aspectScore(c.width, c.height) +
-        Math.min(1, c.durationSec / 30) * 0.25,
+      score: aspectScore(c.width, c.height) + Math.min(1, c.durationSec / 30) * 0.25,
     }))
     .sort((a, b) => b.score - a.score);
 }
 
-async function searchPexels(query: string): Promise<StockClip[]> {
+async function searchPexels(
+  query: string,
+  settings: Required<StockSettings>,
+): Promise<StockClip[]> {
   const key = optionalEnv("PEXELS_API_KEY");
   if (!key) return [];
-  const url = new URL("https://api.pexels.com/videos/search");
+  const url = new URL("https://api.pexels.com/v1/videos/search");
   url.searchParams.set("query", query);
-  url.searchParams.set("orientation", "portrait");
-  url.searchParams.set("per_page", "15");
+  if (settings.portraitOnly) url.searchParams.set("orientation", "portrait");
+  url.searchParams.set("per_page", String(settings.perProviderLimit));
   url.searchParams.set("size", "medium");
   const res = await fetch(url, { headers: { Authorization: key } });
   if (!res.ok) return [];
-  const data = await res.json() as {
+  const data = (await res.json()) as {
     videos?: Array<{
       id: number;
       duration: number;
@@ -63,64 +121,74 @@ async function searchPexels(query: string): Promise<StockClip[]> {
       }>;
     }>;
   };
-  return (data.videos ?? []).map((v) => {
-    const file = v.video_files
-      .filter((f) => f.file_type === "video/mp4")
-      .sort((a, b) => (b.height ?? 0) - (a.height ?? 0))[0];
-    return {
-      provider: "pexels" as const,
-      externalId: String(v.id),
-      url: file?.link ?? "",
-      width: v.width,
-      height: v.height,
-      durationSec: v.duration,
-      score: 0,
-    };
-  }).filter((c) => c.url);
+  return (data.videos ?? [])
+    .map((v) => {
+      const file = v.video_files
+        .filter((f) => f.file_type === "video/mp4")
+        .sort((a, b) => (b.height ?? 0) - (a.height ?? 0))[0];
+      return {
+        provider: "pexels" as const,
+        externalId: String(v.id),
+        url: file?.link ?? "",
+        width: v.width,
+        height: v.height,
+        durationSec: v.duration,
+        score: 0,
+      };
+    })
+    .filter((c) => c.url);
 }
 
-async function searchPixabay(query: string): Promise<StockClip[]> {
+async function searchPixabay(
+  query: string,
+  settings: Required<StockSettings>,
+): Promise<StockClip[]> {
   const key = optionalEnv("PIXABAY_API_KEY");
   if (!key) return [];
   const url = new URL("https://pixabay.com/api/videos/");
   url.searchParams.set("key", key);
   url.searchParams.set("q", query);
   url.searchParams.set("video_type", "all");
-  url.searchParams.set("per_page", "20");
+  url.searchParams.set("per_page", String(settings.perProviderLimit));
   url.searchParams.set("safesearch", "true");
+  if (settings.category) url.searchParams.set("category", settings.category);
   const res = await fetch(url);
   if (!res.ok) return [];
-  const data = await res.json() as {
+  const data = (await res.json()) as {
     hits?: Array<{
       id: number;
       duration: number;
       videos: Record<string, { url: string; width: number; height: number }>;
     }>;
   };
-  return (data.hits ?? []).map((v) => {
-    const variants = ["large", "medium", "small", "tiny"]
-      .map((k) => v.videos[k]).filter(Boolean);
-    const best = variants.sort((a, b) => b.height - a.height)[0];
-    return {
-      provider: "pixabay" as const,
-      externalId: String(v.id),
-      url: best?.url ?? "",
-      width: best?.width ?? 0,
-      height: best?.height ?? 0,
-      durationSec: v.duration,
-      score: 0,
-    };
-  }).filter((c) => c.url);
+  return (data.hits ?? [])
+    .map((v) => {
+      const variants = ["large", "medium", "small", "tiny"].map((k) => v.videos[k]).filter(Boolean);
+      const best = variants.sort((a, b) => b.height - a.height)[0];
+      return {
+        provider: "pixabay" as const,
+        externalId: String(v.id),
+        url: best?.url ?? "",
+        width: best?.width ?? 0,
+        height: best?.height ?? 0,
+        durationSec: Number(v.duration ?? DEFAULT_TARGET_DURATION),
+        score: 0,
+      };
+    })
+    .filter((c) => c.url);
 }
 
-async function searchLibrary(accountId: string): Promise<StockClip[]> {
+async function searchLibrary(
+  accountId: string,
+  settings: Required<StockSettings>,
+): Promise<StockClip[]> {
   const supabase = getSupabaseAdmin();
   const res = await supabase
     .from("media_assets")
     .select("id,public_url,duration_seconds,metadata")
     .in("kind", ["source_video", "stock_video"])
     .eq("account_id", accountId)
-    .limit(20);
+    .limit(settings.perProviderLimit);
   if (res.error || !res.data) return [];
   return res.data.map((row) => {
     const meta = (row.metadata ?? {}) as Record<string, number>;
@@ -130,7 +198,7 @@ async function searchLibrary(accountId: string): Promise<StockClip[]> {
       url: row.public_url as string,
       width: Number(meta.width ?? 1080),
       height: Number(meta.height ?? 1920),
-      durationSec: Number(row.duration_seconds ?? TARGET_DURATION),
+      durationSec: Number(row.duration_seconds ?? DEFAULT_TARGET_DURATION),
       score: 0,
     };
   });
@@ -139,13 +207,17 @@ async function searchLibrary(accountId: string): Promise<StockClip[]> {
 export async function searchStock(input: {
   accountId: string;
   query: string;
+  settings?: StockSettings;
 }): Promise<StockClip[]> {
-  const all = await Promise.all([
-    searchLibrary(input.accountId),
-    searchPexels(input.query),
-    searchPixabay(input.query),
-  ]).then((groups) => groups.flat());
-  return rankClips(all);
+  const settings = normalizeSettings(input.settings);
+  const query = buildQuery(input.query, settings);
+  const searches: Array<Promise<StockClip[]>> = [];
+  if (settings.providers.includes("library"))
+    searches.push(searchLibrary(input.accountId, settings));
+  if (settings.providers.includes("pexels")) searches.push(searchPexels(query, settings));
+  if (settings.providers.includes("pixabay")) searches.push(searchPixabay(query, settings));
+  const all = await Promise.all(searches).then((groups) => groups.flat());
+  return rankClips(all, settings);
 }
 
 // Cache a picked stock clip into the private `stock-cache` bucket so we
@@ -154,10 +226,9 @@ export async function cacheStockClip(clip: StockClip): Promise<string> {
   if (clip.provider === "library") return clip.url;
   const supabase = getSupabaseAdmin();
   const path = `${clip.provider}/${clip.externalId}.mp4`;
-  const existing = await supabase.storage.from("stock-cache").createSignedUrl(
-    path,
-    60 * 60 * 24 * 7,
-  );
+  const existing = await supabase.storage
+    .from("stock-cache")
+    .createSignedUrl(path, 60 * 60 * 24 * 7);
   if (!existing.error && existing.data?.signedUrl) {
     // HEAD check would be ideal; we trust the signed URL.
     return existing.data.signedUrl;
@@ -171,20 +242,19 @@ export async function cacheStockClip(clip: StockClip): Promise<string> {
       console.warn(`stock cache skip (too large: ${bytes.byteLength}B) ${clip.url}`);
       return clip.url;
     }
-    const upload = await supabase.storage.from("stock-cache").upload(
-      path,
-      bytes,
-      { contentType: "video/mp4", upsert: true, cacheControl: "604800" },
-    );
+    const upload = await supabase.storage
+      .from("stock-cache")
+      .upload(path, bytes, { contentType: "video/mp4", upsert: true, cacheControl: "604800" });
     if (upload.error) throw upload.error;
-    const signed = await supabase.storage.from("stock-cache").createSignedUrl(
-      path,
-      60 * 60 * 24 * 7,
-    );
+    const signed = await supabase.storage
+      .from("stock-cache")
+      .createSignedUrl(path, 60 * 60 * 24 * 7);
     if (signed.error || !signed.data) throw signed.error;
     return signed.data.signedUrl;
   } catch (err) {
-    console.warn(`stock cache fallback (${err instanceof Error ? err.message : String(err)}) → using origin url`);
+    console.warn(
+      `stock cache fallback (${err instanceof Error ? err.message : String(err)}) → using origin url`,
+    );
     return clip.url;
   }
 }

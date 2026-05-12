@@ -1,4 +1,5 @@
 export type VideoTheme = "cinematic" | "aesthetic" | "street" | "nature" | "abstract";
+export type VideoDuration = 15 | 30 | 45 | 60 | 75 | 90;
 
 export type PromptPlan = {
   prompt: string;
@@ -8,7 +9,7 @@ export type PromptPlan = {
   videoPrompt: {
     theme: VideoTheme;
     mood: string;
-    duration_seconds: 15 | 30 | 60;
+    duration_seconds: VideoDuration;
     aspect_ratio: "9:16";
   };
 };
@@ -31,7 +32,7 @@ export function createPromptPlan(input: {
   basePrompt?: string;
   index: number;
   total: number;
-  durationSeconds?: 15 | 30 | 60;
+  durationSeconds?: VideoDuration;
 }): PromptPlan {
   const subject = cleanPrompt(input.basePrompt);
   const theme = pick(themes, input.index);

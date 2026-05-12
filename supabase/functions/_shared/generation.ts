@@ -1,20 +1,22 @@
-export type SourceMode = "stock" | "seedance" | "mixed" | "gmi_seedance" | "remote_render";
+export const sourceModes = ["stock", "mixed", "seedance", "gmi_seedance"] as const;
+export type SourceMode = (typeof sourceModes)[number];
+export type VideoDuration = 15 | 30 | 45 | 60 | 75 | 90;
 
-const themes = [
-  "cinematic",
-  "aesthetic",
-  "street",
-  "nature",
-  "abstract",
-] as const;
-const moods = [
-  "charged",
-  "intimate",
-  "glossy",
-  "kinetic",
-  "dreamlike",
-  "late-night",
-];
+export function normalizeSourceMode(value: unknown): SourceMode {
+  if (value === "hybrid") return "mixed";
+  return sourceModes.includes(value as SourceMode) ? (value as SourceMode) : "stock";
+}
+
+export function sourceModeNeedsFal(value: SourceMode): boolean {
+  return value === "mixed" || value === "seedance";
+}
+
+export function sourceModeNeedsGmi(value: SourceMode): boolean {
+  return value === "gmi_seedance";
+}
+
+const themes = ["cinematic", "aesthetic", "street", "nature", "abstract"] as const;
+const moods = ["charged", "intimate", "glossy", "kinetic", "dreamlike", "late-night"];
 
 function pick<T>(values: readonly T[], index: number): T {
   return values[index % values.length];
@@ -31,20 +33,22 @@ export function createPromptPlan(input: {
   basePrompt?: string;
   index: number;
   total: number;
-  durationSeconds?: 15 | 30 | 60;
+  durationSeconds?: VideoDuration;
 }) {
   const subject = cleanPrompt(input.basePrompt);
   const theme = pick(themes, input.index);
   const mood = pick(moods, input.index);
   const duration = input.durationSeconds ?? 15;
-  const shotSize = input.index % 3 === 0
-    ? "wide vertical frame"
-    : input.index % 3 === 1
-    ? "medium close vertical frame"
-    : "profile close-up vertical frame";
-  const movement = input.index % 2 === 0
-    ? "slow push-in with steady gimbal movement"
-    : "sideways tracking move with gentle handheld energy";
+  const shotSize =
+    input.index % 3 === 0
+      ? "wide vertical frame"
+      : input.index % 3 === 1
+        ? "medium close vertical frame"
+        : "profile close-up vertical frame";
+  const movement =
+    input.index % 2 === 0
+      ? "slow push-in with steady gimbal movement"
+      : "sideways tracking move with gentle handheld energy";
 
   return {
     prompt: [
@@ -56,8 +60,7 @@ export function createPromptPlan(input: {
       "polished short-form music edit grade",
       `${duration} seconds, 9:16 aspect ratio, leave clean space for caption text`,
     ].join(", "),
-    caption: `${input.index % 2 === 0 ? "wait for it" : "sound on"}. ${subject}`
-      .slice(0, 140),
+    caption: `${input.index % 2 === 0 ? "wait for it" : "sound on"}. ${subject}`.slice(0, 140),
     hookText: input.index % 2 === 0 ? "wait for it" : "sound on",
     hashtags: ["#fyp", "#music", "#edit", "#fanpage", "#newmusic", "#viral"],
     videoPrompt: {
@@ -69,16 +72,9 @@ export function createPromptPlan(input: {
   };
 }
 
-export function buildSchedule(
-  startAt: Date,
-  count: number,
-  cadenceMinutes: number,
-): Date[] {
-  const safeCount = Math.max(1, Math.min(Math.floor(count), 50));
-  const safeCadence = Math.max(
-    5,
-    Math.min(Math.floor(cadenceMinutes), 7 * 24 * 60),
-  );
+export function buildSchedule(startAt: Date, count: number, cadenceMinutes: number): Date[] {
+  const safeCount = Math.max(1, Math.min(Math.floor(count), 250));
+  const safeCadence = Math.max(5, Math.min(Math.floor(cadenceMinutes), 7 * 24 * 60));
   return Array.from(
     { length: safeCount },
     (_, index) => new Date(startAt.getTime() + index * safeCadence * 60_000),
@@ -90,10 +86,8 @@ export function findGmiVideoUrl(outcome: unknown): string | undefined {
   if ("video_url" in outcome && typeof outcome.video_url === "string") {
     return outcome.video_url;
   }
-  if (
-    "url" in outcome && typeof outcome.url === "string" &&
-    /\.(mp4|mov)(\?|$)/i.test(outcome.url)
-  ) return outcome.url;
+  if ("url" in outcome && typeof outcome.url === "string" && /\.(mp4|mov)(\?|$)/i.test(outcome.url))
+    return outcome.url;
   for (const value of Object.values(outcome)) {
     if (typeof value === "string" && /\.(mp4|mov)(\?|$)/i.test(value)) {
       return value;

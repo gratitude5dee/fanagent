@@ -15,13 +15,15 @@ Deno.serve(async (request) => {
   if (request.method !== "POST") return errorResponse("Method not allowed", 405);
 
   try {
-    const body = await request.json() as { itemId?: string };
+    const body = (await request.json()) as { itemId?: string };
     if (!body.itemId) throw new Error("itemId required");
 
     const supabase = getSupabaseAdmin();
-    const item = await supabase.from("generation_items")
+    const item = await supabase
+      .from("generation_items")
       .select("id,batch_id,segments,duration_seconds,lyric_template_id")
-      .eq("id", body.itemId).single();
+      .eq("id", body.itemId)
+      .single();
     if (item.error) throw item.error;
 
     const segments = (item.data.segments ?? []) as Segment[];
@@ -29,12 +31,18 @@ Deno.serve(async (request) => {
     const missing = segments.filter((s) => !s.url);
     if (missing.length) throw new Error(`${missing.length} segment(s) missing url`);
 
-    const batch = await supabase.from("generation_batches")
-      .select("audio_asset_id,lyric_template_id").eq("id", item.data.batch_id).single();
+    const batch = await supabase
+      .from("generation_batches")
+      .select("audio_asset_id,lyric_template_id")
+      .eq("id", item.data.batch_id)
+      .single();
     if (batch.error) throw batch.error;
 
-    const audio = await supabase.from("media_assets")
-      .select("public_url").eq("id", batch.data.audio_asset_id).single();
+    const audio = await supabase
+      .from("media_assets")
+      .select("public_url")
+      .eq("id", batch.data.audio_asset_id)
+      .single();
     if (audio.error) throw audio.error;
 
     const total = item.data.duration_seconds ?? 15;
@@ -43,9 +51,11 @@ Deno.serve(async (request) => {
     const lyricTemplateId = item.data.lyric_template_id ?? batch.data.lyric_template_id ?? null;
     let markersSec: number[] = [];
     if (lyricTemplateId) {
-      const lt = await supabase.from("kanvas_lyric_templates")
+      const lt = await supabase
+        .from("kanvas_lyric_templates")
         .select("cut_markers,selection_start_ms")
-        .eq("id", lyricTemplateId).maybeSingle();
+        .eq("id", lyricTemplateId)
+        .maybeSingle();
       if (lt.data) {
         const startMs = lt.data.selection_start_ms ?? 0;
         markersSec = ((lt.data.cut_markers ?? []) as number[])
@@ -55,39 +65,34 @@ Deno.serve(async (request) => {
       }
     }
 
-    let finalUrl: string;
-    if (segments.length === 1 && markersSec.length === 0) {
-      // Single segment, no markers — skip ffmpeg, use as-is.
-      finalUrl = segments[0].url!;
+    // Build per-clip durations either from markers (cuts) or even split.
+    let clipUrls: string[];
+    let segmentDurations: number[];
+    if (segments.length === 1 && markersSec.length > 0) {
+      // Repeat the same clip per cut segment so ffmpeg trims at marker boundaries.
+      const cuts = [0, ...markersSec, total];
+      clipUrls = new Array(cuts.length - 1).fill(segments[0].url!);
+      segmentDurations = cuts.slice(1).map((t, i) => Math.max(0.5, t - cuts[i]));
+    } else if (markersSec.length > 0 && markersSec.length + 1 === segments.length) {
+      // Snap multi-segment boundaries to markers (±0.2s already implicit).
+      const cuts = [0, ...markersSec, total];
+      clipUrls = segments.map((s) => s.url!);
+      segmentDurations = cuts.slice(1).map((t, i) => Math.max(0.5, t - cuts[i]));
     } else {
-      // Build per-clip durations either from markers (cuts) or even split.
-      let clipUrls: string[];
-      let segmentDurations: number[];
-      if (segments.length === 1 && markersSec.length > 0) {
-        // Repeat the same clip per cut segment so ffmpeg trims at marker boundaries.
-        const cuts = [0, ...markersSec, total];
-        clipUrls = new Array(cuts.length - 1).fill(segments[0].url!);
-        segmentDurations = cuts.slice(1).map((t, i) => Math.max(0.5, t - cuts[i]));
-      } else if (markersSec.length > 0 && markersSec.length + 1 === segments.length) {
-        // Snap multi-segment boundaries to markers (±0.2s already implicit).
-        const cuts = [0, ...markersSec, total];
-        clipUrls = segments.map((s) => s.url!);
-        segmentDurations = cuts.slice(1).map((t, i) => Math.max(0.5, t - cuts[i]));
-      } else {
-        const segSec = Math.max(1, Math.floor(total / segments.length));
-        clipUrls = segments.map((s) => s.url!);
-        segmentDurations = new Array(segments.length).fill(segSec);
-      }
-      const avgSeg = segmentDurations.reduce((a, b) => a + b, 0) / segmentDurations.length;
-      finalUrl = await stitchClipsWithAudio({
-        clipUrls,
-        audioUrl: audio.data.public_url,
-        segmentSeconds: Math.max(1, Math.round(avgSeg)),
-        totalSeconds: total,
-      });
+      const segSec = Math.max(1, Math.floor(total / segments.length));
+      clipUrls = segments.map((s) => s.url!);
+      segmentDurations = new Array(segments.length).fill(segSec);
     }
+    const avgSeg = segmentDurations.reduce((a, b) => a + b, 0) / segmentDurations.length;
+    const finalUrl = await stitchClipsWithAudio({
+      clipUrls,
+      audioUrl: audio.data.public_url,
+      segmentSeconds: Math.max(1, Math.round(avgSeg)),
+      totalSeconds: total,
+    });
 
-    const upd = await supabase.from("generation_items")
+    const upd = await supabase
+      .from("generation_items")
       .update({ stock_clip_url: finalUrl, status: "stitched" })
       .eq("id", body.itemId);
     if (upd.error) throw upd.error;

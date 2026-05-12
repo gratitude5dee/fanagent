@@ -1,6 +1,15 @@
 import { lazy, Suspense, useEffect, useMemo, useState, useTransition } from "react";
 import type { EventDropArg, EventInput } from "@fullcalendar/core";
-import { CalendarDays, Music4, PlugZap, RefreshCcw, Send, Sparkles, UploadCloud, WandSparkles } from "lucide-react";
+import {
+  CalendarDays,
+  Music4,
+  PlugZap,
+  RefreshCcw,
+  Send,
+  Sparkles,
+  UploadCloud,
+  WandSparkles,
+} from "lucide-react";
 import { Link } from "react-router-dom";
 import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
 import type { Account, DashboardPost, GenerationBatch, SourceMode } from "@/lib/fanagent/types";
@@ -252,209 +261,213 @@ export default function App() {
           <AutopilotPanel />
         </Suspense>
       ) : (
-
-      <section className="dashboard-grid">
-        <aside className="panel create-panel">
-          <div className="panel-title">
-            <WandSparkles size={18} />
-            <h2>Create Batch</h2>
-          </div>
-          <form
-            onSubmit={(event) => runAction("Batch creation", () => createBatch(event))}
-            className="stack"
-          >
-            <label>
-              Audio source
-              <input
-                type="file"
-                accept="audio/*"
-                onChange={(event) => setAudio(event.target.files?.[0] ?? null)}
-              />
-            </label>
-            <label>
-              Visual prompt
-              <textarea
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                rows={4}
-              />
-            </label>
-            <div className="split source-split">
-              <label>
-                Posts
-                <input
-                  type="number"
-                  min={1}
-                  max={50}
-                  value={count}
-                  onChange={(event) => setCount(Number(event.target.value))}
-                />
-              </label>
-              <label>
-                Source
-                <select
-                  value={sourceMode}
-                  onChange={(event) => setSourceMode(event.target.value as SourceMode)}
-                >
-                  <option value="stock">Stock footage (fal pipeline)</option>
-                  <option value="mixed">Mixed: stock + Seedance (fal)</option>
-                  <option value="seedance">Seedance via fal.ai</option>
-                  <option value="gmi_seedance">GMI Seedance 2</option>
-                </select>
-              </label>
+        <section className="dashboard-grid">
+          <aside className="panel create-panel">
+            <div className="panel-title">
+              <WandSparkles size={18} />
+              <h2>Create Batch</h2>
             </div>
-            <div className="split schedule-split">
-              <label>
-                Start
-                <input
-                  type="datetime-local"
-                  value={startAt}
-                  onChange={(event) => setStartAt(event.target.value)}
-                />
-              </label>
-              <label>
-                Cadence min
-                <input
-                  type="number"
-                  min={5}
-                  value={cadence}
-                  onChange={(event) => setCadence(Number(event.target.value))}
-                />
-              </label>
-            </div>
-            <button className="button primary" disabled={!accountId || isPending} type="submit">
-              <UploadCloud size={16} /> Queue generation
-            </button>
-          </form>
-
-          <div className="action-row">
-            <button
-              className="button"
-              disabled={isPending}
-              onClick={() =>
-                runAction("Generation worker", () =>
-                  invokeFunction("fanpage-campaign", { action: "runGenerationWorkers" }))
-              }
-            >
-              <RefreshCcw size={16} /> Generate due
-            </button>
-            <button
-              className="button"
-              disabled={isPending}
-              onClick={() =>
-                runAction("Publish worker", () =>
-                  invokeFunction("fanpage-campaign", { action: "runPublishWorker" }))
-              }
-            >
-              <Send size={16} /> Publish due
-            </button>
-          </div>
-
-          <div className="batch-list">
-            {batches.slice(0, 6).map((batch) => (
-              <div className="batch-row" key={batch.id}>
-                <span className={`dot ${statusClass(batch.status)}`} />
-                <div>
-                  <strong>{batch.source_mode}</strong>
-                  <span>
-                    {batch.post_count} posts · {batch.status}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </aside>
-
-        <section className="panel calendar-panel">
-          <div className="panel-title">
-            <CalendarDays size={18} />
-            <h2>Schedule</h2>
-          </div>
-          <Suspense fallback={<div className="calendar-loading">Loading schedule...</div>}>
-            <FanAgentCalendar
-              events={calendarEvents}
-              onEventDrop={handleEventDrop}
-              onEventClick={setSelectedPostId}
-            />
-          </Suspense>
-        </section>
-
-        <aside className="panel post-panel">
-          <div className="panel-title">
-            <Send size={18} />
-            <h2>Post Review</h2>
-          </div>
-          {selectedPost ? (
             <form
-              onSubmit={(event) => runAction("Post save", () => saveSelectedPost(event))}
+              onSubmit={(event) => runAction("Batch creation", () => createBatch(event))}
               className="stack"
             >
-              <div className={`status-pill ${statusClass(selectedPost.status)}`}>
-                {selectedPost.status} · {selectedPost.publish_status || "not sent"}
-              </div>
               <label>
-                Caption
-                <textarea name="caption" rows={5} defaultValue={selectedPost.caption} />
-              </label>
-              <label>
-                Hashtags
-                <input name="hashtags" defaultValue={(selectedPost.hashtags ?? []).join(" ")} />
-              </label>
-              <label>
-                Scheduled
+                Audio source
                 <input
-                  name="scheduledAt"
-                  type="datetime-local"
-                  defaultValue={toLocalInputValue(new Date(selectedPost.scheduled_at))}
+                  type="file"
+                  accept="audio/*"
+                  onChange={(event) => setAudio(event.target.files?.[0] ?? null)}
                 />
               </label>
               <label>
-                TikTok privacy
-                <select name="privacyLevel" defaultValue={selectedPost.tiktok_privacy_level ?? ""}>
-                  <option value="">Choose before publish</option>
-                  {privacyLevels.map((level) => (
-                    <option key={level} value={level}>
-                      {level}
-                    </option>
-                  ))}
-                </select>
+                Visual prompt
+                <textarea
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  rows={4}
+                />
               </label>
-              <label className="check">
-                <input
-                  name="disableDuet"
-                  type="checkbox"
-                  defaultChecked={selectedPost.tiktok_disable_duet ?? true}
-                />{" "}
-                Disable duet
-              </label>
-              <label className="check">
-                <input
-                  name="disableStitch"
-                  type="checkbox"
-                  defaultChecked={selectedPost.tiktok_disable_stitch ?? true}
-                />{" "}
-                Disable stitch
-              </label>
-              <label className="check">
-                <input
-                  name="disableComment"
-                  type="checkbox"
-                  defaultChecked={selectedPost.tiktok_disable_comment ?? false}
-                />{" "}
-                Disable comments
-              </label>
-              {selectedPost.video_url ? (
-                <video src={selectedPost.video_url} controls muted playsInline />
-              ) : null}
-              <button className="button primary" disabled={isPending} type="submit">
-                Save post
+              <div className="split source-split">
+                <label>
+                  Posts
+                  <input
+                    type="number"
+                    min={1}
+                    max={250}
+                    value={count}
+                    onChange={(event) => setCount(Number(event.target.value))}
+                  />
+                </label>
+                <label>
+                  Source
+                  <select
+                    value={sourceMode}
+                    onChange={(event) => setSourceMode(event.target.value as SourceMode)}
+                  >
+                    <option value="stock">Stock footage (fal pipeline)</option>
+                    <option value="mixed">Mixed: stock + Seedance (fal)</option>
+                    <option value="seedance">Seedance via fal.ai</option>
+                    <option value="gmi_seedance">GMI Seedance 2</option>
+                  </select>
+                </label>
+              </div>
+              <div className="split schedule-split">
+                <label>
+                  Start
+                  <input
+                    type="datetime-local"
+                    value={startAt}
+                    onChange={(event) => setStartAt(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Cadence min
+                  <input
+                    type="number"
+                    min={5}
+                    value={cadence}
+                    onChange={(event) => setCadence(Number(event.target.value))}
+                  />
+                </label>
+              </div>
+              <button className="button primary" disabled={!accountId || isPending} type="submit">
+                <UploadCloud size={16} /> Queue generation
               </button>
             </form>
-          ) : (
-            <div className="empty-state">Select a scheduled item.</div>
-          )}
-        </aside>
-      </section>
+
+            <div className="action-row">
+              <button
+                className="button"
+                disabled={isPending}
+                onClick={() =>
+                  runAction("Generation worker", () =>
+                    invokeFunction("fanpage-campaign", { action: "runGenerationWorkers" }),
+                  )
+                }
+              >
+                <RefreshCcw size={16} /> Generate due
+              </button>
+              <button
+                className="button"
+                disabled={isPending}
+                onClick={() =>
+                  runAction("Publish worker", () =>
+                    invokeFunction("fanpage-campaign", { action: "runPublishWorker" }),
+                  )
+                }
+              >
+                <Send size={16} /> Publish due
+              </button>
+            </div>
+
+            <div className="batch-list">
+              {batches.slice(0, 6).map((batch) => (
+                <div className="batch-row" key={batch.id}>
+                  <span className={`dot ${statusClass(batch.status)}`} />
+                  <div>
+                    <strong>{batch.source_mode}</strong>
+                    <span>
+                      {batch.post_count} posts · {batch.status}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </aside>
+
+          <section className="panel calendar-panel">
+            <div className="panel-title">
+              <CalendarDays size={18} />
+              <h2>Schedule</h2>
+            </div>
+            <Suspense fallback={<div className="calendar-loading">Loading schedule...</div>}>
+              <FanAgentCalendar
+                events={calendarEvents}
+                onEventDrop={handleEventDrop}
+                onEventClick={setSelectedPostId}
+              />
+            </Suspense>
+          </section>
+
+          <aside className="panel post-panel">
+            <div className="panel-title">
+              <Send size={18} />
+              <h2>Post Review</h2>
+            </div>
+            {selectedPost ? (
+              <form
+                onSubmit={(event) => runAction("Post save", () => saveSelectedPost(event))}
+                className="stack"
+              >
+                <div className={`status-pill ${statusClass(selectedPost.status)}`}>
+                  {selectedPost.status} · {selectedPost.publish_status || "not sent"}
+                </div>
+                <label>
+                  Caption
+                  <textarea name="caption" rows={5} defaultValue={selectedPost.caption} />
+                </label>
+                <label>
+                  Hashtags
+                  <input name="hashtags" defaultValue={(selectedPost.hashtags ?? []).join(" ")} />
+                </label>
+                <label>
+                  Scheduled
+                  <input
+                    name="scheduledAt"
+                    type="datetime-local"
+                    defaultValue={toLocalInputValue(new Date(selectedPost.scheduled_at))}
+                  />
+                </label>
+                <label>
+                  TikTok privacy
+                  <select
+                    name="privacyLevel"
+                    defaultValue={selectedPost.tiktok_privacy_level ?? ""}
+                  >
+                    <option value="">Choose before publish</option>
+                    {privacyLevels.map((level) => (
+                      <option key={level} value={level}>
+                        {level}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="check">
+                  <input
+                    name="disableDuet"
+                    type="checkbox"
+                    defaultChecked={selectedPost.tiktok_disable_duet ?? true}
+                  />{" "}
+                  Disable duet
+                </label>
+                <label className="check">
+                  <input
+                    name="disableStitch"
+                    type="checkbox"
+                    defaultChecked={selectedPost.tiktok_disable_stitch ?? true}
+                  />{" "}
+                  Disable stitch
+                </label>
+                <label className="check">
+                  <input
+                    name="disableComment"
+                    type="checkbox"
+                    defaultChecked={selectedPost.tiktok_disable_comment ?? false}
+                  />{" "}
+                  Disable comments
+                </label>
+                {selectedPost.video_url ? (
+                  <video src={selectedPost.video_url} controls muted playsInline />
+                ) : null}
+                <button className="button primary" disabled={isPending} type="submit">
+                  Save post
+                </button>
+              </form>
+            ) : (
+              <div className="empty-state">Select a scheduled item.</div>
+            )}
+          </aside>
+        </section>
       )}
     </main>
   );

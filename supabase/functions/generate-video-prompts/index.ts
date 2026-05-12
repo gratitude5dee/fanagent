@@ -19,30 +19,46 @@ Deno.serve(async (request) => {
   if (request.method !== "POST") return errorResponse("Method not allowed", 405);
 
   try {
-    const body = await request.json() as { batchId?: string };
+    const body = (await request.json()) as { batchId?: string };
     if (!body.batchId) throw new Error("batchId is required");
 
-    const apiKey = optionalEnv("LOVABLE_API_KEY");
-    if (!apiKey) throw new Error("LOVABLE_API_KEY missing");
-
     const supabase = getSupabaseAdmin();
-    const batch = await supabase.from("generation_batches")
+    const batch = await supabase
+      .from("generation_batches")
       .select("id,prompt,post_count,duration_seconds,audio_asset_id")
-      .eq("id", body.batchId).single();
+      .eq("id", body.batchId)
+      .single();
     if (batch.error) throw batch.error;
 
-    const audio = await supabase.from("media_assets")
+    const audio = await supabase
+      .from("media_assets")
       .select("transcript")
-      .eq("id", batch.data.audio_asset_id).maybeSingle();
+      .eq("id", batch.data.audio_asset_id)
+      .maybeSingle();
     const transcript = audio.data?.transcript as { words?: Array<{ text: string }> } | null;
-    const transcriptText = transcript?.words?.map((w) => w.text).join(" ").slice(0, 1500) ?? "";
+    const transcriptText =
+      transcript?.words
+        ?.map((w) => w.text)
+        .join(" ")
+        .slice(0, 1500) ?? "";
 
-    const items = await supabase.from("generation_items")
+    const items = await supabase
+      .from("generation_items")
       .select("id,item_index,input_payload")
       .eq("batch_id", body.batchId)
       .order("item_index", { ascending: true });
     if (items.error) throw items.error;
     const count = items.data?.length ?? batch.data.post_count;
+
+    const apiKey = optionalEnv("LOVABLE_API_KEY");
+    if (!apiKey) {
+      return jsonResponse({
+        ok: true,
+        skipped: true,
+        reason: "LOVABLE_API_KEY missing; deterministic prompts remain active.",
+        count,
+      });
+    }
 
     const userPrompt = [
       `Theme: ${batch.data.prompt ?? "music-driven fan edit"}`,
@@ -60,34 +76,42 @@ Deno.serve(async (request) => {
           { role: "system", content: SYSTEM },
           { role: "user", content: userPrompt },
         ],
-        tools: [{
-          type: "function",
-          function: {
-            name: "submit_prompts",
-            description: "Submit the generated shot prompts.",
-            parameters: {
-              type: "object",
-              properties: {
-                prompts: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    properties: {
-                      shot: { type: "string", description: "Concrete vertical scene description, ~30 words." },
-                      mood: { type: "string" },
-                      visual_style: { type: "string" },
-                      caption: { type: "string", description: "Short TikTok-style caption, <=80 chars." },
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "submit_prompts",
+              description: "Submit the generated shot prompts.",
+              parameters: {
+                type: "object",
+                properties: {
+                  prompts: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        shot: {
+                          type: "string",
+                          description: "Concrete vertical scene description, ~30 words.",
+                        },
+                        mood: { type: "string" },
+                        visual_style: { type: "string" },
+                        caption: {
+                          type: "string",
+                          description: "Short TikTok-style caption, <=80 chars.",
+                        },
+                      },
+                      required: ["shot", "mood", "visual_style", "caption"],
+                      additionalProperties: false,
                     },
-                    required: ["shot", "mood", "visual_style", "caption"],
-                    additionalProperties: false,
                   },
                 },
+                required: ["prompts"],
+                additionalProperties: false,
               },
-              required: ["prompts"],
-              additionalProperties: false,
             },
           },
-        }],
+        ],
         tool_choice: { type: "function", function: { name: "submit_prompts" } },
       }),
     });
@@ -100,7 +124,12 @@ Deno.serve(async (request) => {
     const aiJson = await aiRes.json();
     const args = aiJson?.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
     const parsed = typeof args === "string" ? JSON.parse(args) : args;
-    const prompts = (parsed?.prompts ?? []) as Array<{ shot: string; mood: string; visual_style: string; caption: string }>;
+    const prompts = (parsed?.prompts ?? []) as Array<{
+      shot: string;
+      mood: string;
+      visual_style: string;
+      caption: string;
+    }>;
 
     if (prompts.length === 0) throw new Error("AI returned no prompts");
 
@@ -109,7 +138,8 @@ Deno.serve(async (request) => {
       const item = items.data![i];
       const p = prompts[i % prompts.length];
       const payload = (item.input_payload ?? {}) as Record<string, unknown>;
-      await supabase.from("generation_items")
+      await supabase
+        .from("generation_items")
         .update({
           prompt: p.shot,
           input_payload: { ...payload, prompt_meta: p },

@@ -6,9 +6,16 @@
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 import { composeWithSubtitles, extractFrame } from "../_shared/fal.ts";
-import { downloadBytes, createMediaAssetFromBytes, registerMediaAsset } from "../_shared/assets.ts";
+import { downloadBytes, createMediaAssetFromBytes } from "../_shared/assets.ts";
 
-type Word = { text?: string; word?: string; startMs?: number; endMs?: number; start?: number; end?: number };
+type Word = {
+  text?: string;
+  word?: string;
+  startMs?: number;
+  endMs?: number;
+  start?: number;
+  end?: number;
+};
 type Block = { text?: string; startMs?: number; endMs?: number; words?: Word[] };
 
 function fmtTs(ms: number): string {
@@ -45,13 +52,15 @@ Deno.serve(async (request) => {
   if (request.method !== "POST") return errorResponse("Method not allowed", 405);
 
   try {
-    const body = await request.json() as { itemId?: string };
+    const body = (await request.json()) as { itemId?: string };
     if (!body.itemId) throw new Error("itemId is required");
 
     const supabase = getSupabaseAdmin();
     const item = await supabase
       .from("generation_items")
-      .select("id,account_id,batch_id,stock_clip_url,input_payload,duration_seconds,lyric_template_id")
+      .select(
+        "id,account_id,batch_id,stock_clip_url,input_payload,duration_seconds,lyric_template_id",
+      )
       .eq("id", body.itemId)
       .single();
     if (item.error) throw item.error;
@@ -88,11 +97,12 @@ Deno.serve(async (request) => {
         const srt = blocksToSrt(blocks, lt.data!.selection_start_ms ?? 0, totalSeconds);
         // Upload SRT to public bucket so fal can fetch it.
         const srtPath = `subtitles/${body.itemId}-${Date.now()}.srt`;
-        const up = await supabase.storage.from("post-assets").upload(
-          srtPath,
-          new TextEncoder().encode(srt),
-          { contentType: "application/x-subrip", upsert: true },
-        );
+        const up = await supabase.storage
+          .from("post-assets")
+          .upload(srtPath, new TextEncoder().encode(srt), {
+            contentType: "application/x-subrip",
+            upsert: true,
+          });
         if (up.error) throw up.error;
         const { data: pub } = supabase.storage.from("post-assets").getPublicUrl(srtPath);
         finalUrl = await composeWithSubtitles({
@@ -105,36 +115,37 @@ Deno.serve(async (request) => {
       }
     }
 
-    // Persist as a media asset. If we composed, download + re-host; otherwise
-    // just register the existing URL.
-    let asset;
-    if (provider === "fal_ffmpeg") {
-      const dl = await downloadBytes(finalUrl);
-      asset = await createMediaAssetFromBytes({
-        accountId: item.data.account_id,
-        kind: "rendered_video",
-        source: provider,
-        bytes: dl.bytes,
-        mimeType: dl.mimeType === "application/octet-stream" ? "video/mp4" : dl.mimeType,
-        fileName: `${body.itemId}.mp4`,
-        metadata: { generation_item_id: body.itemId, lyric_template_id: lyricTemplateId },
-      });
-    } else {
-      asset = await registerMediaAsset({
-        accountId: item.data.account_id,
-        kind: "rendered_video",
-        source: provider,
-        publicUrl: finalUrl,
-        fileName: `${body.itemId}.mp4`,
-        metadata: { generation_item_id: body.itemId, passthrough: true },
-      });
-    }
+    // Always download + re-host the final MP4 so posts never depend on
+    // provider URLs or short-lived signed stock-cache URLs.
+    const dl = await downloadBytes(finalUrl);
+    const asset = await createMediaAssetFromBytes({
+      accountId: item.data.account_id,
+      kind: "rendered_video",
+      source: provider,
+      bytes: dl.bytes,
+      mimeType: dl.mimeType === "application/octet-stream" ? "video/mp4" : dl.mimeType,
+      fileName: `${body.itemId}.mp4`,
+      metadata: {
+        generation_item_id: body.itemId,
+        lyric_template_id: lyricTemplateId,
+        original_url: finalUrl,
+      },
+    });
 
     // Best-effort thumbnail extraction; never block readiness on failure.
     let thumbnailUrl: string | null = null;
     try {
       const frame = await extractFrame(finalUrl, "middle");
       thumbnailUrl = frame.url;
+      await supabase
+        .from("media_assets")
+        .update({
+          metadata: {
+            ...(asset.metadata ?? {}),
+            thumbnail_url: thumbnailUrl,
+          },
+        })
+        .eq("id", asset.id);
     } catch (err) {
       console.warn(`[render-karaoke] extractFrame failed for ${body.itemId}: ${err}`);
     }

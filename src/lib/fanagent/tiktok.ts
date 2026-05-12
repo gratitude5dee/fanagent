@@ -45,6 +45,17 @@ export function buildDirectPostInitBody(
   };
 }
 
+export function isTikTokPrivacyLevelAllowed(
+  privacyLevel: string | null | undefined,
+  creatorInfo: { privacy_level_options?: unknown },
+): boolean {
+  if (!privacyLevel) return false;
+  const options = Array.isArray(creatorInfo.privacy_level_options)
+    ? creatorInfo.privacy_level_options.map(String)
+    : [];
+  return options.length === 0 || options.includes(privacyLevel);
+}
+
 export function parseTikTokStatusResponse(raw: string): {
   status: string;
   fail_reason?: string | null;

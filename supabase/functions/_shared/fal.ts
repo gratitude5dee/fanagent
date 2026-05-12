@@ -23,18 +23,20 @@ export async function falRun<T = unknown>(model: string, input: unknown): Promis
     const text = await res.text();
     throw new Error(`fal.ai ${model} failed [${res.status}]: ${text.slice(0, 500)}`);
   }
-  return await res.json() as T;
+  return (await res.json()) as T;
 }
 
 function pickUrl(out: any): string | undefined {
-  return out?.video_url ??
+  return (
+    out?.video_url ??
     out?.video?.url ??
     out?.audio_url ??
     out?.audio?.url ??
     out?.image?.url ??
     out?.image_url ??
     out?.url ??
-    out?.output?.url;
+    out?.output?.url
+  );
 }
 
 // ---------- ffmpeg-api primitives ----------
@@ -53,13 +55,17 @@ export async function compose(tracks: unknown[]): Promise<{ url: string; raw: an
   return { url, raw: out };
 }
 
-export async function mergeAudioVideo(videoUrl: string, audioUrl: string): Promise<{ url: string; raw: any }> {
+export async function mergeAudioVideo(
+  videoUrl: string,
+  audioUrl: string,
+): Promise<{ url: string; raw: any }> {
   const out = await falRun<any>("fal-ai/ffmpeg-api/merge-audio-video", {
     video_url: videoUrl,
     audio_url: audioUrl,
   });
   const url = pickUrl(out);
-  if (!url) throw new Error(`merge-audio-video returned no URL: ${JSON.stringify(out).slice(0, 300)}`);
+  if (!url)
+    throw new Error(`merge-audio-video returned no URL: ${JSON.stringify(out).slice(0, 300)}`);
   return { url, raw: out };
 }
 
@@ -110,13 +116,18 @@ export async function waveform(audioUrl: string, opts: Record<string, unknown> =
 
 // ---------- Seedance text-to-video ----------
 
-export async function generateSeedanceClip(prompt: string): Promise<string> {
-  const model = optionalEnv("SEEDANCE_MODEL_ID") ?? "fal-ai/bytedance/seedance/v1/lite/text-to-video";
+export async function generateSeedanceClip(
+  prompt: string,
+  options: { durationSeconds?: number; resolution?: "480p" | "720p" | "1080p" } = {},
+): Promise<string> {
+  const model = optionalEnv("SEEDANCE_MODEL_ID") ?? "bytedance/seedance-2.0/fast/text-to-video";
+  const duration = Math.max(4, Math.min(Math.floor(options.durationSeconds ?? 5), 15));
   const out = await falRun<{ video?: { url?: string }; url?: string }>(model, {
     prompt,
     aspect_ratio: "9:16",
-    resolution: "720p",
-    duration: "5",
+    resolution: options.resolution ?? "720p",
+    duration: String(duration),
+    generate_audio: false,
   });
   const url = out?.video?.url ?? out?.url;
   if (!url) throw new Error(`Seedance returned no video URL: ${JSON.stringify(out).slice(0, 300)}`);
@@ -143,9 +154,8 @@ export async function stitchClipsWithAudio(input: {
 
   if (!forceCompose && evenSplit) {
     try {
-      const merged = clipUrls.length === 1
-        ? { url: clipUrls[0], raw: null }
-        : await mergeVideos(clipUrls);
+      const merged =
+        clipUrls.length === 1 ? { url: clipUrls[0], raw: null } : await mergeVideos(clipUrls);
       const out = await mergeAudioVideo(merged.url, audioUrl);
       return out.url;
     } catch (err) {

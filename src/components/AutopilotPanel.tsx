@@ -4,7 +4,21 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { CalendarClock, CheckCircle2, FileMusic, Info, Loader2, PauseCircle, Plus, PlayCircle, PlugZap, RefreshCcw, RotateCcw, Sparkles, UploadCloud } from "lucide-react";
+import {
+  CalendarClock,
+  CheckCircle2,
+  FileMusic,
+  Info,
+  Loader2,
+  PauseCircle,
+  Plus,
+  PlayCircle,
+  PlugZap,
+  RefreshCcw,
+  RotateCcw,
+  Sparkles,
+  UploadCloud,
+} from "lucide-react";
 import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
 import AudioTrimmer from "@/components/autopilot/AudioTrimmer";
 import type { LyricTemplateSummary } from "@/lib/lyrics/types";
@@ -34,10 +48,13 @@ type Item = {
   batch_id: string;
   status: string;
   scheduled_at: string;
+  provider?: string | null;
+  prompt?: string | null;
   stock_clip_url: string | null;
   render_provider: string | null;
   error_message: string | null;
   lyric_template_id?: string | null;
+  stage_events?: Array<{ stage?: string; at?: string; [key: string]: unknown }> | null;
 };
 
 type Post = {
@@ -58,9 +75,34 @@ type CampaignList = {
   lyricTemplates?: LyricTemplateSummary[];
 };
 
-type SourceMode = "stock" | "seedance" | "mixed";
+type Diagnostics = {
+  env: Record<string, boolean>;
+  buckets: Array<{ name: string; ok: boolean }>;
+  schema: {
+    generationBatchesSettings: boolean;
+    generationItemsQueueColumns: boolean;
+    workerRuns: boolean;
+    errors: string[];
+  };
+  recentWorkerRuns: Array<{
+    function_name: string;
+    started_at: string;
+    ended_at: string | null;
+    items_processed: number;
+    errors_count: number;
+  }>;
+  recentFailedItems: Array<{
+    id: string;
+    status: string;
+    provider: string | null;
+    error_message: string | null;
+    updated_at: string;
+  }>;
+};
+
+type SourceMode = "stock" | "seedance" | "mixed" | "gmi_seedance";
 const DURATIONS = [15, 30, 45, 60, 75, 90] as const;
-type Duration = typeof DURATIONS[number];
+type Duration = (typeof DURATIONS)[number];
 
 async function blobToBase64(blob: Blob): Promise<string> {
   const buf = await blob.arrayBuffer();
@@ -94,17 +136,34 @@ function statusTone(status: string): string {
 export default function AutopilotPanel() {
   const [data, setData] = useState<CampaignList | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
-  const [trimmedAudio, setTrimmedAudio] = useState<{ blob: Blob; durationSec: number; name: string } | null>(null);
+  const [trimmedAudio, setTrimmedAudio] = useState<{
+    blob: Blob;
+    durationSec: number;
+    name: string;
+  } | null>(null);
   const [duration, setDuration] = useState<Duration>(15);
   const [sourceMode, setSourceMode] = useState<SourceMode>("stock");
   const [postCount, setPostCount] = useState(14);
   const [prompt, setPrompt] = useState("aesthetic vertical cinematic visuals");
+  const [stockProviders, setStockProviders] = useState({
+    library: true,
+    pexels: true,
+    pixabay: true,
+  });
+  const [stockKeywords, setStockKeywords] = useState("");
+  const [stockNegativeKeywords, setStockNegativeKeywords] = useState("logo, watermark, text");
+  const [stockCategory, setStockCategory] = useState("");
+  const [stockMood, setStockMood] = useState("");
+  const [stockPortraitOnly, setStockPortraitOnly] = useState(true);
+  const [seedanceResolution, setSeedanceResolution] = useState<"480p" | "720p" | "1080p">("720p");
+  const [publishPrivacy, setPublishPrivacy] = useState("SELF_ONLY");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [tab, setTab] = useState<"campaign" | "lyrics">("campaign");
   const [lyricTemplateId, setLyricTemplateId] = useState<string | "">("");
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
 
-  const lyricTemplates = data?.lyricTemplates ?? [];
+  const lyricTemplates = useMemo(() => data?.lyricTemplates ?? [], [data?.lyricTemplates]);
   const templateById = useMemo(
     () => new Map(lyricTemplates.map((t) => [t.id, t])),
     [lyricTemplates],
@@ -126,8 +185,18 @@ export default function AutopilotPanel() {
     }
   }
 
+  async function refreshDiagnostics() {
+    try {
+      const next = await callCampaign<Diagnostics>("diagnostics");
+      setDiagnostics(next);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   useEffect(() => {
     refresh();
+    refreshDiagnostics();
     const t = setInterval(refresh, 15_000);
     return () => clearInterval(t);
   }, []);
@@ -161,6 +230,33 @@ export default function AutopilotPanel() {
       postCount,
       cadenceMinutes: 1440,
       prompt,
+      stockSettings: {
+        providers: Object.entries(stockProviders)
+          .filter(([, enabled]) => enabled)
+          .map(([provider]) => provider),
+        keywords: stockKeywords
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean),
+        negativeKeywords: stockNegativeKeywords
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean),
+        category: stockCategory || null,
+        mood: stockMood || null,
+        portraitOnly: stockPortraitOnly,
+        minDurationSec: Math.min(15, duration),
+        maxDurationSec: Math.max(15, duration * 3),
+      },
+      seedanceSettings: {
+        resolution: seedanceResolution,
+      },
+      publishDefaults: {
+        privacyLevel: publishPrivacy,
+        disableDuet: true,
+        disableStitch: true,
+        disableComment: false,
+      },
       startAt,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       lyricTemplateId: lyricTemplateId || null,
@@ -203,6 +299,100 @@ export default function AutopilotPanel() {
 
       {message ? <div className="banner">{message}</div> : null}
 
+      {diagnostics ? (
+        <section className="panel">
+          <div className="panel-title">
+            <Info size={16} />
+            <h3>Preflight</h3>
+          </div>
+          <div className="batch-list">
+            <div className="batch-row">
+              <span
+                className={`dot ${
+                  diagnostics.schema.generationBatchesSettings &&
+                  diagnostics.schema.generationItemsQueueColumns &&
+                  diagnostics.schema.workerRuns
+                    ? "good"
+                    : "bad"
+                }`}
+              />
+              <div>
+                <strong>Database queue schema</strong>
+                <span>
+                  {diagnostics.schema.errors.length
+                    ? diagnostics.schema.errors.join(" · ")
+                    : "ready"}
+                </span>
+              </div>
+            </div>
+            <div className="batch-row">
+              <span
+                className={`dot ${
+                  diagnostics.buckets.every((bucket) => bucket.ok) ? "good" : "warn"
+                }`}
+              />
+              <div>
+                <strong>Storage buckets</strong>
+                <span>
+                  {diagnostics.buckets
+                    .map((bucket) => `${bucket.name}:${bucket.ok ? "ok" : "missing"}`)
+                    .join(" · ")}
+                </span>
+              </div>
+            </div>
+            <div className="batch-row">
+              <span
+                className={`dot ${
+                  diagnostics.env.pexels ||
+                  diagnostics.env.pixabay ||
+                  diagnostics.env.fal ||
+                  diagnostics.env.gmi
+                    ? "good"
+                    : "bad"
+                }`}
+              />
+              <div>
+                <strong>Providers</strong>
+                <span>
+                  stock{" "}
+                  {diagnostics.env.pexels || diagnostics.env.pixabay ? "ready" : "missing keys"} ·
+                  fal {diagnostics.env.fal ? "ready" : "missing"} · GMI{" "}
+                  {diagnostics.env.gmi ? "ready" : "optional missing"}
+                </span>
+              </div>
+            </div>
+            <div className="batch-row">
+              <span
+                className={`dot ${
+                  diagnostics.env.tiktokClientKey &&
+                  diagnostics.env.tiktokClientSecret &&
+                  diagnostics.env.tiktokRedirectUri &&
+                  diagnostics.env.tokenEncryptionKey
+                    ? "good"
+                    : "warn"
+                }`}
+              />
+              <div>
+                <strong>TikTok direct post</strong>
+                <span>
+                  {diagnostics.env.tiktokClientKey &&
+                  diagnostics.env.tiktokClientSecret &&
+                  diagnostics.env.tiktokRedirectUri
+                    ? "OAuth configured"
+                    : "OAuth secrets incomplete"}{" "}
+                  · cron {diagnostics.env.cronSecret ? "ready" : "manual only"}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="action-row">
+            <button className="button ghost" type="button" onClick={refreshDiagnostics}>
+              <RefreshCcw size={14} /> Refresh diagnostics
+            </button>
+          </div>
+        </section>
+      ) : null}
+
       {tab === "lyrics" ? (
         <section className="panel">
           <div className="panel-title">
@@ -225,11 +415,14 @@ export default function AutopilotPanel() {
             <div className="batch-list">
               {lyricTemplates.map((t) => (
                 <div className="batch-row" key={t.id}>
-                  <span className={`dot ${t.status === "saved" ? "good" : t.status === "failed" ? "bad" : "warn"}`} />
+                  <span
+                    className={`dot ${t.status === "saved" ? "good" : t.status === "failed" ? "bad" : "warn"}`}
+                  />
                   <div style={{ flex: 1 }}>
                     <strong>{t.title}</strong>
                     <span>
-                      {t.status} · {(t.selection_duration_ms / 1000).toFixed(1)}s of {(t.total_duration_ms / 1000).toFixed(1)}s
+                      {t.status} · {(t.selection_duration_ms / 1000).toFixed(1)}s of{" "}
+                      {(t.total_duration_ms / 1000).toFixed(1)}s
                     </span>
                   </div>
                   <Link className="button ghost" to={`/lyrics/templates/${t.id}`}>
@@ -243,237 +436,385 @@ export default function AutopilotPanel() {
       ) : null}
 
       {tab !== "campaign" ? null : (
-      <>
-      {/* STEP 1 — Connect TikTok */}
-      <section className="panel">
-        <div className="panel-title">
-          <PlugZap size={16} />
-          <h3>1. Connect TikTok</h3>
-        </div>
-        {account ? (
-          <div className="stack">
-            <div>
-              Account: <strong>{account.handle ?? account.tiktok_display_name ?? account.id.slice(0, 8)}</strong>{" "}
-              {isConnected ? (
-                <span className="status-pill good"><CheckCircle2 size={14} /> connected</span>
-              ) : (
-                <span className="status-pill warn">not connected</span>
-              )}
+        <>
+          {/* STEP 1 — Connect TikTok */}
+          <section className="panel">
+            <div className="panel-title">
+              <PlugZap size={16} />
+              <h3>1. Connect TikTok</h3>
             </div>
-            <a className="button ghost" href={tiktokConnectUrl(account.id)}>
-              <PlugZap size={16} /> {isConnected ? "Reconnect" : "Connect TikTok"}
-            </a>
-          </div>
-        ) : (
-          <div className="empty-state">Loading account…</div>
-        )}
-      </section>
-
-      {/* STEP 2 — Source + cadence (only if no active campaign) */}
-      {isConnected && !activeBatch ? (
-        <section className="panel">
-          <div className="panel-title">
-            <UploadCloud size={16} />
-            <h3>2. Upload audio + start daily campaign</h3>
-          </div>
-          <form
-            className="stack"
-            onSubmit={(e) => {
-              e.preventDefault();
-              run("Campaign launch", startCampaign);
-            }}
-          >
-            <label>
-              Audio (MP3/WAV/M4A)
-              <input
-                type="file"
-                accept="audio/*"
-                onChange={(e) => {
-                  const f = e.target.files?.[0] ?? null;
-                  setAudioFile(f);
-                  setTrimmedAudio(null);
-                }}
-                required={!trimmedAudio}
-              />
-            </label>
-            {audioFile ? (
-              <AudioTrimmer
-                file={audioFile}
-                maxDurationSec={duration}
-                onTrimmed={(blob, durationSec) =>
-                  setTrimmedAudio({ blob, durationSec, name: audioFile.name })
-                }
-              />
-            ) : null}
-            {trimmedAudio ? (
-              <div className="banner">
-                ✓ Trimmed clip ready ({trimmedAudio.durationSec.toFixed(1)}s).
+            {account ? (
+              <div className="stack">
+                <div>
+                  Account:{" "}
+                  <strong>
+                    {account.handle ?? account.tiktok_display_name ?? account.id.slice(0, 8)}
+                  </strong>{" "}
+                  {isConnected ? (
+                    <span className="status-pill good">
+                      <CheckCircle2 size={14} /> connected
+                    </span>
+                  ) : (
+                    <span className="status-pill warn">not connected</span>
+                  )}
+                </div>
+                <a className="button ghost" href={tiktokConnectUrl(account.id)}>
+                  <PlugZap size={16} /> {isConnected ? "Reconnect" : "Connect TikTok"}
+                </a>
               </div>
-            ) : null}
-            <label>
-              Post duration
-              <div className="action-row" style={{ flexWrap: "wrap", gap: 6 }}>
-                {DURATIONS.map((d) => (
-                  <button
-                    type="button"
-                    key={d}
-                    className={`button ${duration === d ? "primary" : "ghost"}`}
-                    onClick={() => {
-                      setDuration(d);
-                      // Re-trim required if user shrinks below current selection.
+            ) : (
+              <div className="empty-state">Loading account…</div>
+            )}
+          </section>
+
+          {/* STEP 2 — Source + cadence (only if no active campaign) */}
+          {isConnected && !activeBatch ? (
+            <section className="panel">
+              <div className="panel-title">
+                <UploadCloud size={16} />
+                <h3>2. Upload audio + start daily campaign</h3>
+              </div>
+              <form
+                className="stack"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  run("Campaign launch", startCampaign);
+                }}
+              >
+                <label>
+                  Audio (MP3/WAV/M4A)
+                  <input
+                    type="file"
+                    accept="audio/*"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] ?? null;
+                      setAudioFile(f);
                       setTrimmedAudio(null);
                     }}
-                  >
-                    {d}s
-                  </button>
-                ))}
-              </div>
-            </label>
-            <label>
-              Theme / visual prompt (AI will generate per-post shot prompts)
-              <textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-            </label>
-            <div className="split">
-              <label>
-                Source
-                <select value={sourceMode} onChange={(e) => setSourceMode(e.target.value as SourceMode)}>
-                  <option value="stock">Stock footage (Pexels + Pixabay)</option>
-                  <option value="mixed">Mixed: stock + Seedance 2</option>
-                  <option value="seedance">Seedance 2 only</option>
-                </select>
-              </label>
-              <label>
-                Posts to queue
-                <input type="number" min={1} max={50} value={postCount} onChange={(e) => setPostCount(Number(e.target.value))} />
-              </label>
-            </div>
-            <label>
-              Lyrics template (optional)
-              <select
-                value={lyricTemplateId}
-                onChange={(e) => setLyricTemplateId(e.target.value)}
-              >
-                <option value="">None — basic captions only</option>
-                {lyricTemplates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.title} ({(t.selection_duration_ms / 1000).toFixed(0)}s · {t.status})
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="banner" style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-              <Info size={14} style={{ marginTop: 2, flexShrink: 0 }} />
-              <span>
-                <strong>Stock footage</strong> is sourced from Pexels + Pixabay (and any clips you've added to your library), ranked for portrait aspect, and cached privately in Supabase Storage.{" "}
-                <strong>Seedance 2</strong> generates per-segment AI video via fal.ai. The optional <strong>remote render</strong> step is a Remotion karaoke-caption pass that's currently a pass-through stub.
-              </span>
-            </div>
-            {duration > 15 ? (
-              <div className="banner">
-                {Math.ceil(duration / 15)} clips per post will be stitched together with ffmpeg.
-              </div>
-            ) : null}
-            <button className="button primary" disabled={busy || !trimmedAudio} type="submit">
-              {busy ? <Loader2 className="spin" size={16} /> : <CalendarClock size={16} />} Launch daily campaign
-            </button>
-          </form>
-        </section>
-      ) : null}
-
-      {/* STEP 3 — Active campaign */}
-      {activeBatch ? (
-        <section className="panel">
-          <div className="panel-title">
-            <CalendarClock size={16} />
-            <h3>Active campaign · {activeBatch.source_mode}</h3>
-          </div>
-          <div className="action-row">
-            <button
-              className="button"
-              disabled={busy}
-              onClick={() => run("Pause", () => callCampaign("pause", { batchId: activeBatch.id }))}
-            >
-              <PauseCircle size={16} /> Pause
-            </button>
-            <button className="button" disabled={busy} onClick={() => run("Refresh", refresh)}>
-              <RefreshCcw size={16} /> Refresh
-            </button>
-          </div>
-        </section>
-      ) : null}
-
-      {/* Paused batches → resume */}
-      {(data?.batches ?? []).filter((b) => !!b.paused_at).map((b) => (
-        <section className="panel" key={b.id}>
-          <div className="panel-title">
-            <PauseCircle size={16} />
-            <h3>Paused · {b.source_mode}</h3>
-          </div>
-          <button
-            className="button"
-            disabled={busy}
-            onClick={() => run("Resume", () => callCampaign("resume", { batchId: b.id }))}
-          >
-            <PlayCircle size={16} /> Resume
-          </button>
-        </section>
-      ))}
-
-      {/* Queue view */}
-      {data && data.items.length > 0 ? (
-        <section className="panel">
-          <div className="panel-title">
-            <CalendarClock size={16} />
-            <h3>Upcoming posts</h3>
-          </div>
-          <div className="batch-list">
-            {data.items.slice(0, 20).map((item) => {
-              const post = data.posts.find((p) => p.generation_item_id === item.id);
-              const itemTpl = item.lyric_template_id ? templateById.get(item.lyric_template_id) : null;
-              return (
-                <div className="batch-row" key={item.id}>
-                  <span className={`dot ${statusTone(item.status)}`} />
-                  <div style={{ flex: 1 }}>
-                    <strong>{new Date(item.scheduled_at).toLocaleString()}</strong>
-                    <span>
-                      {item.status}{item.render_provider ? ` · ${item.render_provider}` : ""}{post ? ` · post ${post.status}` : ""}
-                    </span>
-                    {itemTpl ? (
-                      <span className="status-pill" style={{ marginTop: 4 }}>
-                        <FileMusic size={12} /> {itemTpl.title}
-                      </span>
-                    ) : null}
-                    {item.error_message ? (
-                      <span className="status-pill bad" style={{ marginTop: 4 }}>{item.error_message}</span>
-                    ) : null}
+                    required={!trimmedAudio}
+                  />
+                </label>
+                {audioFile ? (
+                  <AudioTrimmer
+                    file={audioFile}
+                    maxDurationSec={duration}
+                    onTrimmed={(blob, durationSec) =>
+                      setTrimmedAudio({ blob, durationSec, name: audioFile.name })
+                    }
+                  />
+                ) : null}
+                {trimmedAudio ? (
+                  <div className="banner">
+                    ✓ Trimmed clip ready ({trimmedAudio.durationSec.toFixed(1)}s).
                   </div>
+                ) : null}
+                <label>
+                  Post duration
+                  <div className="action-row" style={{ flexWrap: "wrap", gap: 6 }}>
+                    {DURATIONS.map((d) => (
+                      <button
+                        type="button"
+                        key={d}
+                        className={`button ${duration === d ? "primary" : "ghost"}`}
+                        onClick={() => {
+                          setDuration(d);
+                          // Re-trim required if user shrinks below current selection.
+                          setTrimmedAudio(null);
+                        }}
+                      >
+                        {d}s
+                      </button>
+                    ))}
+                  </div>
+                </label>
+                <label>
+                  Theme / visual prompt (AI will generate per-post shot prompts)
+                  <textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+                </label>
+                <div className="split">
+                  <label>
+                    Source
+                    <select
+                      value={sourceMode}
+                      onChange={(e) => setSourceMode(e.target.value as SourceMode)}
+                    >
+                      <option value="stock">Stock footage (Pexels + Pixabay)</option>
+                      <option value="mixed">Mixed: stock + Seedance 2</option>
+                      <option value="seedance">Seedance 2 only</option>
+                      <option value="gmi_seedance">GMI Seedance 2</option>
+                    </select>
+                  </label>
+                  <label>
+                    Posts to queue
+                    <input
+                      type="number"
+                      min={1}
+                      max={250}
+                      value={postCount}
+                      onChange={(e) => setPostCount(Number(e.target.value))}
+                    />
+                  </label>
+                </div>
+                <section className="panel subtle-panel">
+                  <div className="panel-title">
+                    <Info size={14} />
+                    <h4>Stock controls</h4>
+                  </div>
+                  <div className="action-row" style={{ flexWrap: "wrap" }}>
+                    {(["library", "pexels", "pixabay"] as const).map((provider) => (
+                      <label className="check" key={provider}>
+                        <input
+                          type="checkbox"
+                          checked={stockProviders[provider]}
+                          onChange={(e) =>
+                            setStockProviders((current) => ({
+                              ...current,
+                              [provider]: e.target.checked,
+                            }))
+                          }
+                        />{" "}
+                        {provider}
+                      </label>
+                    ))}
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={stockPortraitOnly}
+                        onChange={(e) => setStockPortraitOnly(e.target.checked)}
+                      />{" "}
+                      portrait only
+                    </label>
+                  </div>
+                  <div className="split">
+                    <label>
+                      Keywords
+                      <input
+                        value={stockKeywords}
+                        onChange={(e) => setStockKeywords(e.target.value)}
+                        placeholder="concert, neon, crowd"
+                      />
+                    </label>
+                    <label>
+                      Avoid
+                      <input
+                        value={stockNegativeKeywords}
+                        onChange={(e) => setStockNegativeKeywords(e.target.value)}
+                        placeholder="logo, watermark"
+                      />
+                    </label>
+                  </div>
+                  <div className="split">
+                    <label>
+                      Category
+                      <input
+                        value={stockCategory}
+                        onChange={(e) => setStockCategory(e.target.value)}
+                        placeholder="music"
+                      />
+                    </label>
+                    <label>
+                      Mood
+                      <input
+                        value={stockMood}
+                        onChange={(e) => setStockMood(e.target.value)}
+                        placeholder="high energy"
+                      />
+                    </label>
+                  </div>
+                  <label>
+                    fal Seedance resolution
+                    <select
+                      value={seedanceResolution}
+                      onChange={(e) =>
+                        setSeedanceResolution(e.target.value as "480p" | "720p" | "1080p")
+                      }
+                    >
+                      <option value="480p">480p draft</option>
+                      <option value="720p">720p balanced</option>
+                      <option value="1080p">1080p final</option>
+                    </select>
+                  </label>
+                  <label>
+                    TikTok privacy default
+                    <select
+                      value={publishPrivacy}
+                      onChange={(e) => setPublishPrivacy(e.target.value)}
+                    >
+                      <option value="SELF_ONLY">SELF_ONLY</option>
+                      <option value="MUTUAL_FOLLOW_FRIENDS">MUTUAL_FOLLOW_FRIENDS</option>
+                      <option value="FOLLOWER_OF_CREATOR">FOLLOWER_OF_CREATOR</option>
+                      <option value="PUBLIC_TO_EVERYONE">PUBLIC_TO_EVERYONE</option>
+                    </select>
+                  </label>
+                </section>
+                <label>
+                  Lyrics template (optional)
                   <select
-                    value={item.lyric_template_id ?? ""}
-                    onChange={(e) => setItemTemplate(item.id, e.target.value || null)}
-                    disabled={busy}
-                    title="Lyrics template"
-                    style={{ maxWidth: 160 }}
+                    value={lyricTemplateId}
+                    onChange={(e) => setLyricTemplateId(e.target.value)}
                   >
-                    <option value="">No template</option>
+                    <option value="">None — basic captions only</option>
                     {lyricTemplates.map((t) => (
-                      <option key={t.id} value={t.id}>{t.title}</option>
+                      <option key={t.id} value={t.id}>
+                        {t.title} ({(t.selection_duration_ms / 1000).toFixed(0)}s · {t.status})
+                      </option>
                     ))}
                   </select>
-                  <button
-                    className="button ghost"
-                    title="Regenerate"
-                    disabled={busy}
-                    onClick={() => run("Regenerate", () => callCampaign("regenerate", { itemId: item.id }))}
-                  >
-                    <RotateCcw size={14} />
-                  </button>
+                </label>
+                <div
+                  className="banner"
+                  style={{ display: "flex", gap: 8, alignItems: "flex-start" }}
+                >
+                  <Info size={14} style={{ marginTop: 2, flexShrink: 0 }} />
+                  <span>
+                    <strong>Stock footage</strong> is sourced from Pexels + Pixabay (and any clips
+                    you've added to your library), ranked for portrait aspect, and cached privately
+                    in Supabase Storage. <strong>Seedance 2</strong> generates per-segment AI video
+                    via fal.ai. <strong>GMI Seedance</strong> is available when its API keys are
+                    configured.
+                  </span>
                 </div>
-              );
-            })}
-          </div>
-        </section>
-      ) : null}
-      </>
+                {duration > 15 ? (
+                  <div className="banner">
+                    {Math.ceil(duration / 15)} clips per post will be stitched together with ffmpeg.
+                  </div>
+                ) : null}
+                <button className="button primary" disabled={busy || !trimmedAudio} type="submit">
+                  {busy ? <Loader2 className="spin" size={16} /> : <CalendarClock size={16} />}{" "}
+                  Launch daily campaign
+                </button>
+              </form>
+            </section>
+          ) : null}
+
+          {/* STEP 3 — Active campaign */}
+          {activeBatch ? (
+            <section className="panel">
+              <div className="panel-title">
+                <CalendarClock size={16} />
+                <h3>Active campaign · {activeBatch.source_mode}</h3>
+              </div>
+              <div className="action-row">
+                <button
+                  className="button"
+                  disabled={busy}
+                  onClick={() =>
+                    run("Pause", () => callCampaign("pause", { batchId: activeBatch.id }))
+                  }
+                >
+                  <PauseCircle size={16} /> Pause
+                </button>
+                <button className="button" disabled={busy} onClick={() => run("Refresh", refresh)}>
+                  <RefreshCcw size={16} /> Refresh
+                </button>
+              </div>
+            </section>
+          ) : null}
+
+          {/* Paused batches → resume */}
+          {(data?.batches ?? [])
+            .filter((b) => !!b.paused_at)
+            .map((b) => (
+              <section className="panel" key={b.id}>
+                <div className="panel-title">
+                  <PauseCircle size={16} />
+                  <h3>Paused · {b.source_mode}</h3>
+                </div>
+                <button
+                  className="button"
+                  disabled={busy}
+                  onClick={() => run("Resume", () => callCampaign("resume", { batchId: b.id }))}
+                >
+                  <PlayCircle size={16} /> Resume
+                </button>
+              </section>
+            ))}
+
+          {/* Queue view */}
+          {data && data.items.length > 0 ? (
+            <section className="panel">
+              <div className="panel-title">
+                <CalendarClock size={16} />
+                <h3>Upcoming posts</h3>
+              </div>
+              <div className="batch-list">
+                {data.items.slice(0, 20).map((item) => {
+                  const post = data.posts.find((p) => p.generation_item_id === item.id);
+                  const itemTpl = item.lyric_template_id
+                    ? templateById.get(item.lyric_template_id)
+                    : null;
+                  return (
+                    <div className="batch-row" key={item.id}>
+                      <span className={`dot ${statusTone(item.status)}`} />
+                      <div style={{ flex: 1 }}>
+                        <strong>{new Date(item.scheduled_at).toLocaleString()}</strong>
+                        <span>
+                          {item.status}
+                          {item.render_provider ? ` · ${item.render_provider}` : ""}
+                          {post ? ` · post ${post.status}` : ""}
+                        </span>
+                        {item.prompt ? <span>{item.prompt.slice(0, 120)}</span> : null}
+                        {itemTpl ? (
+                          <span className="status-pill" style={{ marginTop: 4 }}>
+                            <FileMusic size={12} /> {itemTpl.title}
+                          </span>
+                        ) : null}
+                        {item.error_message ? (
+                          <span className="status-pill bad" style={{ marginTop: 4 }}>
+                            {item.error_message}
+                          </span>
+                        ) : null}
+                        {item.stage_events?.length ? (
+                          <span>
+                            {item.stage_events
+                              .slice(-3)
+                              .map((event) => event.stage)
+                              .filter(Boolean)
+                              .join(" → ")}
+                          </span>
+                        ) : null}
+                      </div>
+                      {item.stock_clip_url ? (
+                        <a
+                          className="button ghost"
+                          href={item.stock_clip_url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Preview
+                        </a>
+                      ) : null}
+                      <select
+                        value={item.lyric_template_id ?? ""}
+                        onChange={(e) => setItemTemplate(item.id, e.target.value || null)}
+                        disabled={busy}
+                        title="Lyrics template"
+                        style={{ maxWidth: 160 }}
+                      >
+                        <option value="">No template</option>
+                        {lyricTemplates.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.title}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        className="button ghost"
+                        title="Regenerate"
+                        disabled={busy}
+                        onClick={() =>
+                          run("Regenerate", () => callCampaign("regenerate", { itemId: item.id }))
+                        }
+                      >
+                        <RotateCcw size={14} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
+        </>
       )}
     </div>
   );

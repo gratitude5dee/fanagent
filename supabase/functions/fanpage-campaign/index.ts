@@ -49,7 +49,7 @@ Deno.serve(async (request) => {
 
   try {
     const supabase = getSupabaseAdmin();
-    const body = await request.json() as { action?: string } & Record<string, unknown>;
+    const body = (await request.json()) as { action?: string } & Record<string, unknown>;
     const action = body.action;
 
     switch (action) {
@@ -90,6 +90,60 @@ Deno.serve(async (request) => {
         });
       }
 
+      case "diagnostics": {
+        const envStatus = {
+          supabaseUrl: !!optionalEnv("SUPABASE_URL"),
+          serviceRole: !!optionalEnv("SUPABASE_SERVICE_ROLE_KEY"),
+          cronSecret: !!optionalEnv("CRON_SECRET"),
+          tiktokClientKey: !!optionalEnv("TIKTOK_CLIENT_KEY"),
+          tiktokClientSecret: !!optionalEnv("TIKTOK_CLIENT_SECRET"),
+          tiktokRedirectUri: !!optionalEnv("TIKTOK_REDIRECT_URI"),
+          tokenEncryptionKey: !!optionalEnv("TOKEN_ENCRYPTION_KEY"),
+          pexels: !!optionalEnv("PEXELS_API_KEY"),
+          pixabay: !!optionalEnv("PIXABAY_API_KEY"),
+          fal: !!optionalEnv("FAL_KEY"),
+          gmi: !!(optionalEnv("GMI_API_KEY") ?? optionalEnv("GMI_CLOUD_API_KEY")),
+          elevenLabs: !!optionalEnv("ELEVENLABS_API_KEY"),
+          lovable: !!optionalEnv("LOVABLE_API_KEY"),
+        };
+
+        const buckets = await supabase.storage.listBuckets();
+        const expectedBuckets = ["post-assets", "stock-cache", "audio-uploads", "renders"];
+        const bucketNames = new Set((buckets.data ?? []).map((bucket) => bucket.name));
+        const schemaChecks = await Promise.all([
+          supabase.from("generation_batches").select("settings,publish_defaults").limit(1),
+          supabase.from("generation_items").select("attempt_count,locked_at,stage_events").limit(1),
+          supabase.from("worker_runs").select("id").limit(1),
+        ]);
+        const recentWorkerRuns = await supabase
+          .from("worker_runs")
+          .select("function_name,started_at,ended_at,items_processed,errors_count,detail")
+          .order("started_at", { ascending: false })
+          .limit(10);
+        const recentFailedItems = await supabase
+          .from("generation_items")
+          .select("id,status,provider,error_message,updated_at")
+          .eq("status", "failed")
+          .order("updated_at", { ascending: false })
+          .limit(10);
+
+        return jsonResponse({
+          env: envStatus,
+          buckets: expectedBuckets.map((name) => ({
+            name,
+            ok: bucketNames.has(name),
+          })),
+          schema: {
+            generationBatchesSettings: !schemaChecks[0].error,
+            generationItemsQueueColumns: !schemaChecks[1].error,
+            workerRuns: !schemaChecks[2].error,
+            errors: schemaChecks.map((check) => check.error?.message).filter(Boolean),
+          },
+          recentWorkerRuns: recentWorkerRuns.data ?? [],
+          recentFailedItems: recentFailedItems.data ?? [],
+        });
+      }
+
       case "create": {
         const res = await callChild("create-generation-batch", {
           ...body,
@@ -122,15 +176,10 @@ Deno.serve(async (request) => {
       }
 
       case "runGenerationWorkers": {
-        const [processRes, stockRes] = await Promise.all([
-          callChild("process-generation-due", {}),
-          callWorker("fanpage-generate-due", {}),
-        ]);
-        const processJson = await processRes.json().catch(() => ({}));
-        const stockJson = await stockRes.json().catch(() => ({}));
-        if (!processRes.ok) return errorResponse(processJson.error ?? "process-generation-due failed", 500);
-        if (!stockRes.ok) return errorResponse(stockJson.error ?? "fanpage-generate-due failed", 500);
-        return jsonResponse({ process: processJson, stock: stockJson });
+        const res = await callWorker("fanpage-generate-due", {});
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) return errorResponse(json.error ?? "fanpage-generate-due failed", 500);
+        return jsonResponse(json);
       }
 
       case "runPublishWorker": {
@@ -143,7 +192,8 @@ Deno.serve(async (request) => {
       case "pause": {
         const batchId = body.batchId as string | undefined;
         if (!batchId) throw new Error("batchId required");
-        const r = await supabase.from("generation_batches")
+        const r = await supabase
+          .from("generation_batches")
           .update({ paused_at: new Date().toISOString(), status: "paused" })
           .eq("id", batchId);
         if (r.error) throw r.error;
@@ -153,7 +203,8 @@ Deno.serve(async (request) => {
       case "resume": {
         const batchId = body.batchId as string | undefined;
         if (!batchId) throw new Error("batchId required");
-        const r = await supabase.from("generation_batches")
+        const r = await supabase
+          .from("generation_batches")
           .update({ paused_at: null, status: "pending" })
           .eq("id", batchId);
         if (r.error) throw r.error;
@@ -163,19 +214,19 @@ Deno.serve(async (request) => {
       case "skip": {
         const itemId = body.itemId as string | undefined;
         if (!itemId) throw new Error("itemId required");
-        await supabase.from("generation_items")
+        await supabase
+          .from("generation_items")
           .update({ status: "failed", error_message: "skipped by user" })
           .eq("id", itemId);
-        await supabase.from("posts")
-          .update({ status: "skipped" })
-          .eq("generation_item_id", itemId);
+        await supabase.from("posts").update({ status: "skipped" }).eq("generation_item_id", itemId);
         return jsonResponse({ ok: true });
       }
 
       case "regenerate": {
         const itemId = body.itemId as string | undefined;
         if (!itemId) throw new Error("itemId required");
-        const r = await supabase.from("generation_items")
+        const r = await supabase
+          .from("generation_items")
           .update({
             status: "pending",
             stock_clip_url: null,
@@ -192,16 +243,19 @@ Deno.serve(async (request) => {
         const itemId = body.itemId as string | undefined;
         const batchId = body.batchId as string | undefined;
         if (itemId) {
-          const r = await supabase.from("generation_items")
+          const r = await supabase
+            .from("generation_items")
             .update({ lyric_template_id: lyricTemplateId })
             .eq("id", itemId);
           if (r.error) throw r.error;
         } else if (batchId) {
-          const rb = await supabase.from("generation_batches")
+          const rb = await supabase
+            .from("generation_batches")
             .update({ lyric_template_id: lyricTemplateId })
             .eq("id", batchId);
           if (rb.error) throw rb.error;
-          const ri = await supabase.from("generation_items")
+          const ri = await supabase
+            .from("generation_items")
             .update({ lyric_template_id: lyricTemplateId })
             .eq("batch_id", batchId);
           if (ri.error) throw ri.error;

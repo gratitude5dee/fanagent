@@ -6,7 +6,8 @@
 //   - mixed/seedance with pending segments → "planning" (orchestrator dispatches seedance)
 
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
-import { cacheStockClip, searchStock } from "../_shared/stock.ts";
+import { normalizeSourceMode } from "../_shared/generation.ts";
+import { cacheStockClip, searchStock, type StockSettings } from "../_shared/stock.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
 type Segment = { source: "stock" | "seedance"; url?: string; prompt?: string };
@@ -17,26 +18,36 @@ Deno.serve(async (request) => {
   if (request.method !== "POST") return errorResponse("Method not allowed", 405);
 
   try {
-    const body = await request.json() as { itemId?: string };
+    const body = (await request.json()) as { itemId?: string };
     if (!body.itemId) throw new Error("itemId is required");
 
     const supabase = getSupabaseAdmin();
     const item = await supabase
       .from("generation_items")
       .select("id,account_id,batch_id,prompt,input_payload,duration_seconds")
-      .eq("id", body.itemId).single();
+      .eq("id", body.itemId)
+      .single();
     if (item.error) throw item.error;
 
-    const batch = await supabase.from("generation_batches")
-      .select("source_mode,duration_seconds")
-      .eq("id", item.data.batch_id).single();
+    const batch = await supabase
+      .from("generation_batches")
+      .select("source_mode,duration_seconds,settings")
+      .eq("id", item.data.batch_id)
+      .single();
     if (batch.error) throw batch.error;
 
     const total = Number(item.data.duration_seconds ?? batch.data.duration_seconds ?? 15);
     const segCount = Math.max(1, Math.ceil(total / 15));
-    const sourceMode = (batch.data.source_mode ?? "stock") as "stock" | "seedance" | "mixed";
+    const sourceMode = normalizeSourceMode(batch.data.source_mode);
 
     const prompt = item.data.prompt ?? "music aesthetic vertical";
+    const payload = (item.data.input_payload ?? {}) as Record<string, unknown>;
+    const batchSettings = (batch.data.settings ?? {}) as Record<string, unknown>;
+    const stockSettings = {
+      ...((batchSettings.stock ?? {}) as Record<string, unknown>),
+      ...((payload.stock_settings ?? {}) as Record<string, unknown>),
+      minDurationSec: Math.min(15, total),
+    } as StockSettings;
 
     // Decide source per segment.
     const sources: Array<"stock" | "seedance"> = Array.from({ length: segCount }, (_, i) => {
@@ -49,7 +60,11 @@ Deno.serve(async (request) => {
     // Fill stock segments by ranking candidates and rotating through them.
     let stockCandidates: Awaited<ReturnType<typeof searchStock>> = [];
     if (sources.includes("stock")) {
-      stockCandidates = await searchStock({ accountId: item.data.account_id, query: prompt });
+      stockCandidates = await searchStock({
+        accountId: item.data.account_id,
+        query: prompt,
+        settings: stockSettings,
+      });
       if (stockCandidates.length === 0 && sourceMode === "stock") {
         throw new Error(`No stock candidates for prompt: ${prompt}`);
       }
@@ -70,7 +85,8 @@ Deno.serve(async (request) => {
     }
 
     const allFilled = segments.every((s) => !!s.url);
-    const updated = await supabase.from("generation_items")
+    const updated = await supabase
+      .from("generation_items")
       .update({
         segments,
         stock_clip_url: segments[0]?.url ?? null,
@@ -80,7 +96,10 @@ Deno.serve(async (request) => {
     if (updated.error) throw updated.error;
 
     return jsonResponse({
-      ok: true, itemId: body.itemId, segments, allFilled,
+      ok: true,
+      itemId: body.itemId,
+      segments,
+      allFilled,
     });
   } catch (error) {
     return errorResponse(error);

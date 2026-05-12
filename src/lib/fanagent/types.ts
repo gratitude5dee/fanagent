@@ -1,3 +1,5 @@
+import type { SourceMode } from "./sourceMode";
+
 export type Account = {
   id: string;
   platform: string;
@@ -34,4 +36,4 @@ export type GenerationBatch = {
   created_at: string;
 };
 
-export type SourceMode = "stock" | "seedance" | "mixed" | "gmi_seedance";
+export type { SourceMode };

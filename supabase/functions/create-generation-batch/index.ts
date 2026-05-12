@@ -4,6 +4,7 @@ import { optionalEnv } from "../_shared/env.ts";
 import {
   buildSchedule,
   createPromptPlan,
+  normalizeSourceMode,
   type SourceMode,
 } from "../_shared/generation.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
@@ -21,6 +22,9 @@ type CreateBatchRequest = {
   timezone?: string;
   durationSeconds?: number;
   lyricTemplateId?: string | null;
+  stockSettings?: Record<string, unknown>;
+  seedanceSettings?: Record<string, unknown>;
+  publishDefaults?: Record<string, unknown>;
 };
 
 const supportedAudio = new Set([
@@ -33,11 +37,11 @@ const supportedAudio = new Set([
 ]);
 
 function normalizeAudioBase64(value: string): string {
-  return value.includes(",") ? value.split(",").at(-1) ?? "" : value;
+  return value.includes(",") ? (value.split(",").at(-1) ?? "") : value;
 }
 
 function validatePayload(body: CreateBatchRequest) {
-  const count = Math.max(1, Math.min(Math.floor(Number(body.count ?? 1)), 50));
+  const count = Math.max(1, Math.min(Math.floor(Number(body.count ?? 1)), 250));
   const cadenceMinutes = Math.max(
     5,
     Math.min(Math.floor(Number(body.cadenceMinutes ?? 240)), 10_080),
@@ -45,12 +49,7 @@ function validatePayload(body: CreateBatchRequest) {
   const allowedDurations = [15, 30, 45, 60, 75, 90];
   const requestedDuration = Math.floor(Number(body.durationSeconds ?? 15));
   const durationSeconds = allowedDurations.includes(requestedDuration) ? requestedDuration : 15;
-  const allowedModes = ["stock", "seedance", "mixed", "gmi_seedance", "remote_render"] as const;
-  const sourceMode: typeof allowedModes[number] = (allowedModes as readonly string[]).includes(
-    body.sourceMode as string,
-  )
-    ? (body.sourceMode as typeof allowedModes[number])
-    : "stock";
+  const sourceMode = normalizeSourceMode(body.sourceMode);
   const audioMimeType = body.audioMimeType || "audio/mpeg";
   const startAt = new Date(body.startAt ?? Date.now() + 30 * 60_000);
 
@@ -71,12 +70,20 @@ function validatePayload(body: CreateBatchRequest) {
     count,
     cadenceMinutes,
     sourceMode,
-    prompt: body.prompt ||
-      "music-driven fan edit with cinematic lifestyle visuals",
+    prompt: body.prompt || "music-driven fan edit with cinematic lifestyle visuals",
     startAt,
     timezone: body.timezone || "America/Los_Angeles",
     durationSeconds,
     lyricTemplateId: body.lyricTemplateId ?? null,
+    stockSettings: body.stockSettings ?? {},
+    seedanceSettings: body.seedanceSettings ?? {},
+    publishDefaults: {
+      privacyLevel: "SELF_ONLY",
+      disableDuet: true,
+      disableStitch: true,
+      disableComment: false,
+      ...(body.publishDefaults ?? {}),
+    },
   };
 }
 
@@ -120,31 +127,31 @@ Deno.serve(async (request) => {
         status: "pending",
         duration_seconds: input.durationSeconds,
         lyric_template_id: input.lyricTemplateId,
+        settings: {
+          stock: input.stockSettings,
+          seedance: input.seedanceSettings,
+        },
+        publish_defaults: input.publishDefaults,
       })
       .select("*")
       .single();
 
     if (batch.error) throw batch.error;
 
-    const schedule = buildSchedule(
-      input.startAt,
-      input.count,
-      input.cadenceMinutes,
-    );
-    const modelId = input.sourceMode === "seedance"
-      ? optionalEnv("SEEDANCE_MODEL_ID") ?? "fal-ai/bytedance/seedance/v1/lite/text-to-video"
-      : input.sourceMode === "gmi_seedance"
-      ? optionalEnv("GMI_SEEDANCE_MODEL_ID") ?? "Seedance-2.0"
-      : input.sourceMode === "remote_render"
-      ? "remote-render"
-      : "stock-pipeline";
+    const schedule = buildSchedule(input.startAt, input.count, input.cadenceMinutes);
+    const modelId =
+      input.sourceMode === "seedance" || input.sourceMode === "mixed"
+        ? (optionalEnv("SEEDANCE_MODEL_ID") ?? "bytedance/seedance-2.0/fast/text-to-video")
+        : input.sourceMode === "gmi_seedance"
+          ? (optionalEnv("GMI_SEEDANCE_MODEL_ID") ?? "Seedance-2.0")
+          : "stock-pipeline";
 
     const items = schedule.map((scheduledAt, index) => {
       const promptPlan = createPromptPlan({
         basePrompt: input.prompt,
         index,
         total: input.count,
-        durationSeconds: 15,
+        durationSeconds: input.durationSeconds as 15 | 30 | 45 | 60 | 75 | 90,
       });
 
       return {
@@ -160,6 +167,9 @@ Deno.serve(async (request) => {
           prompt_plan: promptPlan,
           audio_asset_id: audioAsset.id,
           duration_seconds: input.durationSeconds,
+          stock_settings: input.stockSettings,
+          seedance_settings: input.seedanceSettings,
+          publish_defaults: input.publishDefaults,
         },
         scheduled_at: scheduledAt.toISOString(),
         duration_seconds: input.durationSeconds,
@@ -167,8 +177,7 @@ Deno.serve(async (request) => {
       };
     });
 
-    const insertedItems = await supabase.from("generation_items").insert(items)
-      .select("*");
+    const insertedItems = await supabase.from("generation_items").insert(items).select("*");
     if (insertedItems.error) throw insertedItems.error;
 
     return jsonResponse({
