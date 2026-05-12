@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState, useTransition } from "react";
 import type { EventDropArg, EventInput } from "@fullcalendar/core";
-import { CalendarDays, PlugZap, RefreshCcw, Send, Sparkles, UploadCloud, WandSparkles } from "lucide-react";
+import { CalendarDays, Music4, PlugZap, RefreshCcw, Send, Sparkles, UploadCloud, WandSparkles } from "lucide-react";
+import { Link } from "react-router-dom";
 import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
 import type { Account, DashboardPost, GenerationBatch, SourceMode } from "@/lib/fanagent/types";
 
@@ -214,6 +215,9 @@ export default function App() {
             >
               <WandSparkles size={14} /> Studio
             </button>
+            <Link className="button ghost" to="/lyrics">
+              <Music4 size={14} /> Lyrics
+            </Link>
           </div>
           {mode === "studio" ? (
             <>
