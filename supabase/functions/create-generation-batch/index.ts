@@ -113,6 +113,7 @@ Deno.serve(async (request) => {
         cadence_minutes: input.cadenceMinutes,
         timezone: input.timezone,
         status: "pending",
+        duration_seconds: input.durationSeconds,
       })
       .select("*")
       .single();
