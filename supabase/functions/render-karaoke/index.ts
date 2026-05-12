@@ -5,7 +5,7 @@
 
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
-import { composeWithSubtitles } from "../_shared/fal.ts";
+import { composeWithSubtitles, extractFrame } from "../_shared/fal.ts";
 import { downloadBytes, createMediaAssetFromBytes, registerMediaAsset } from "../_shared/assets.ts";
 
 type Word = { text?: string; word?: string; startMs?: number; endMs?: number; start?: number; end?: number };
@@ -130,6 +130,15 @@ Deno.serve(async (request) => {
       });
     }
 
+    // Best-effort thumbnail extraction; never block readiness on failure.
+    let thumbnailUrl: string | null = null;
+    try {
+      const frame = await extractFrame(finalUrl, "middle");
+      thumbnailUrl = frame.url;
+    } catch (err) {
+      console.warn(`[render-karaoke] extractFrame failed for ${body.itemId}: ${err}`);
+    }
+
     const upd = await supabase
       .from("generation_items")
       .update({
@@ -145,6 +154,7 @@ Deno.serve(async (request) => {
       provider,
       finalAssetId: asset.id,
       url: asset.public_url,
+      thumbnailUrl,
     });
   } catch (error) {
     return errorResponse(error);
