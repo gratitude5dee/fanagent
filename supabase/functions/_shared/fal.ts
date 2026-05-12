@@ -71,3 +71,38 @@ export async function stitchClipsWithAudio(input: {
   if (!url) throw new Error(`ffmpeg compose returned no URL: ${JSON.stringify(out).slice(0, 300)}`);
   return url;
 }
+
+// Compose a single video with audio + burned-in subtitles via fal ffmpeg-api.
+// `subtitlesUrl` must be a publicly fetchable .srt URL.
+export async function composeWithSubtitles(input: {
+  videoUrl: string;
+  audioUrl: string;
+  subtitlesUrl: string;
+  totalSeconds: number;
+}): Promise<string> {
+  const tracks = [
+    {
+      id: "video",
+      type: "video",
+      keyframes: [{ url: input.videoUrl, timestamp: 0, duration: input.totalSeconds }],
+    },
+    {
+      id: "audio",
+      type: "audio",
+      keyframes: [{ url: input.audioUrl, timestamp: 0, duration: input.totalSeconds }],
+    },
+    {
+      id: "subs",
+      type: "subtitles",
+      keyframes: [{ url: input.subtitlesUrl, timestamp: 0, duration: input.totalSeconds }],
+    },
+  ];
+  const out = await falRun<{ video_url?: string; video?: { url?: string } }>(
+    "fal-ai/ffmpeg-api/compose",
+    { tracks },
+  );
+  const url = out?.video_url ?? out?.video?.url;
+  if (!url) throw new Error(`ffmpeg compose (subs) returned no URL: ${JSON.stringify(out).slice(0, 300)}`);
+  return url;
+}
+

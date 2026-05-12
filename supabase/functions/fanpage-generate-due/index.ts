@@ -78,8 +78,63 @@ async function processItem(itemId: string): Promise<void> {
     }
   }
 
-  // 4. Stitch (or passthrough).
+  // 4. Stitch (or passthrough) → status='stitched'.
   await ok(await invokeChild("stitch-segments", { itemId }), "stitch-segments");
+
+  // 5. Final render: burn captions if a lyric template is attached → status='ready'.
+  await ok(await invokeChild("render-karaoke", { itemId }), "render-karaoke");
+
+  // 6. Create the post row so the publisher worker picks it up.
+  await createPostForItem(itemId);
+}
+
+async function createPostForItem(itemId: string) {
+  const supabase = getSupabaseAdmin();
+  const item = await supabase.from("generation_items")
+    .select("id,account_id,batch_id,scheduled_at,final_asset_id,input_payload,post_id")
+    .eq("id", itemId).single();
+  if (item.error) throw item.error;
+  if (item.data.post_id) return;
+
+  const asset = await supabase.from("media_assets")
+    .select("public_url").eq("id", item.data.final_asset_id).single();
+  if (asset.error) throw asset.error;
+
+  const batch = await supabase.from("generation_batches")
+    .select("audio_asset_id").eq("id", item.data.batch_id).single();
+  if (batch.error) throw batch.error;
+  const audio = await supabase.from("media_assets")
+    .select("public_url").eq("id", batch.data.audio_asset_id).single();
+  if (audio.error) throw audio.error;
+
+  const plan = (item.data.input_payload?.prompt_plan ?? {}) as Record<string, unknown>;
+
+  const post = await supabase.from("posts").insert({
+    account_id: item.data.account_id,
+    platform: "tiktok",
+    post_type: "video",
+    video_url: asset.data.public_url,
+    video_source: "stock",
+    audio_url: audio.data.public_url,
+    caption: String(plan.caption ?? "sound on"),
+    hashtags: Array.isArray(plan.hashtags) ? plan.hashtags : ["#fyp", "#music", "#edit"],
+    hook_text: String(plan.hookText ?? "sound on"),
+    scheduled_at: item.data.scheduled_at,
+    status: "pending",
+    publish_status: "ready",
+    batch_id: item.data.batch_id,
+    generation_item_id: itemId,
+    final_asset_id: item.data.final_asset_id,
+    tiktok_disable_duet: true,
+    tiktok_disable_stitch: true,
+    tiktok_disable_comment: false,
+    tiktok_is_aigc: true,
+  }).select("id").single();
+  if (post.error) throw post.error;
+
+  await supabase.from("generation_items")
+    .update({ status: "complete", post_id: post.data.id })
+    .eq("id", itemId);
 }
 
 Deno.serve(async (request) => {
@@ -96,7 +151,7 @@ Deno.serve(async (request) => {
     const supabase = getSupabaseAdmin();
     const due = await supabase.from("generation_items")
       .select("id, generation_batches!inner(paused_at)")
-      .in("status", ["pending", "planning", "generating", "picking_stock"])
+      .in("status", ["pending", "planning", "generating", "picking_stock", "stitched", "transcribing"])
       .lte("scheduled_at", new Date(Date.now() + 60 * 60_000).toISOString())
       .is("generation_batches.paused_at", null)
       .order("scheduled_at", { ascending: true })

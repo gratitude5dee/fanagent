@@ -357,10 +357,13 @@ Deno.serve(async (request) => {
   const results: unknown[] = [];
 
   try {
+    // Only handle the GMI / remote_render providers here. Stock items are
+    // owned by `fanpage-generate-due` (fal.ai pipeline).
     const query = await supabase
       .from("generation_items")
       .select("*")
       .in("status", ["pending", "generating"])
+      .in("provider", ["gmi_seedance", "remote_render"])
       .order("created_at", { ascending: true })
       .limit(Math.max(1, Math.min(limit, 10)));
     if (query.error) throw query.error;
