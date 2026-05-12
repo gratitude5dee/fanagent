@@ -101,6 +101,14 @@ export default function AutopilotPanel() {
   const [prompt, setPrompt] = useState("aesthetic vertical cinematic visuals");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [tab, setTab] = useState<"campaign" | "lyrics">("campaign");
+  const [lyricTemplateId, setLyricTemplateId] = useState<string | "">("");
+
+  const lyricTemplates = data?.lyricTemplates ?? [];
+  const templateById = useMemo(
+    () => new Map(lyricTemplates.map((t) => [t.id, t])),
+    [lyricTemplates],
+  );
 
   const account = data?.account ?? null;
   const isConnected = !!account?.tiktok_connected_at;
