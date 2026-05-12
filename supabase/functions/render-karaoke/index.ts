@@ -154,6 +154,7 @@ Deno.serve(async (request) => {
       provider,
       finalAssetId: asset.id,
       url: asset.public_url,
+      thumbnailUrl,
     });
   } catch (error) {
     return errorResponse(error);
