@@ -3,8 +3,9 @@
 // top-level mode in App.tsx.
 
 import { useEffect, useMemo, useState } from "react";
-import { CalendarClock, CheckCircle2, Loader2, PauseCircle, PlayCircle, PlugZap, RefreshCcw, RotateCcw, Sparkles, UploadCloud } from "lucide-react";
+import { CalendarClock, CheckCircle2, Info, Loader2, PauseCircle, PlayCircle, PlugZap, RefreshCcw, RotateCcw, Sparkles, UploadCloud } from "lucide-react";
 import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
+import AudioTrimmer from "@/components/autopilot/AudioTrimmer";
 
 type Account = {
   id: string;
@@ -56,8 +57,8 @@ type SourceMode = "stock" | "seedance" | "mixed";
 const DURATIONS = [15, 30, 45, 60, 75, 90] as const;
 type Duration = typeof DURATIONS[number];
 
-async function fileToBase64(file: File): Promise<string> {
-  const buf = await file.arrayBuffer();
+async function blobToBase64(blob: Blob): Promise<string> {
+  const buf = await blob.arrayBuffer();
   let bin = "";
   const bytes = new Uint8Array(buf);
   for (let i = 0; i < bytes.byteLength; i += 1) bin += String.fromCharCode(bytes[i]);
