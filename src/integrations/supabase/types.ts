@@ -152,6 +152,7 @@ export type Database = {
           duration_seconds: number
           error_message: string | null
           id: string
+          lyric_template_id: string | null
           next_run_at: string | null
           paused_at: string | null
           post_count: number
@@ -171,6 +172,7 @@ export type Database = {
           duration_seconds?: number
           error_message?: string | null
           id?: string
+          lyric_template_id?: string | null
           next_run_at?: string | null
           paused_at?: string | null
           post_count: number
@@ -190,6 +192,7 @@ export type Database = {
           duration_seconds?: number
           error_message?: string | null
           id?: string
+          lyric_template_id?: string | null
           next_run_at?: string | null
           paused_at?: string | null
           post_count?: number
@@ -230,6 +233,7 @@ export type Database = {
           id: string
           input_payload: Json
           item_index: number
+          lyric_template_id: string | null
           model_id: string | null
           post_id: string | null
           prompt: string
@@ -257,6 +261,7 @@ export type Database = {
           id?: string
           input_payload?: Json
           item_index: number
+          lyric_template_id?: string | null
           model_id?: string | null
           post_id?: string | null
           prompt: string
@@ -284,6 +289,7 @@ export type Database = {
           id?: string
           input_payload?: Json
           item_index?: number
+          lyric_template_id?: string | null
           model_id?: string | null
           post_id?: string | null
           prompt?: string
