@@ -52,7 +52,9 @@ type CampaignList = {
   posts: Post[];
 };
 
-type SourceMode = "stock" | "seedance" | "hybrid";
+type SourceMode = "stock" | "seedance" | "mixed";
+const DURATIONS = [15, 30, 45, 60, 75, 90] as const;
+type Duration = typeof DURATIONS[number];
 
 async function fileToBase64(file: File): Promise<string> {
   const buf = await file.arrayBuffer();
