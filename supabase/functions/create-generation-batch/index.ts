@@ -19,6 +19,7 @@ type CreateBatchRequest = {
   startAt?: string;
   cadenceMinutes?: number;
   timezone?: string;
+  durationSeconds?: number;
 };
 
 const supportedAudio = new Set([
