@@ -5,7 +5,7 @@
 
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
-import { composeWithSubtitles } from "../_shared/fal.ts";
+import { composeWithSubtitles, extractFrame } from "../_shared/fal.ts";
 import { downloadBytes, createMediaAssetFromBytes, registerMediaAsset } from "../_shared/assets.ts";
 
 type Word = { text?: string; word?: string; startMs?: number; endMs?: number; start?: number; end?: number };
