@@ -88,6 +88,7 @@ function statusTone(status: string): string {
 export default function AutopilotPanel() {
   const [data, setData] = useState<CampaignList | null>(null);
   const [audio, setAudio] = useState<File | null>(null);
+  const [duration, setDuration] = useState<Duration>(15);
   const [sourceMode, setSourceMode] = useState<SourceMode>("stock");
   const [postCount, setPostCount] = useState(14);
   const [prompt, setPrompt] = useState("aesthetic vertical cinematic visuals");
