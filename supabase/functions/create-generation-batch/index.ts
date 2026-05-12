@@ -71,6 +71,7 @@ function validatePayload(body: CreateBatchRequest) {
       "music-driven fan edit with cinematic lifestyle visuals",
     startAt,
     timezone: body.timezone || "America/Los_Angeles",
+    durationSeconds,
   };
 }
 
