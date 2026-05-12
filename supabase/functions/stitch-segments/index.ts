@@ -88,13 +88,9 @@ Deno.serve(async (request) => {
     }
 
     const upd = await supabase.from("generation_items")
-      .update({ stock_clip_url: finalUrl, status: "ready" })
+      .update({ stock_clip_url: finalUrl, status: "stitched" })
       .eq("id", body.itemId);
     if (upd.error) throw upd.error;
-
-    await supabase.from("posts")
-      .update({ video_url: finalUrl, status: "pending" })
-      .eq("generation_item_id", body.itemId);
 
     return jsonResponse({ ok: true, itemId: body.itemId, url: finalUrl });
   } catch (error) {
