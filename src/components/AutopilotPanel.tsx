@@ -347,6 +347,20 @@ export default function AutopilotPanel() {
                 <input type="number" min={1} max={50} value={postCount} onChange={(e) => setPostCount(Number(e.target.value))} />
               </label>
             </div>
+            <label>
+              Lyrics template (optional)
+              <select
+                value={lyricTemplateId}
+                onChange={(e) => setLyricTemplateId(e.target.value)}
+              >
+                <option value="">None — basic captions only</option>
+                {lyricTemplates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.title} ({(t.selection_duration_ms / 1000).toFixed(0)}s · {t.status})
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="banner" style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
               <Info size={14} style={{ marginTop: 2, flexShrink: 0 }} />
               <span>
@@ -415,6 +429,7 @@ export default function AutopilotPanel() {
           <div className="batch-list">
             {data.items.slice(0, 20).map((item) => {
               const post = data.posts.find((p) => p.generation_item_id === item.id);
+              const itemTpl = item.lyric_template_id ? templateById.get(item.lyric_template_id) : null;
               return (
                 <div className="batch-row" key={item.id}>
                   <span className={`dot ${statusTone(item.status)}`} />
@@ -423,10 +438,27 @@ export default function AutopilotPanel() {
                     <span>
                       {item.status}{item.render_provider ? ` · ${item.render_provider}` : ""}{post ? ` · post ${post.status}` : ""}
                     </span>
+                    {itemTpl ? (
+                      <span className="status-pill" style={{ marginTop: 4 }}>
+                        <FileMusic size={12} /> {itemTpl.title}
+                      </span>
+                    ) : null}
                     {item.error_message ? (
                       <span className="status-pill bad" style={{ marginTop: 4 }}>{item.error_message}</span>
                     ) : null}
                   </div>
+                  <select
+                    value={item.lyric_template_id ?? ""}
+                    onChange={(e) => setItemTemplate(item.id, e.target.value || null)}
+                    disabled={busy}
+                    title="Lyrics template"
+                    style={{ maxWidth: 160 }}
+                  >
+                    <option value="">No template</option>
+                    {lyricTemplates.map((t) => (
+                      <option key={t.id} value={t.id}>{t.title}</option>
+                    ))}
+                  </select>
                   <button
                     className="button ghost"
                     title="Regenerate"
@@ -441,6 +473,8 @@ export default function AutopilotPanel() {
           </div>
         </section>
       ) : null}
+      </>
+      )}
     </div>
   );
 }
