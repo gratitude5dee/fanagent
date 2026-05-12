@@ -140,7 +140,7 @@ async function createPostForItem(itemId: string) {
 Deno.serve(async (request) => {
   const opt = handleOptions(request);
   if (opt) return opt;
-  if (!isAuthorizedCronCall(request)) return errorResponse("Unauthorized cron call", 401);
+  if (!await isAuthorizedCronCall(request)) return errorResponse("Unauthorized cron call", 401);
 
   const runId = await startWorkerRun(FUNCTION_NAME);
   let processed = 0;
