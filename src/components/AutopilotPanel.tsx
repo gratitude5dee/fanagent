@@ -3,8 +3,9 @@
 // top-level mode in App.tsx.
 
 import { useEffect, useMemo, useState } from "react";
-import { CalendarClock, CheckCircle2, Loader2, PauseCircle, PlayCircle, PlugZap, RefreshCcw, RotateCcw, Sparkles, UploadCloud } from "lucide-react";
+import { CalendarClock, CheckCircle2, Info, Loader2, PauseCircle, PlayCircle, PlugZap, RefreshCcw, RotateCcw, Sparkles, UploadCloud } from "lucide-react";
 import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
+import AudioTrimmer from "@/components/autopilot/AudioTrimmer";
 
 type Account = {
   id: string;
@@ -56,8 +57,8 @@ type SourceMode = "stock" | "seedance" | "mixed";
 const DURATIONS = [15, 30, 45, 60, 75, 90] as const;
 type Duration = typeof DURATIONS[number];
 
-async function fileToBase64(file: File): Promise<string> {
-  const buf = await file.arrayBuffer();
+async function blobToBase64(blob: Blob): Promise<string> {
+  const buf = await blob.arrayBuffer();
   let bin = "";
   const bytes = new Uint8Array(buf);
   for (let i = 0; i < bytes.byteLength; i += 1) bin += String.fromCharCode(bytes[i]);
@@ -87,7 +88,8 @@ function statusTone(status: string): string {
 
 export default function AutopilotPanel() {
   const [data, setData] = useState<CampaignList | null>(null);
-  const [audio, setAudio] = useState<File | null>(null);
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [trimmedAudio, setTrimmedAudio] = useState<{ blob: Blob; durationSec: number; name: string } | null>(null);
   const [duration, setDuration] = useState<Duration>(15);
   const [sourceMode, setSourceMode] = useState<SourceMode>("stock");
   const [postCount, setPostCount] = useState(14);
@@ -132,15 +134,15 @@ export default function AutopilotPanel() {
   }
 
   async function startCampaign() {
-    if (!audio) throw new Error("Pick an audio file first.");
+    if (!trimmedAudio) throw new Error("Trim your audio clip first.");
     if (!account) throw new Error("No account.");
     if (!isConnected) throw new Error("Connect TikTok first.");
     const startAt = new Date(Date.now() + 15 * 60_000).toISOString();
     await callCampaign("create", {
       accountId: account.id,
-      audioBase64: await fileToBase64(audio),
-      audioMimeType: audio.type || "audio/mpeg",
-      audioFileName: audio.name,
+      audioBase64: await blobToBase64(trimmedAudio.blob),
+      audioMimeType: "audio/mpeg",
+      audioFileName: trimmedAudio.name.replace(/\.[^.]+$/, "") + ".mp3",
       sourceMode,
       durationSeconds: duration,
       postCount,
@@ -200,9 +202,32 @@ export default function AutopilotPanel() {
             }}
           >
             <label>
-              Audio (MP3/WAV/M4A, ≤12MB)
-              <input type="file" accept="audio/*" onChange={(e) => setAudio(e.target.files?.[0] ?? null)} required />
+              Audio (MP3/WAV/M4A)
+              <input
+                type="file"
+                accept="audio/*"
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  setAudioFile(f);
+                  setTrimmedAudio(null);
+                }}
+                required={!trimmedAudio}
+              />
             </label>
+            {audioFile ? (
+              <AudioTrimmer
+                file={audioFile}
+                maxDurationSec={duration}
+                onTrimmed={(blob, durationSec) =>
+                  setTrimmedAudio({ blob, durationSec, name: audioFile.name })
+                }
+              />
+            ) : null}
+            {trimmedAudio ? (
+              <div className="banner">
+                ✓ Trimmed clip ready ({trimmedAudio.durationSec.toFixed(1)}s).
+              </div>
+            ) : null}
             <label>
               Post duration
               <div className="action-row" style={{ flexWrap: "wrap", gap: 6 }}>
@@ -211,7 +236,11 @@ export default function AutopilotPanel() {
                     type="button"
                     key={d}
                     className={`button ${duration === d ? "primary" : "ghost"}`}
-                    onClick={() => setDuration(d)}
+                    onClick={() => {
+                      setDuration(d);
+                      // Re-trim required if user shrinks below current selection.
+                      setTrimmedAudio(null);
+                    }}
                   >
                     {d}s
                   </button>
@@ -236,12 +265,19 @@ export default function AutopilotPanel() {
                 <input type="number" min={1} max={50} value={postCount} onChange={(e) => setPostCount(Number(e.target.value))} />
               </label>
             </div>
+            <div className="banner" style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <Info size={14} style={{ marginTop: 2, flexShrink: 0 }} />
+              <span>
+                <strong>Stock footage</strong> is sourced from Pexels + Pixabay (and any clips you've added to your library), ranked for portrait aspect, and cached privately in Supabase Storage.{" "}
+                <strong>Seedance 2</strong> generates per-segment AI video via fal.ai. The optional <strong>remote render</strong> step is a Remotion karaoke-caption pass that's currently a pass-through stub.
+              </span>
+            </div>
             {duration > 15 ? (
               <div className="banner">
                 {Math.ceil(duration / 15)} clips per post will be stitched together with ffmpeg.
               </div>
             ) : null}
-            <button className="button primary" disabled={busy || !audio} type="submit">
+            <button className="button primary" disabled={busy || !trimmedAudio} type="submit">
               {busy ? <Loader2 className="spin" size={16} /> : <CalendarClock size={16} />} Launch daily campaign
             </button>
           </form>
