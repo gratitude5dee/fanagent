@@ -20,6 +20,7 @@ type CreateBatchRequest = {
   cadenceMinutes?: number;
   timezone?: string;
   durationSeconds?: number;
+  lyricTemplateId?: string | null;
 };
 
 const supportedAudio = new Set([
@@ -72,6 +73,7 @@ function validatePayload(body: CreateBatchRequest) {
     startAt,
     timezone: body.timezone || "America/Los_Angeles",
     durationSeconds,
+    lyricTemplateId: body.lyricTemplateId ?? null,
   };
 }
 
@@ -114,6 +116,7 @@ Deno.serve(async (request) => {
         timezone: input.timezone,
         status: "pending",
         duration_seconds: input.durationSeconds,
+        lyric_template_id: input.lyricTemplateId,
       })
       .select("*")
       .single();
@@ -153,6 +156,7 @@ Deno.serve(async (request) => {
         },
         scheduled_at: scheduledAt.toISOString(),
         duration_seconds: input.durationSeconds,
+        lyric_template_id: input.lyricTemplateId,
       };
     });
 

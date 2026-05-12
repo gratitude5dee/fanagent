@@ -97,3 +97,12 @@ export function statusToStep(status: TemplateStatus): WizardStep {
   if (status === "lyrics_ready") return 3;
   return 3;
 }
+
+export interface LyricTemplateSummary {
+  id: string;
+  title: string;
+  status: TemplateStatus;
+  total_duration_ms: number;
+  selection_duration_ms: number;
+  updated_at: string;
+}

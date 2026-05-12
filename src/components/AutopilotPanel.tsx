@@ -3,9 +3,11 @@
 // top-level mode in App.tsx.
 
 import { useEffect, useMemo, useState } from "react";
-import { CalendarClock, CheckCircle2, Info, Loader2, PauseCircle, PlayCircle, PlugZap, RefreshCcw, RotateCcw, Sparkles, UploadCloud } from "lucide-react";
+import { Link } from "react-router-dom";
+import { CalendarClock, CheckCircle2, FileMusic, Info, Loader2, PauseCircle, Plus, PlayCircle, PlugZap, RefreshCcw, RotateCcw, Sparkles, UploadCloud } from "lucide-react";
 import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
 import AudioTrimmer from "@/components/autopilot/AudioTrimmer";
+import type { LyricTemplateSummary } from "@/lib/lyrics/types";
 
 type Account = {
   id: string;
@@ -24,6 +26,7 @@ type Batch = {
   cadence_minutes: number;
   paused_at: string | null;
   created_at: string;
+  lyric_template_id?: string | null;
 };
 
 type Item = {
@@ -34,6 +37,7 @@ type Item = {
   stock_clip_url: string | null;
   render_provider: string | null;
   error_message: string | null;
+  lyric_template_id?: string | null;
 };
 
 type Post = {
@@ -51,6 +55,7 @@ type CampaignList = {
   batches: Batch[];
   items: Item[];
   posts: Post[];
+  lyricTemplates?: LyricTemplateSummary[];
 };
 
 type SourceMode = "stock" | "seedance" | "mixed";
@@ -96,6 +101,14 @@ export default function AutopilotPanel() {
   const [prompt, setPrompt] = useState("aesthetic vertical cinematic visuals");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [tab, setTab] = useState<"campaign" | "lyrics">("campaign");
+  const [lyricTemplateId, setLyricTemplateId] = useState<string | "">("");
+
+  const lyricTemplates = data?.lyricTemplates ?? [];
+  const templateById = useMemo(
+    () => new Map(lyricTemplates.map((t) => [t.id, t])),
+    [lyricTemplates],
+  );
 
   const account = data?.account ?? null;
   const isConnected = !!account?.tiktok_connected_at;
@@ -150,7 +163,14 @@ export default function AutopilotPanel() {
       prompt,
       startAt,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      lyricTemplateId: lyricTemplateId || null,
     });
+  }
+
+  async function setItemTemplate(itemId: string, templateId: string | null) {
+    await run("Update template", () =>
+      callCampaign("setLyricTemplate", { itemId, lyricTemplateId: templateId }),
+    );
   }
 
   return (
@@ -160,8 +180,70 @@ export default function AutopilotPanel() {
         <h2>Fanpage Autopilot</h2>
       </header>
 
+      <div className="action-row" role="tablist" aria-label="Autopilot sections">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "campaign"}
+          className={`button ${tab === "campaign" ? "primary" : "ghost"}`}
+          onClick={() => setTab("campaign")}
+        >
+          <CalendarClock size={14} /> Campaign
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "lyrics"}
+          className={`button ${tab === "lyrics" ? "primary" : "ghost"}`}
+          onClick={() => setTab("lyrics")}
+        >
+          <FileMusic size={14} /> Lyrics
+        </button>
+      </div>
+
       {message ? <div className="banner">{message}</div> : null}
 
+      {tab === "lyrics" ? (
+        <section className="panel">
+          <div className="panel-title">
+            <FileMusic size={16} />
+            <h3>Lyrics templates</h3>
+          </div>
+          <div className="action-row">
+            <Link className="button primary" to="/lyrics/new">
+              <Plus size={14} /> New template
+            </Link>
+            <Link className="button ghost" to="/lyrics">
+              Open builder
+            </Link>
+          </div>
+          {lyricTemplates.length === 0 ? (
+            <div className="empty-state">
+              No templates yet. Create one to drive word timing + cut markers in renders.
+            </div>
+          ) : (
+            <div className="batch-list">
+              {lyricTemplates.map((t) => (
+                <div className="batch-row" key={t.id}>
+                  <span className={`dot ${t.status === "saved" ? "good" : t.status === "failed" ? "bad" : "warn"}`} />
+                  <div style={{ flex: 1 }}>
+                    <strong>{t.title}</strong>
+                    <span>
+                      {t.status} · {(t.selection_duration_ms / 1000).toFixed(1)}s of {(t.total_duration_ms / 1000).toFixed(1)}s
+                    </span>
+                  </div>
+                  <Link className="button ghost" to={`/lyrics/templates/${t.id}`}>
+                    Edit
+                  </Link>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {tab !== "campaign" ? null : (
+      <>
       {/* STEP 1 — Connect TikTok */}
       <section className="panel">
         <div className="panel-title">
@@ -265,6 +347,20 @@ export default function AutopilotPanel() {
                 <input type="number" min={1} max={50} value={postCount} onChange={(e) => setPostCount(Number(e.target.value))} />
               </label>
             </div>
+            <label>
+              Lyrics template (optional)
+              <select
+                value={lyricTemplateId}
+                onChange={(e) => setLyricTemplateId(e.target.value)}
+              >
+                <option value="">None — basic captions only</option>
+                {lyricTemplates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.title} ({(t.selection_duration_ms / 1000).toFixed(0)}s · {t.status})
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="banner" style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
               <Info size={14} style={{ marginTop: 2, flexShrink: 0 }} />
               <span>
@@ -333,6 +429,7 @@ export default function AutopilotPanel() {
           <div className="batch-list">
             {data.items.slice(0, 20).map((item) => {
               const post = data.posts.find((p) => p.generation_item_id === item.id);
+              const itemTpl = item.lyric_template_id ? templateById.get(item.lyric_template_id) : null;
               return (
                 <div className="batch-row" key={item.id}>
                   <span className={`dot ${statusTone(item.status)}`} />
@@ -341,10 +438,27 @@ export default function AutopilotPanel() {
                     <span>
                       {item.status}{item.render_provider ? ` · ${item.render_provider}` : ""}{post ? ` · post ${post.status}` : ""}
                     </span>
+                    {itemTpl ? (
+                      <span className="status-pill" style={{ marginTop: 4 }}>
+                        <FileMusic size={12} /> {itemTpl.title}
+                      </span>
+                    ) : null}
                     {item.error_message ? (
                       <span className="status-pill bad" style={{ marginTop: 4 }}>{item.error_message}</span>
                     ) : null}
                   </div>
+                  <select
+                    value={item.lyric_template_id ?? ""}
+                    onChange={(e) => setItemTemplate(item.id, e.target.value || null)}
+                    disabled={busy}
+                    title="Lyrics template"
+                    style={{ maxWidth: 160 }}
+                  >
+                    <option value="">No template</option>
+                    {lyricTemplates.map((t) => (
+                      <option key={t.id} value={t.id}>{t.title}</option>
+                    ))}
+                  </select>
                   <button
                     className="button ghost"
                     title="Regenerate"
@@ -359,6 +473,8 @@ export default function AutopilotPanel() {
           </div>
         </section>
       ) : null}
+      </>
+      )}
     </div>
   );
 }

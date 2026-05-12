@@ -26,7 +26,7 @@ Deno.serve(async (request) => {
     const item = await supabase
       .from("generation_items")
       .select(
-        "id,account_id,batch_id,stock_clip_url,input_payload,duration_seconds",
+        "id,account_id,batch_id,stock_clip_url,input_payload,duration_seconds,lyric_template_id",
       )
       .eq("id", body.itemId)
       .single();
@@ -37,7 +37,7 @@ Deno.serve(async (request) => {
 
     const batch = await supabase
       .from("generation_batches")
-      .select("audio_asset_id")
+      .select("audio_asset_id,lyric_template_id")
       .eq("id", item.data.batch_id)
       .single();
     if (batch.error) throw batch.error;
@@ -48,6 +48,29 @@ Deno.serve(async (request) => {
       .eq("id", batch.data.audio_asset_id)
       .single();
     if (audio.error) throw audio.error;
+
+    // Resolve lyric template (item override → batch default).
+    const lyricTemplateId = item.data.lyric_template_id ?? batch.data.lyric_template_id ?? null;
+    let lyricsProps: Record<string, unknown> | null = null;
+    if (lyricTemplateId) {
+      const lt = await supabase
+        .from("kanvas_lyric_templates")
+        .select("id,title,lyric_blocks,cut_markers,selection_start_ms,selection_duration_ms")
+        .eq("id", lyricTemplateId)
+        .maybeSingle();
+      if (lt.data) {
+        lyricsProps = {
+          templateId: lt.data.id,
+          title: lt.data.title,
+          blocks: lt.data.lyric_blocks ?? [],
+          markers: lt.data.cut_markers ?? [],
+          selectionStartMs: lt.data.selection_start_ms ?? 0,
+          selectionDurationMs: lt.data.selection_duration_ms ?? 0,
+        };
+      } else {
+        console.warn(`render-karaoke: lyric template ${lyricTemplateId} not found; falling back`);
+      }
+    }
 
     const renderEndpoint = optionalEnv("REMOTION_RENDER_ENDPOINT");
     const renderApiKey = optionalEnv("REMOTION_RENDER_API_KEY");
@@ -60,6 +83,8 @@ Deno.serve(async (request) => {
       transcript: audio.data.transcript ?? { words: [] },
       durationFrames: (item.data.duration_seconds ?? 15) * 30,
       fps: 30,
+      lyrics: lyricsProps,
+      lyricTemplateId,
     };
 
     if (!renderEndpoint || !renderApiKey || !serveUrl) {
