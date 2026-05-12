@@ -1,6 +1,9 @@
-// Action API for kanvas_lyric_templates. Owner-scoped via the caller's JWT.
+// Action API for kanvas_lyric_templates. Owner-scoped via the caller's JWT,
+// or via a shared anonymous user when the dashboard is unauthenticated.
 import { createClient } from "npm:@supabase/supabase-js@2.105.4";
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+
+const ANON_USER_ID = "00000000-0000-0000-0000-000000000000";
 
 Deno.serve(async (req) => {
   const opt = handleOptions(req);
@@ -10,16 +13,23 @@ Deno.serve(async (req) => {
   try {
     const auth = req.headers.get("Authorization") ?? "";
     const token = auth.replace(/^Bearer\s+/i, "");
-    if (!token) return errorResponse("Missing auth", 401);
-
-    const supabase = createClient(
+    let userId = ANON_USER_ID;
+    let supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: `Bearer ${token}` } } },
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
-    const { data: userRes, error: userErr } = await supabase.auth.getUser();
-    if (userErr || !userRes.user) return errorResponse("Not authenticated", 401);
-    const userId = userRes.user.id;
+    if (token) {
+      const userClient = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_ANON_KEY")!,
+        { global: { headers: { Authorization: `Bearer ${token}` } } },
+      );
+      const { data: userRes } = await userClient.auth.getUser();
+      if (userRes?.user) {
+        userId = userRes.user.id;
+        supabase = userClient;
+      }
+    }
 
     const body = await req.json() as { action: string; [k: string]: unknown };
 
@@ -51,6 +61,7 @@ Deno.serve(async (req) => {
         const { data, error } = await supabase
           .from("kanvas_lyric_templates")
           .select("*")
+          .eq("user_id", userId)
           .order("updated_at", { ascending: false });
         if (error) throw error;
         return jsonResponse({ templates: data });
