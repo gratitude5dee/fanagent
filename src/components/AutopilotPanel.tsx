@@ -134,6 +134,7 @@ export default function AutopilotPanel() {
   async function startCampaign() {
     if (!audio) throw new Error("Pick an audio file first.");
     if (!account) throw new Error("No account.");
+    if (!isConnected) throw new Error("Connect TikTok first.");
     const startAt = new Date(Date.now() + 15 * 60_000).toISOString();
     await callCampaign("create", {
       accountId: account.id,
@@ -141,6 +142,7 @@ export default function AutopilotPanel() {
       audioMimeType: audio.type || "audio/mpeg",
       audioFileName: audio.name,
       sourceMode,
+      durationSeconds: duration,
       postCount,
       cadenceMinutes: 1440,
       prompt,
