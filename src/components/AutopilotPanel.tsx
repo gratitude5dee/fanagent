@@ -163,7 +163,14 @@ export default function AutopilotPanel() {
       prompt,
       startAt,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      lyricTemplateId: lyricTemplateId || null,
     });
+  }
+
+  async function setItemTemplate(itemId: string, templateId: string | null) {
+    await run("Update template", () =>
+      callCampaign("setLyricTemplate", { itemId, lyricTemplateId: templateId }),
+    );
   }
 
   return (
