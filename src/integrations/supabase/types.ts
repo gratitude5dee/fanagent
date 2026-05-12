@@ -337,6 +337,137 @@ export type Database = {
           },
         ]
       }
+      kanvas_lyric_template_jobs: {
+        Row: {
+          created_at: string
+          error_message: string | null
+          finished_at: string | null
+          id: string
+          kind: string
+          provider: string | null
+          response: Json | null
+          started_at: string | null
+          status: string
+          template_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          error_message?: string | null
+          finished_at?: string | null
+          id?: string
+          kind?: string
+          provider?: string | null
+          response?: Json | null
+          started_at?: string | null
+          status?: string
+          template_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          error_message?: string | null
+          finished_at?: string | null
+          id?: string
+          kind?: string
+          provider?: string | null
+          response?: Json | null
+          started_at?: string | null
+          status?: string
+          template_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "kanvas_lyric_template_jobs_template_id_fkey"
+            columns: ["template_id"]
+            isOneToOne: false
+            referencedRelation: "kanvas_lyric_templates"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      kanvas_lyric_templates: {
+        Row: {
+          archived_at: string | null
+          created_at: string
+          cut_markers: Json
+          error_message: string | null
+          id: string
+          lyric_blocks: Json
+          render_defaults: Json
+          saved_at: string | null
+          selection_duration_ms: number
+          selection_start_ms: number
+          source_audio_asset_id: string | null
+          status: string
+          title: string
+          total_duration_ms: number
+          transcript_meta: Json
+          trimmed_audio_asset_id: string | null
+          updated_at: string
+          user_id: string
+          waveform_peaks: Json
+        }
+        Insert: {
+          archived_at?: string | null
+          created_at?: string
+          cut_markers?: Json
+          error_message?: string | null
+          id?: string
+          lyric_blocks?: Json
+          render_defaults?: Json
+          saved_at?: string | null
+          selection_duration_ms?: number
+          selection_start_ms?: number
+          source_audio_asset_id?: string | null
+          status?: string
+          title?: string
+          total_duration_ms?: number
+          transcript_meta?: Json
+          trimmed_audio_asset_id?: string | null
+          updated_at?: string
+          user_id: string
+          waveform_peaks?: Json
+        }
+        Update: {
+          archived_at?: string | null
+          created_at?: string
+          cut_markers?: Json
+          error_message?: string | null
+          id?: string
+          lyric_blocks?: Json
+          render_defaults?: Json
+          saved_at?: string | null
+          selection_duration_ms?: number
+          selection_start_ms?: number
+          source_audio_asset_id?: string | null
+          status?: string
+          title?: string
+          total_duration_ms?: number
+          transcript_meta?: Json
+          trimmed_audio_asset_id?: string | null
+          updated_at?: string
+          user_id?: string
+          waveform_peaks?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "kanvas_lyric_templates_source_audio_asset_id_fkey"
+            columns: ["source_audio_asset_id"]
+            isOneToOne: false
+            referencedRelation: "project_assets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "kanvas_lyric_templates_trimmed_audio_asset_id_fkey"
+            columns: ["trimmed_audio_asset_id"]
+            isOneToOne: false
+            referencedRelation: "project_assets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       media_assets: {
         Row: {
           account_id: string | null
@@ -539,6 +670,51 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      project_assets: {
+        Row: {
+          byte_size: number | null
+          created_at: string
+          duration_ms: number | null
+          file_name: string | null
+          id: string
+          kind: string
+          metadata: Json
+          mime_type: string | null
+          public_url: string | null
+          storage_bucket: string
+          storage_path: string
+          user_id: string
+        }
+        Insert: {
+          byte_size?: number | null
+          created_at?: string
+          duration_ms?: number | null
+          file_name?: string | null
+          id?: string
+          kind: string
+          metadata?: Json
+          mime_type?: string | null
+          public_url?: string | null
+          storage_bucket?: string
+          storage_path: string
+          user_id: string
+        }
+        Update: {
+          byte_size?: number | null
+          created_at?: string
+          duration_ms?: number | null
+          file_name?: string | null
+          id?: string
+          kind?: string
+          metadata?: Json
+          mime_type?: string | null
+          public_url?: string | null
+          storage_bucket?: string
+          storage_path?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       publish_attempts: {
         Row: {
