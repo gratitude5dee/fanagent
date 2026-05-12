@@ -125,9 +125,9 @@ Deno.serve(async (request) => {
       input.count,
       input.cadenceMinutes,
     );
-    const modelId = input.sourceMode === "gmi_seedance"
-      ? optionalEnv("GMI_SEEDANCE_MODEL_ID") ?? "Seedance-2.0"
-      : optionalEnv("REMOTE_RENDER_MODEL_ID") ?? "remote-render-v1";
+    const modelId = input.sourceMode === "seedance"
+      ? optionalEnv("SEEDANCE_MODEL_ID") ?? "fal-ai/bytedance/seedance/v1/lite/text-to-video"
+      : "stock-pipeline";
 
     const items = schedule.map((scheduledAt, index) => {
       const promptPlan = createPromptPlan({
@@ -149,9 +149,10 @@ Deno.serve(async (request) => {
           source_mode: input.sourceMode,
           prompt_plan: promptPlan,
           audio_asset_id: audioAsset.id,
+          duration_seconds: input.durationSeconds,
         },
         scheduled_at: scheduledAt.toISOString(),
-        duration_seconds: promptPlan.videoPrompt.duration_seconds,
+        duration_seconds: input.durationSeconds,
       };
     });
 
