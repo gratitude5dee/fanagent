@@ -180,8 +180,70 @@ export default function AutopilotPanel() {
         <h2>Fanpage Autopilot</h2>
       </header>
 
+      <div className="action-row" role="tablist" aria-label="Autopilot sections">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "campaign"}
+          className={`button ${tab === "campaign" ? "primary" : "ghost"}`}
+          onClick={() => setTab("campaign")}
+        >
+          <CalendarClock size={14} /> Campaign
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "lyrics"}
+          className={`button ${tab === "lyrics" ? "primary" : "ghost"}`}
+          onClick={() => setTab("lyrics")}
+        >
+          <FileMusic size={14} /> Lyrics
+        </button>
+      </div>
+
       {message ? <div className="banner">{message}</div> : null}
 
+      {tab === "lyrics" ? (
+        <section className="panel">
+          <div className="panel-title">
+            <FileMusic size={16} />
+            <h3>Lyrics templates</h3>
+          </div>
+          <div className="action-row">
+            <Link className="button primary" to="/lyrics/new">
+              <Plus size={14} /> New template
+            </Link>
+            <Link className="button ghost" to="/lyrics">
+              Open builder
+            </Link>
+          </div>
+          {lyricTemplates.length === 0 ? (
+            <div className="empty-state">
+              No templates yet. Create one to drive word timing + cut markers in renders.
+            </div>
+          ) : (
+            <div className="batch-list">
+              {lyricTemplates.map((t) => (
+                <div className="batch-row" key={t.id}>
+                  <span className={`dot ${t.status === "saved" ? "good" : t.status === "failed" ? "bad" : "warn"}`} />
+                  <div style={{ flex: 1 }}>
+                    <strong>{t.title}</strong>
+                    <span>
+                      {t.status} · {(t.selection_duration_ms / 1000).toFixed(1)}s of {(t.total_duration_ms / 1000).toFixed(1)}s
+                    </span>
+                  </div>
+                  <Link className="button ghost" to={`/lyrics/templates/${t.id}`}>
+                    Edit
+                  </Link>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {tab !== "campaign" ? null : (
+      <>
       {/* STEP 1 — Connect TikTok */}
       <section className="panel">
         <div className="panel-title">
