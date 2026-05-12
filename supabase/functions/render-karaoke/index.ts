@@ -1,16 +1,42 @@
-// Dispatches a Remotion render job to the configured hosted SaaS render host.
-// Stores render_job_id + render_callback_token onto the generation_item.
-// If REMOTION_RENDER_* env is missing, falls back to a no-op stub that marks
-// the item ready using the stock clip URL directly (useful while the render
-// host is being provisioned).
+// Final render pass: takes the stitched stock_clip_url, optionally burns in
+// lyric captions from the resolved kanvas_lyric_template via fal.ai
+// ffmpeg-api/compose, then registers the rendered video as a media_asset and
+// marks the item ready. No external Remotion host required.
 
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
-import { optionalEnv } from "../_shared/env.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
+import { composeWithSubtitles } from "../_shared/fal.ts";
+import { downloadBytes, createMediaAssetFromBytes, registerMediaAsset } from "../_shared/assets.ts";
 
-function projectFunctionsUrl(path: string): string {
-  const url = optionalEnv("SUPABASE_URL") ?? "";
-  return `${url}/functions/v1/${path}`;
+type Word = { text?: string; word?: string; startMs?: number; endMs?: number; start?: number; end?: number };
+type Block = { text?: string; startMs?: number; endMs?: number; words?: Word[] };
+
+function fmtTs(ms: number): string {
+  if (ms < 0) ms = 0;
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  const s = Math.floor((ms % 60_000) / 1000);
+  const cs = Math.floor(ms % 1000);
+  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+  return `${pad(h)}:${pad(m)}:${pad(s)},${pad(cs, 3)}`;
+}
+
+function blocksToSrt(blocks: Block[], selectionStartMs: number, totalSeconds: number): string {
+  const totalMs = totalSeconds * 1000;
+  const cues: { start: number; end: number; text: string }[] = [];
+  for (const b of blocks ?? []) {
+    const text = (b.text ?? (b.words ?? []).map((w) => w.text ?? w.word ?? "").join(" ")).trim();
+    if (!text) continue;
+    const startMs = b.startMs ?? b.words?.[0]?.startMs ?? 0;
+    const endMs = b.endMs ?? b.words?.[b.words.length - 1]?.endMs ?? startMs + 1500;
+    const s = startMs - selectionStartMs;
+    const e = endMs - selectionStartMs;
+    if (e <= 0 || s >= totalMs) continue;
+    cues.push({ start: Math.max(0, s), end: Math.min(totalMs, e), text });
+  }
+  return cues
+    .map((c, i) => `${i + 1}\n${fmtTs(c.start)} --> ${fmtTs(c.end)}\n${c.text}\n`)
+    .join("\n");
 }
 
 Deno.serve(async (request) => {
@@ -25,15 +51,11 @@ Deno.serve(async (request) => {
     const supabase = getSupabaseAdmin();
     const item = await supabase
       .from("generation_items")
-      .select(
-        "id,account_id,batch_id,stock_clip_url,input_payload,duration_seconds,lyric_template_id",
-      )
+      .select("id,account_id,batch_id,stock_clip_url,input_payload,duration_seconds,lyric_template_id")
       .eq("id", body.itemId)
       .single();
     if (item.error) throw item.error;
-    if (!item.data.stock_clip_url) {
-      throw new Error("Item has no stock_clip_url; pick-stock-clip first");
-    }
+    if (!item.data.stock_clip_url) throw new Error("Item has no stock_clip_url; stitch first");
 
     const batch = await supabase
       .from("generation_batches")
@@ -44,113 +66,86 @@ Deno.serve(async (request) => {
 
     const audio = await supabase
       .from("media_assets")
-      .select("public_url,transcript")
+      .select("public_url")
       .eq("id", batch.data.audio_asset_id)
       .single();
     if (audio.error) throw audio.error;
 
-    // Resolve lyric template (item override → batch default).
+    const totalSeconds = item.data.duration_seconds ?? 15;
     const lyricTemplateId = item.data.lyric_template_id ?? batch.data.lyric_template_id ?? null;
-    let lyricsProps: Record<string, unknown> | null = null;
+
+    let finalUrl: string = item.data.stock_clip_url;
+    let provider = "passthrough";
+
     if (lyricTemplateId) {
       const lt = await supabase
         .from("kanvas_lyric_templates")
-        .select("id,title,lyric_blocks,cut_markers,selection_start_ms,selection_duration_ms")
+        .select("id,lyric_blocks,selection_start_ms")
         .eq("id", lyricTemplateId)
         .maybeSingle();
-      if (lt.data) {
-        lyricsProps = {
-          templateId: lt.data.id,
-          title: lt.data.title,
-          blocks: lt.data.lyric_blocks ?? [],
-          markers: lt.data.cut_markers ?? [],
-          selectionStartMs: lt.data.selection_start_ms ?? 0,
-          selectionDurationMs: lt.data.selection_duration_ms ?? 0,
-        };
-      } else {
-        console.warn(`render-karaoke: lyric template ${lyricTemplateId} not found; falling back`);
+      const blocks = (lt.data?.lyric_blocks ?? []) as Block[];
+      if (blocks.length > 0) {
+        const srt = blocksToSrt(blocks, lt.data!.selection_start_ms ?? 0, totalSeconds);
+        // Upload SRT to public bucket so fal can fetch it.
+        const srtPath = `subtitles/${body.itemId}-${Date.now()}.srt`;
+        const up = await supabase.storage.from("post-assets").upload(
+          srtPath,
+          new TextEncoder().encode(srt),
+          { contentType: "application/x-subrip", upsert: true },
+        );
+        if (up.error) throw up.error;
+        const { data: pub } = supabase.storage.from("post-assets").getPublicUrl(srtPath);
+        finalUrl = await composeWithSubtitles({
+          videoUrl: item.data.stock_clip_url,
+          audioUrl: audio.data.public_url,
+          subtitlesUrl: pub.publicUrl,
+          totalSeconds,
+        });
+        provider = "fal_ffmpeg";
       }
     }
 
-    const renderEndpoint = optionalEnv("REMOTION_RENDER_ENDPOINT");
-    const renderApiKey = optionalEnv("REMOTION_RENDER_API_KEY");
-    const serveUrl = optionalEnv("REMOTION_SERVE_URL");
-
-    const callbackToken = crypto.randomUUID();
-    const inputProps = {
-      audioUrl: audio.data.public_url,
-      stockClipUrl: item.data.stock_clip_url,
-      transcript: audio.data.transcript ?? { words: [] },
-      durationFrames: (item.data.duration_seconds ?? 15) * 30,
-      fps: 30,
-      lyrics: lyricsProps,
-      lyricTemplateId,
-    };
-
-    if (!renderEndpoint || !renderApiKey || !serveUrl) {
-      // STUB FALLBACK: mark the item ready using the stock clip directly so
-      // the rest of the pipeline (publish) can be exercised end-to-end.
-      const updated = await supabase
-        .from("generation_items")
-        .update({
-          status: "ready",
-          render_provider: "stub",
-          render_callback_token: callbackToken,
-          input_payload: { ...item.data.input_payload, render: inputProps },
-        })
-        .eq("id", body.itemId);
-      if (updated.error) throw updated.error;
-      // Reuse the stock clip as the "rendered" video url for now.
-      const post = await supabase
-        .from("posts")
-        .update({ video_url: item.data.stock_clip_url, status: "pending" })
-        .eq("generation_item_id", body.itemId);
-      if (post.error) throw post.error;
-      return jsonResponse({
-        itemId: body.itemId,
-        mode: "stub",
-        message: "REMOTION_RENDER_* not configured; using stock clip as final.",
+    // Persist as a media asset. If we composed, download + re-host; otherwise
+    // just register the existing URL.
+    let asset;
+    if (provider === "fal_ffmpeg") {
+      const dl = await downloadBytes(finalUrl);
+      asset = await createMediaAssetFromBytes({
+        accountId: item.data.account_id,
+        kind: "rendered_video",
+        source: provider,
+        bytes: dl.bytes,
+        mimeType: dl.mimeType === "application/octet-stream" ? "video/mp4" : dl.mimeType,
+        fileName: `${body.itemId}.mp4`,
+        metadata: { generation_item_id: body.itemId, lyric_template_id: lyricTemplateId },
+      });
+    } else {
+      asset = await registerMediaAsset({
+        accountId: item.data.account_id,
+        kind: "rendered_video",
+        source: provider,
+        publicUrl: finalUrl,
+        fileName: `${body.itemId}.mp4`,
+        metadata: { generation_item_id: body.itemId, passthrough: true },
       });
     }
 
-    const callbackUrl = projectFunctionsUrl(
-      `render-callback?token=${callbackToken}&itemId=${body.itemId}`,
-    );
-
-    const dispatch = await fetch(renderEndpoint, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${renderApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        serveUrl,
-        composition: "KaraokeFanpage",
-        inputProps,
-        webhook: { url: callbackUrl, method: "POST" },
-        codec: "h264",
-      }),
-    });
-    if (!dispatch.ok) {
-      const errText = await dispatch.text();
-      throw new Error(`Remotion dispatch failed [${dispatch.status}]: ${errText}`);
-    }
-    const dispatchJson = await dispatch.json() as { id?: string; jobId?: string };
-    const jobId = dispatchJson.id ?? dispatchJson.jobId ?? "";
-
-    const updated = await supabase
+    const upd = await supabase
       .from("generation_items")
       .update({
-        status: "rendering",
-        render_provider: "remotion_saas",
-        render_job_id: jobId,
-        render_callback_token: callbackToken,
-        input_payload: { ...item.data.input_payload, render: inputProps },
+        status: "ready",
+        render_provider: provider,
+        final_asset_id: asset.id,
       })
       .eq("id", body.itemId);
-    if (updated.error) throw updated.error;
+    if (upd.error) throw upd.error;
 
-    return jsonResponse({ itemId: body.itemId, mode: "saas", jobId });
+    return jsonResponse({
+      itemId: body.itemId,
+      provider,
+      finalAssetId: asset.id,
+      url: asset.public_url,
+    });
   } catch (error) {
     return errorResponse(error);
   }
