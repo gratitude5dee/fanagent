@@ -1,4 +1,4 @@
-export type SourceMode = "gmi_seedance" | "remote_render";
+export type SourceMode = "stock" | "seedance" | "mixed" | "gmi_seedance" | "remote_render";
 
 const themes = [
   "cinematic",

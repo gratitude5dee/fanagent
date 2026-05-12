@@ -52,7 +52,9 @@ type CampaignList = {
   posts: Post[];
 };
 
-type SourceMode = "stock" | "seedance" | "hybrid";
+type SourceMode = "stock" | "seedance" | "mixed";
+const DURATIONS = [15, 30, 45, 60, 75, 90] as const;
+type Duration = typeof DURATIONS[number];
 
 async function fileToBase64(file: File): Promise<string> {
   const buf = await file.arrayBuffer();
@@ -86,6 +88,7 @@ function statusTone(status: string): string {
 export default function AutopilotPanel() {
   const [data, setData] = useState<CampaignList | null>(null);
   const [audio, setAudio] = useState<File | null>(null);
+  const [duration, setDuration] = useState<Duration>(15);
   const [sourceMode, setSourceMode] = useState<SourceMode>("stock");
   const [postCount, setPostCount] = useState(14);
   const [prompt, setPrompt] = useState("aesthetic vertical cinematic visuals");
@@ -131,6 +134,7 @@ export default function AutopilotPanel() {
   async function startCampaign() {
     if (!audio) throw new Error("Pick an audio file first.");
     if (!account) throw new Error("No account.");
+    if (!isConnected) throw new Error("Connect TikTok first.");
     const startAt = new Date(Date.now() + 15 * 60_000).toISOString();
     await callCampaign("create", {
       accountId: account.id,
@@ -138,6 +142,7 @@ export default function AutopilotPanel() {
       audioMimeType: audio.type || "audio/mpeg",
       audioFileName: audio.name,
       sourceMode,
+      durationSeconds: duration,
       postCount,
       cadenceMinutes: 1440,
       prompt,
@@ -199,23 +204,43 @@ export default function AutopilotPanel() {
               <input type="file" accept="audio/*" onChange={(e) => setAudio(e.target.files?.[0] ?? null)} required />
             </label>
             <label>
-              Visual prompt
-              <textarea rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+              Post duration
+              <div className="action-row" style={{ flexWrap: "wrap", gap: 6 }}>
+                {DURATIONS.map((d) => (
+                  <button
+                    type="button"
+                    key={d}
+                    className={`button ${duration === d ? "primary" : "ghost"}`}
+                    onClick={() => setDuration(d)}
+                  >
+                    {d}s
+                  </button>
+                ))}
+              </div>
+            </label>
+            <label>
+              Theme / visual prompt (AI will generate per-post shot prompts)
+              <textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
             </label>
             <div className="split">
               <label>
-                Source mode
+                Source
                 <select value={sourceMode} onChange={(e) => setSourceMode(e.target.value as SourceMode)}>
-                  <option value="stock">Stock footage (default)</option>
-                  <option value="hybrid">Stock + Seedance fallback</option>
+                  <option value="stock">Stock footage (Pexels + Pixabay)</option>
+                  <option value="mixed">Mixed: stock + Seedance 2</option>
                   <option value="seedance">Seedance 2 only</option>
                 </select>
               </label>
               <label>
                 Posts to queue
-                <input type="number" min={1} max={60} value={postCount} onChange={(e) => setPostCount(Number(e.target.value))} />
+                <input type="number" min={1} max={50} value={postCount} onChange={(e) => setPostCount(Number(e.target.value))} />
               </label>
             </div>
+            {duration > 15 ? (
+              <div className="banner">
+                {Math.ceil(duration / 15)} clips per post will be stitched together with ffmpeg.
+              </div>
+            ) : null}
             <button className="button primary" disabled={busy || !audio} type="submit">
               {busy ? <Loader2 className="spin" size={16} /> : <CalendarClock size={16} />} Launch daily campaign
             </button>

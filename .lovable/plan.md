@@ -1,77 +1,74 @@
-## Fanpage Autopilot — Final Plan
+# Fanpage Autopilot v2 — Variable Duration + AI Prompts + Mixed Sourcing
 
-Builds the autopilot lane on the existing `fanagent` codebase. **Renderer**: hosted Remotion SaaS (single API key — `REMOTION_RENDER_API_KEY` + `REMOTION_RENDER_ENDPOINT`). **OAuth**: extend the existing `tiktok-oauth-callback` rather than fork.
+Extend the existing Autopilot flow into a 4-step wizard that supports variable post lengths, AI-generated video prompts, mixed stock/Seedance sourcing, ffmpeg stitching for >15s, and a TikTok auth gate before scheduling.
 
-### Phase 1 — DB + storage
+## Wizard Steps (frontend — `AutopilotPanel.tsx`)
 
-1. Apply pending migration `20260510161218_fanagent_core.sql` (source of every dashboard `PGRST205`).
-2. New migration adds:
-   - `accounts.is_primary boolean` (V1: one TikTok account per user, partial unique index).
-   - `accounts.creator_info jsonb`, `accounts.encrypted_access_token`, `encrypted_refresh_token`, `token_expires_at`.
-   - `generation_batches.next_run_at timestamptz`, `paused_at timestamptz`.
-   - `generation_items.stock_clip_url`, `render_provider`, `render_job_id`, `render_callback_token`.
-   - `media_assets.transcript jsonb` (Scribe v2 word array + language).
-   - New tables: `publish_attempts` (post_id, tiktok_publish_id, status, error, raw_response), `worker_runs` (function, started/ended, items, errors).
-3. Storage buckets (private, signed URLs): `audio-uploads`, `stock-cache`, `renders`. RLS scoped to `auth.uid()`.
-4. Enable `pg_cron` + `pg_net`. Add `CRON_SECRET` runtime secret.
+**Step 1 — Upload audio + pick duration**
+- Audio upload (existing) → `audio-uploads` bucket → `media_assets` row
+- Duration selector: `15 / 30 / 45 / 60 / 75 / 90` seconds (chips)
+- Post count + cadence (existing fields, kept)
 
-### Phase 2 — Stock source layer
+**Step 2 — Generate template prompts**
+- "Generate prompts" button → calls new edge function `generate-video-prompts`
+- Shows N editable prompt cards (one per scheduled post). User can regenerate single prompts or edit text inline.
+- Source mode toggle per batch: `stock` / `seedance` / `mixed` (default mixed)
 
-`supabase/functions/_shared/stock.ts` exposes `searchStock({query, durationSec, aspect, count})` over three providers behind one ranker:
-- **User library** — `media_assets` where `kind='video'`, `source='upload'`.
-- **Pexels Videos** (`PEXELS_API_KEY`).
-- **Pixabay Videos** (`PIXABAY_API_KEY`).
-- **fal.ai stock** (`FAL_KEY`, also reused for Seedance fallback).
+**Step 3 — Preview & schedule**
+- Lists the N planned posts with their prompt + source mode + stock preview (if stock) or "will generate" badge (if seedance)
+- For each post, show planned segment count: `ceil(duration / 15)` clips to stitch
+- "Schedule batch" inserts `generation_batches` + `generation_items`
 
-Caches downloaded MP4s into `stock-cache` bucket so repeat picks don't re-fetch.
+**Step 4 — TikTok auth gate**
+- Before any item can publish, check `accounts.tiktok_access_token_encrypted` is set on the primary account
+- If not connected: show "Connect TikTok to start posting" CTA → existing `tiktok-oauth-callback` flow
+- Once connected: batch flips from `paused` to `active` and cron picks it up
 
-### Phase 3 — Scribe v2 transcription
+## Backend changes
 
-New edge function `transcribe-audio`:
-- Pulls audio from `audio-uploads` → POSTs to ElevenLabs `scribe_v2` (multipart, no diarize).
-- Persists `{words:[{text,start,end,confidence}], language}` into `media_assets.transcript`.
-- Auto-invoked at the end of `create-generation-batch`. Idempotent.
+### Database (migration)
+- `generation_batches`: add `duration_seconds int not null default 15`, `source_mode` already exists (extend allowed values to `stock|seedance|mixed`)
+- `generation_items`: add `segments jsonb` (array of `{source, url|prompt, start, end}`), `stitched_asset_id uuid`
 
-### Phase 4 — Remotion karaoke composition
+### New edge function: `generate-video-prompts`
+- Input: `{ batchId | { count, audioAssetId, durationSeconds, theme? } }`
+- Calls Lovable AI Gateway (`google/gemini-3.1-flash-lite-preview`) via tool-calling to return `{ prompts: [{ text, mood, visual_style, suggested_source }] }`
+- Persists prompts onto `generation_items.prompt` + `input_payload.prompt_meta`
 
-`remotion/` project (sibling to `supabase/`):
-- `KaraokeFanpage.tsx` — composition props `{ audioUrl, stockClipUrl, transcript, durationFrames=450, fps=30 }` (15s × 30fps).
-- TikTok-style word-by-word karaoke: active word scaled + accent color, prior dim, next muted; safe-area padded; cut flash on word boundaries.
-- `Root.tsx` registers it; bundle is uploaded to the hosted Remotion service once and pinned by `REMOTION_SERVE_URL`.
+### Updated: `pick-stock-clip`
+- Honors `durationSeconds`. For `>15s`, picks `ceil(duration/15)` clips and writes them to `generation_items.segments`
+- For `mixed` mode, randomly assigns each segment to `stock` or `seedance`
 
-### Phase 5 — Render pipeline (hosted SaaS)
+### New edge function: `generate-seedance-clip`
+- For each `seedance` segment, submits a fal.ai Seedance 2 job (`fal-ai/bytedance/seedance/v2/lite/text-to-video`, 9:16, 5s)
+- Stores returned URL in the segment
 
-`render-karaoke` edge function:
-- POSTs `{ serveUrl, composition: 'KaraokeFanpage', inputProps, webhook }` to `REMOTION_RENDER_ENDPOINT` with `Authorization: Bearer ${REMOTION_RENDER_API_KEY}`.
-- Stores returned job id into `generation_items.render_job_id`, sets status `rendering`.
+### New edge function: `stitch-segments`
+- Triggered when all segments for an item have a URL
+- Calls fal.ai ffmpeg-api compose (`fal-ai/ffmpeg-api/compose`) to concat segments + overlay the trimmed audio track
+- Output URL → `media_assets` (bucket `renders`) → `generation_items.stitched_asset_id` + `final_asset_id`
 
-`render-callback` edge function (no JWT, signed by `render_callback_token`):
-- Receives webhook with final MP4 URL.
-- Streams MP4 into the `renders` bucket → sets `generation_items.video_url` + status `ready`.
+### Updated: `fanpage-generate-due`
+New per-item pipeline:
+1. Ensure transcript (existing)
+2. Plan segments (call `pick-stock-clip` with duration + mode)
+3. For each `seedance` segment → `generate-seedance-clip`
+4. When all segments ready → `stitch-segments` (skip if single 15s stock clip — pass through)
+5. Mark item `ready_to_publish`
 
-### Phase 6 — Workers
+### Updated: `fanpage-publish-due`
+- Hard-gate: if primary account has no TikTok token, skip and log `awaiting_tiktok_auth`
+- Otherwise publish via existing TikTok Direct Post FILE_UPLOAD path
 
-- `fanpage-campaign` (auth via Supabase JWT) — wraps `create-generation-batch`; adds `list`, `pause`, `resume`, `updateSchedule`, `skipPost`, `regeneratePost`.
-- `fanpage-generate-due` (accepts `x-cron-secret`) — replaces `process-generation-due`. For each due item: `stock` → `pick-stock-clip` → `render-karaoke`; `seedance` → existing GMI → `render-karaoke`; `hybrid` → stock first, fall back. Writes `worker_runs`.
-- `fanpage-publish-due` (accepts `x-cron-secret`) — wraps `publish-tiktok-due`; uses Direct Post `FILE_UPLOAD` builders from `src/lib/fanagent/tiktok.ts`. Writes `publish_attempts`.
-- `tiktok-oauth-callback` (extended) — capture `creator_info`, encrypt + store tokens via `_shared/crypto.ts`, mark `accounts.is_primary=true`.
+## Secrets
+All required secrets already present (`FAL_KEY`, `LOVABLE_API_KEY`, `PEXELS_API_KEY`, `PIXABAY_API_KEY`, TikTok set). No new secrets needed.
 
-### Phase 7 — Cron (insert, not migration)
+## Out of scope (this sprint)
+- Per-segment manual reroll UI (will add after pipeline is stable)
+- Real-time progress stream (poll-based for v2)
+- TikTok scraping as a stock source — using Pexels/Pixabay + Seedance only (TikTok TOS risk). Can revisit if you confirm.
 
-```sql
-select cron.schedule('fanpage-generate-due','*/5 * * * *', $$
-  select net.http_post(
-    url:='https://zjbiulirzrctfmakqjwk.supabase.co/functions/v1/fanpage-generate-due',
-    headers:='{"Content-Type":"application/json","x-cron-secret":"<CRON_SECRET>"}'::jsonb,
-    body:='{}'::jsonb);
-$$);
-select cron.schedule('fanpage-publish-due','*/5 * * * *', ... );
-```
-
-### Phase 8 — Frontend
-
-A new `/autopilot` route with a 4-step wizard (Connect TikTok → Upload audio → Source mode + cadence → Confirm), then a queue/calendar view (reuse `FanAgentCalendar.tsx`) with pause/skip/regenerate, transcription + render status badges, and a `@remotion/player` preview.
-
-### Secrets to request after approval
-
-`ELEVENLABS_API_KEY`, `PEXELS_API_KEY`, `PIXABAY_API_KEY`, `FAL_KEY`, `CRON_SECRET`, `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `REMOTION_RENDER_API_KEY`, `REMOTION_RENDER_ENDPOINT`, `REMOTION_SERVE_URL`, plus a `TOKEN_ENCRYPTION_KEY` if not already present.
+## Open questions
+1. **Mixed mode default ratio** — 50/50 stock:seedance, or weight toward stock (cheaper) by default?
+2. **Seedance model tier** — `seedance/v2/lite` (fast, cheap) vs `seedance/v2/pro` (higher quality, ~5x cost)?
+3. **TikTok scraping** — confirm dropping it, or do you want a "user-supplied TikTok URLs" input as a third source?

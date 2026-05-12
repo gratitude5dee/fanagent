@@ -74,15 +74,29 @@ Deno.serve(async (request) => {
           sourceMode: (body.sourceMode as string) ?? "stock",
           cadenceMinutes: (body.cadenceMinutes as number) ?? 1440,
           count: (body.postCount as number) ?? 14,
+          durationSeconds: (body.durationSeconds as number) ?? 15,
         });
         const json = await res.json();
         if (!res.ok) return errorResponse(json.error ?? "create failed", 500);
-        // Auto-trigger transcription so the wizard's "ready" state arrives soon.
         const audioAssetId = json?.audioAsset?.id;
+        const batchId = json?.batch?.id;
         if (audioAssetId) {
           callChild("transcribe-audio", { audioAssetId }).catch(() => {});
         }
+        // Generate AI video prompts for the batch (best-effort, fire-and-forget).
+        if (batchId) {
+          callChild("generate-video-prompts", { batchId }).catch(() => {});
+        }
         return jsonResponse(json);
+      }
+
+      case "generatePrompts": {
+        const batchId = body.batchId as string | undefined;
+        if (!batchId) throw new Error("batchId required");
+        const r = await callChild("generate-video-prompts", { batchId });
+        const j = await r.json();
+        if (!r.ok) return errorResponse(j.error ?? "prompts failed", 500);
+        return jsonResponse(j);
       }
 
       case "pause": {

@@ -149,6 +149,7 @@ export type Database = {
           cadence_minutes: number
           completed_at: string | null
           created_at: string | null
+          duration_seconds: number
           error_message: string | null
           id: string
           next_run_at: string | null
@@ -167,6 +168,7 @@ export type Database = {
           cadence_minutes?: number
           completed_at?: string | null
           created_at?: string | null
+          duration_seconds?: number
           error_message?: string | null
           id?: string
           next_run_at?: string | null
@@ -185,6 +187,7 @@ export type Database = {
           cadence_minutes?: number
           completed_at?: string | null
           created_at?: string | null
+          duration_seconds?: number
           error_message?: string | null
           id?: string
           next_run_at?: string | null
@@ -236,7 +239,9 @@ export type Database = {
           render_job_id: string | null
           render_provider: string | null
           scheduled_at: string
+          segments: Json | null
           status: string
+          stitched_asset_id: string | null
           stock_clip_url: string | null
           updated_at: string | null
         }
@@ -261,7 +266,9 @@ export type Database = {
           render_job_id?: string | null
           render_provider?: string | null
           scheduled_at: string
+          segments?: Json | null
           status?: string
+          stitched_asset_id?: string | null
           stock_clip_url?: string | null
           updated_at?: string | null
         }
@@ -286,7 +293,9 @@ export type Database = {
           render_job_id?: string | null
           render_provider?: string | null
           scheduled_at?: string
+          segments?: Json | null
           status?: string
+          stitched_asset_id?: string | null
           stock_clip_url?: string | null
           updated_at?: string | null
         }

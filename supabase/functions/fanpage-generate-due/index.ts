@@ -1,21 +1,22 @@
 // Cron worker: walks generation_items in `pending` whose batch is not paused.
-// For each item, transcribes audio (once per batch), picks a stock clip, then
-// dispatches a Remotion render. Stops at MAX_PER_RUN to keep latency bounded.
-//
-// Auth: requires x-cron-secret matching CRON_SECRET (also accepts authenticated
-// service-role calls for manual triggering from the dashboard).
+// Per item:
+//   1. Ensure the batch's audio asset has a transcript.
+//   2. Plan segments (pick-stock-clip writes generation_items.segments based on
+//      duration + source_mode).
+//   3. Generate any seedance segments (generate-seedance-clip).
+//   4. When all segments have urls, stitch them with the audio (stitch-segments)
+//      — single-segment case is a passthrough.
+// Stops at MAX_PER_RUN to keep latency bounded.
 
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { optionalEnv } from "../_shared/env.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
-import {
-  endWorkerRun,
-  isAuthorizedCronCall,
-  startWorkerRun,
-} from "../_shared/workers.ts";
+import { endWorkerRun, isAuthorizedCronCall, startWorkerRun } from "../_shared/workers.ts";
 
 const MAX_PER_RUN = 5;
 const FUNCTION_NAME = "fanpage-generate-due";
+
+type Segment = { source: "stock" | "seedance"; url?: string; prompt?: string };
 
 function fnUrl(name: string): string {
   return `${optionalEnv("SUPABASE_URL")}/functions/v1/${name}`;
@@ -25,74 +26,66 @@ async function invokeChild(name: string, body: unknown): Promise<Response> {
   const serviceKey = optionalEnv("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   return fetch(fnUrl(name), {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${serviceKey}`,
-    },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceKey}` },
     body: JSON.stringify(body),
   });
 }
 
+async function ok(res: Response, label: string) {
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`${label} failed [${res.status}]: ${err.slice(0, 300)}`);
+  }
+}
+
 async function processItem(itemId: string): Promise<void> {
   const supabase = getSupabaseAdmin();
-  const item = await supabase
-    .from("generation_items")
-    .select("id,batch_id,provider")
-    .eq("id", itemId)
-    .single();
+  const item = await supabase.from("generation_items")
+    .select("id,batch_id,segments,status").eq("id", itemId).single();
   if (item.error) throw item.error;
 
-  // 1. Ensure transcript exists for the batch's audio asset.
-  const batch = await supabase
-    .from("generation_batches")
-    .select("audio_asset_id")
-    .eq("id", item.data.batch_id)
-    .single();
+  const batch = await supabase.from("generation_batches")
+    .select("audio_asset_id").eq("id", item.data.batch_id).single();
   if (batch.error) throw batch.error;
 
-  const audio = await supabase
-    .from("media_assets")
-    .select("id,transcript")
-    .eq("id", batch.data.audio_asset_id)
-    .single();
+  const audio = await supabase.from("media_assets")
+    .select("id,transcript").eq("id", batch.data.audio_asset_id).single();
   if (audio.error) throw audio.error;
 
+  // 1. Transcript.
   if (!audio.data.transcript) {
-    await supabase.from("generation_items").update({ status: "transcribing" })
-      .eq("id", itemId);
-    const t = await invokeChild("transcribe-audio", {
-      audioAssetId: audio.data.id,
-    });
-    if (!t.ok) {
-      const err = await t.text();
-      throw new Error(`transcribe-audio failed: ${err}`);
+    await supabase.from("generation_items").update({ status: "transcribing" }).eq("id", itemId);
+    await ok(await invokeChild("transcribe-audio", { audioAssetId: audio.data.id }), "transcribe-audio");
+  }
+
+  // 2. Plan segments if not already.
+  let segments = (item.data.segments ?? []) as Segment[];
+  if (segments.length === 0) {
+    await ok(await invokeChild("pick-stock-clip", { itemId }), "pick-stock-clip");
+    const reload = await supabase.from("generation_items")
+      .select("segments").eq("id", itemId).single();
+    segments = (reload.data?.segments ?? []) as Segment[];
+  }
+
+  // 3. Generate seedance segments.
+  for (let i = 0; i < segments.length; i += 1) {
+    const s = segments[i];
+    if (s.source === "seedance" && !s.url) {
+      await ok(
+        await invokeChild("generate-seedance-clip", { itemId, segmentIndex: i }),
+        `generate-seedance-clip[${i}]`,
+      );
     }
   }
 
-  // 2. Pick stock clip (skip if seedance-only mode).
-  if (item.data.provider !== "seedance") {
-    const s = await invokeChild("pick-stock-clip", { itemId });
-    if (!s.ok) {
-      const err = await s.text();
-      throw new Error(`pick-stock-clip failed: ${err}`);
-    }
-  }
-
-  // 3. Dispatch render.
-  const r = await invokeChild("render-karaoke", { itemId });
-  if (!r.ok) {
-    const err = await r.text();
-    throw new Error(`render-karaoke failed: ${err}`);
-  }
+  // 4. Stitch (or passthrough).
+  await ok(await invokeChild("stitch-segments", { itemId }), "stitch-segments");
 }
 
 Deno.serve(async (request) => {
   const opt = handleOptions(request);
   if (opt) return opt;
-
-  if (!isAuthorizedCronCall(request)) {
-    return errorResponse("Unauthorized cron call", 401);
-  }
+  if (!isAuthorizedCronCall(request)) return errorResponse("Unauthorized cron call", 401);
 
   const runId = await startWorkerRun(FUNCTION_NAME);
   let processed = 0;
@@ -101,10 +94,9 @@ Deno.serve(async (request) => {
 
   try {
     const supabase = getSupabaseAdmin();
-    const due = await supabase
-      .from("generation_items")
+    const due = await supabase.from("generation_items")
       .select("id, generation_batches!inner(paused_at)")
-      .eq("status", "pending")
+      .in("status", ["pending", "planning", "generating", "picking_stock"])
       .lte("scheduled_at", new Date(Date.now() + 60 * 60_000).toISOString())
       .is("generation_batches.paused_at", null)
       .order("scheduled_at", { ascending: true })
@@ -119,8 +111,7 @@ Deno.serve(async (request) => {
         errors += 1;
         const msg = err instanceof Error ? err.message : String(err);
         errorList.push({ itemId: row.id as string, error: msg });
-        await supabase
-          .from("generation_items")
+        await supabase.from("generation_items")
           .update({ status: "failed", error_message: msg })
           .eq("id", row.id as string);
       }

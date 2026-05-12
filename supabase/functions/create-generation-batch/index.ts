@@ -19,6 +19,7 @@ type CreateBatchRequest = {
   startAt?: string;
   cadenceMinutes?: number;
   timezone?: string;
+  durationSeconds?: number;
 };
 
 const supportedAudio = new Set([
@@ -40,9 +41,12 @@ function validatePayload(body: CreateBatchRequest) {
     5,
     Math.min(Math.floor(Number(body.cadenceMinutes ?? 240)), 10_080),
   );
-  const sourceMode = body.sourceMode === "remote_render"
-    ? "remote_render"
-    : "gmi_seedance";
+  const allowedDurations = [15, 30, 45, 60, 75, 90];
+  const requestedDuration = Math.floor(Number(body.durationSeconds ?? 15));
+  const durationSeconds = allowedDurations.includes(requestedDuration) ? requestedDuration : 15;
+  const sourceMode: "stock" | "seedance" | "mixed" =
+    body.sourceMode === "seedance" ? "seedance" :
+    body.sourceMode === "mixed" ? "mixed" : "stock";
   const audioMimeType = body.audioMimeType || "audio/mpeg";
   const startAt = new Date(body.startAt ?? Date.now() + 30 * 60_000);
 
@@ -67,6 +71,7 @@ function validatePayload(body: CreateBatchRequest) {
       "music-driven fan edit with cinematic lifestyle visuals",
     startAt,
     timezone: body.timezone || "America/Los_Angeles",
+    durationSeconds,
   };
 }
 
@@ -108,6 +113,7 @@ Deno.serve(async (request) => {
         cadence_minutes: input.cadenceMinutes,
         timezone: input.timezone,
         status: "pending",
+        duration_seconds: input.durationSeconds,
       })
       .select("*")
       .single();
@@ -119,9 +125,9 @@ Deno.serve(async (request) => {
       input.count,
       input.cadenceMinutes,
     );
-    const modelId = input.sourceMode === "gmi_seedance"
-      ? optionalEnv("GMI_SEEDANCE_MODEL_ID") ?? "Seedance-2.0"
-      : optionalEnv("REMOTE_RENDER_MODEL_ID") ?? "remote-render-v1";
+    const modelId = input.sourceMode === "seedance"
+      ? optionalEnv("SEEDANCE_MODEL_ID") ?? "fal-ai/bytedance/seedance/v1/lite/text-to-video"
+      : "stock-pipeline";
 
     const items = schedule.map((scheduledAt, index) => {
       const promptPlan = createPromptPlan({
@@ -143,9 +149,10 @@ Deno.serve(async (request) => {
           source_mode: input.sourceMode,
           prompt_plan: promptPlan,
           audio_asset_id: audioAsset.id,
+          duration_seconds: input.durationSeconds,
         },
         scheduled_at: scheduledAt.toISOString(),
-        duration_seconds: promptPlan.videoPrompt.duration_seconds,
+        duration_seconds: input.durationSeconds,
       };
     });
 
