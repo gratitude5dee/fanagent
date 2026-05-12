@@ -1,50 +1,45 @@
-## What’s actually broken
-The Studio page is creating batches, but the queued items stay `pending` instead of progressing.
+## Goal
 
-From the code I traced, the most likely root cause is a **source-mode mismatch**:
-- The root Studio UI sends `gmi_seedance` or `remote_render`
-- `create-generation-batch` currently only recognizes `seedance`, `mixed`, or `stock`
-- Anything else is silently coerced to `stock`
-- That means the chosen provider is lost before generation begins, so the wrong pipeline path runs
+Refactor the fal.ai integration in `supabase/functions/_shared/fal.ts` to expose every `fal-ai/ffmpeg-api/*` endpoint we need, and use the right one for each pipeline step instead of overloading `compose` for everything.
 
-I also need to verify the secondary handoff from the **Generate due** button into `fanpage-campaign` and then into the generation workers, because the current failure is effectively silent.
+## Endpoints to wrap
 
-## Plan
-1. **Normalize source-mode contracts end-to-end**
-   - Make the frontend and edge functions agree on the same source-mode values
-   - Ensure `create-generation-batch` preserves `gmi_seedance` and `remote_render` instead of downgrading them to `stock`
-   - Confirm each mode writes the correct `source_mode`, `provider`, and model settings into `generation_batches` and `generation_items`
+In `_shared/fal.ts`, replace the current ad-hoc `falRun` usage with a typed helper per endpoint, all hitting `https://fal.run/<model>` (sync) with the existing `Authorization: Key ${FAL_KEY}` header:
 
-2. **Audit the worker routing from the manual buttons**
-   - Verify `fanpage-campaign` receives the `runGenerationWorkers` action from the root Studio UI
-   - Confirm the action triggers the correct worker for each provider path
-   - Tighten error propagation so a worker failure returns a useful message instead of leaving items silently pending
+1. `mergeVideos(urls)` → `fal-ai/ffmpeg-api/merge-videos`
+2. `compose(tracks, opts?)` → `fal-ai/ffmpeg-api/compose` (multi-track timeline; keep current shape)
+3. `mergeAudioVideo(videoUrl, audioUrl)` → `fal-ai/ffmpeg-api/merge-audio-video`
+4. `extractFrame(videoUrl, position?)` → `fal-ai/ffmpeg-api/extract-frame` (for thumbnails)
+5. `getMediaMetadata(fileUrl)` → `fal-ai/ffmpeg-api/metadata`
+6. `mergeAudios(urls)` → `fal-ai/ffmpeg-api/merge-audios`
+7. `loudnorm(audioUrl, opts?)` → `fal-ai/ffmpeg-api/loudnorm`
+8. `waveform(audioUrl, opts?)` → `fal-ai/ffmpeg-api/waveform`
 
-3. **Harden visibility for stuck items**
-   - Add explicit logging/status updates around the generation worker chain so the next failure is attributable
-   - Surface the actual backend error in the UI message area when a child function fails
-   - Make sure failed items move to `failed` with a readable error instead of appearing idle
+Each helper returns a normalized `{ url, raw }` (or `{ data }` for metadata/waveform). Keep existing `generateSeedanceClip`, `stitchClipsWithAudio`, `composeWithSubtitles` exports but reimplement them on top of the new primitives so callers don't break.
 
-4. **Validate the full flow for the affected modes**
-   - Re-test queueing and running generation for the root Studio flow
-   - Confirm `remote_render` items no longer get stored as `stock`
-   - Confirm the first due item advances out of `pending` when Generate due is clicked
+We will keep using the REST `fal.run` sync endpoint (already works in Deno). We will NOT pull in `@fal-ai/client` — the snippets in the user message are reference for the input shapes, not a runtime requirement; the npm client doesn't run cleanly in Supabase edge runtime.
 
-## Technical details
-- Files already implicated:
-  - `src/App.tsx`
-  - `src/lib/fanagent/types.ts`
-  - `supabase/functions/create-generation-batch/index.ts`
-  - `supabase/functions/fanpage-campaign/index.ts`
-  - `supabase/functions/fanpage-generate-due/index.ts`
-  - `supabase/functions/process-generation-due/index.ts`
-  - `supabase/functions/_shared/generation.ts`
-- Specific defect found during investigation:
-  - `src/App.tsx` uses `SourceMode = "gmi_seedance" | "remote_render"`
-  - `create-generation-batch` currently normalizes only `seedance` / `mixed` / `stock`, so `gmi_seedance` and `remote_render` are being misclassified
-- Current database evidence:
-  - recent `generation_batches` are being created successfully
-  - recent `generation_items` remain `pending`
-  - recent items are being stored with `provider = stock`, which is inconsistent with the UI mode shown in the screenshot
+## Wire into pipeline
 
-If you approve, I’ll implement the contract fix first, then verify the worker handoff and error reporting.
+- `stitch-segments/index.ts`:
+  - When there's a single segment URL and no markers and no audio overlay needed → keep passthrough.
+  - When stitching pure video clips with no audio mix → use `mergeVideos`.
+  - When overlaying the batch audio on the stitched video → call `mergeVideos` first, then `mergeAudioVideo`, instead of building a `compose` timeline. Fall back to `compose` only when per-segment durations differ from the source clip lengths (marker-driven trims).
+- `render-karaoke/index.ts`: keep `composeWithSubtitles` (compose is the only endpoint that supports a subtitles track).
+- New optional helper: after `render-karaoke` succeeds, call `extractFrame(finalUrl, "middle")` and store the PNG as the post thumbnail on `media_assets.metadata.thumbnail_url`. (Behind a flag; don't block the pipeline if it fails.)
+
+## Files to touch
+
+- `supabase/functions/_shared/fal.ts` — add the 8 helpers, refactor existing exports to reuse them.
+- `supabase/functions/stitch-segments/index.ts` — branch to `mergeVideos` + `mergeAudioVideo` when possible.
+- `supabase/functions/render-karaoke/index.ts` — optional thumbnail via `extractFrame`.
+
+No DB schema, secrets, or frontend changes. `FAL_KEY` is already configured.
+
+## Validation
+
+1. Deploy `stitch-segments`, `render-karaoke`.
+2. Run `pick-stock-clip` → `stitch-segments` → `render-karaoke` for one stuck `generation_items` row via `curl_edge_functions` and confirm:
+   - `stitch-segments` returns a playable URL.
+   - `render-karaoke` produces a `rendered_video` `media_asset` and the item moves to `ready`.
+3. Tail `edge_function_logs` for either function to confirm the new fal calls succeed (HTTP 200, non-empty `video_url`).
