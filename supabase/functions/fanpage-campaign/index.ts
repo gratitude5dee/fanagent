@@ -60,11 +60,18 @@ Deno.serve(async (request) => {
           .select("*")
           .order("scheduled_at", { ascending: true })
           .limit(200);
+        const lyricTemplates = await supabase
+          .from("kanvas_lyric_templates")
+          .select("id,title,status,total_duration_ms,selection_duration_ms,updated_at")
+          .is("archived_at", null)
+          .order("updated_at", { ascending: false })
+          .limit(100);
         return jsonResponse({
           account: account.data ?? null,
           batches: batches.data ?? [],
           items: items.data ?? [],
           posts: posts.data ?? [],
+          lyricTemplates: lyricTemplates.data ?? [],
         });
       }
 
@@ -143,6 +150,30 @@ Deno.serve(async (request) => {
           })
           .eq("id", itemId);
         if (r.error) throw r.error;
+        return jsonResponse({ ok: true });
+      }
+
+      case "setLyricTemplate": {
+        const lyricTemplateId = (body.lyricTemplateId as string | null) ?? null;
+        const itemId = body.itemId as string | undefined;
+        const batchId = body.batchId as string | undefined;
+        if (itemId) {
+          const r = await supabase.from("generation_items")
+            .update({ lyric_template_id: lyricTemplateId })
+            .eq("id", itemId);
+          if (r.error) throw r.error;
+        } else if (batchId) {
+          const rb = await supabase.from("generation_batches")
+            .update({ lyric_template_id: lyricTemplateId })
+            .eq("id", batchId);
+          if (rb.error) throw rb.error;
+          const ri = await supabase.from("generation_items")
+            .update({ lyric_template_id: lyricTemplateId })
+            .eq("batch_id", batchId);
+          if (ri.error) throw ri.error;
+        } else {
+          throw new Error("itemId or batchId required");
+        }
         return jsonResponse({ ok: true });
       }
 
