@@ -3,9 +3,11 @@
 // top-level mode in App.tsx.
 
 import { useEffect, useMemo, useState } from "react";
-import { CalendarClock, CheckCircle2, Info, Loader2, PauseCircle, PlayCircle, PlugZap, RefreshCcw, RotateCcw, Sparkles, UploadCloud } from "lucide-react";
+import { Link } from "react-router-dom";
+import { CalendarClock, CheckCircle2, FileMusic, Info, Loader2, PauseCircle, Plus, PlayCircle, PlugZap, RefreshCcw, RotateCcw, Sparkles, UploadCloud } from "lucide-react";
 import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
 import AudioTrimmer from "@/components/autopilot/AudioTrimmer";
+import type { LyricTemplateSummary } from "@/lib/lyrics/types";
 
 type Account = {
   id: string;
@@ -24,6 +26,7 @@ type Batch = {
   cadence_minutes: number;
   paused_at: string | null;
   created_at: string;
+  lyric_template_id?: string | null;
 };
 
 type Item = {
@@ -34,6 +37,7 @@ type Item = {
   stock_clip_url: string | null;
   render_provider: string | null;
   error_message: string | null;
+  lyric_template_id?: string | null;
 };
 
 type Post = {
@@ -51,6 +55,7 @@ type CampaignList = {
   batches: Batch[];
   items: Item[];
   posts: Post[];
+  lyricTemplates?: LyricTemplateSummary[];
 };
 
 type SourceMode = "stock" | "seedance" | "mixed";
