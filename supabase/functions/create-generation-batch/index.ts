@@ -45,9 +45,12 @@ function validatePayload(body: CreateBatchRequest) {
   const allowedDurations = [15, 30, 45, 60, 75, 90];
   const requestedDuration = Math.floor(Number(body.durationSeconds ?? 15));
   const durationSeconds = allowedDurations.includes(requestedDuration) ? requestedDuration : 15;
-  const sourceMode: "stock" | "seedance" | "mixed" =
-    body.sourceMode === "seedance" ? "seedance" :
-    body.sourceMode === "mixed" ? "mixed" : "stock";
+  const allowedModes = ["stock", "seedance", "mixed", "gmi_seedance", "remote_render"] as const;
+  const sourceMode: typeof allowedModes[number] = (allowedModes as readonly string[]).includes(
+    body.sourceMode as string,
+  )
+    ? (body.sourceMode as typeof allowedModes[number])
+    : "stock";
   const audioMimeType = body.audioMimeType || "audio/mpeg";
   const startAt = new Date(body.startAt ?? Date.now() + 30 * 60_000);
 
@@ -130,6 +133,10 @@ Deno.serve(async (request) => {
     );
     const modelId = input.sourceMode === "seedance"
       ? optionalEnv("SEEDANCE_MODEL_ID") ?? "fal-ai/bytedance/seedance/v1/lite/text-to-video"
+      : input.sourceMode === "gmi_seedance"
+      ? optionalEnv("GMI_SEEDANCE_MODEL_ID") ?? "Seedance-2.0"
+      : input.sourceMode === "remote_render"
+      ? "remote-render"
       : "stock-pipeline";
 
     const items = schedule.map((scheduledAt, index) => {

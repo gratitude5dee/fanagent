@@ -61,7 +61,7 @@ export default function App() {
   const [accountId, setAccountId] = useState("");
   const [audio, setAudio] = useState<File | null>(null);
   const [count, setCount] = useState(6);
-  const [sourceMode, setSourceMode] = useState<SourceMode>("gmi_seedance");
+  const [sourceMode, setSourceMode] = useState<SourceMode>("stock");
   const [prompt, setPrompt] = useState("cinematic fan edit synced to the uploaded audio");
   const [startAt, setStartAt] = useState(() =>
     toLocalInputValue(new Date(Date.now() + 30 * 60_000)),
@@ -296,8 +296,10 @@ export default function App() {
                   value={sourceMode}
                   onChange={(event) => setSourceMode(event.target.value as SourceMode)}
                 >
+                  <option value="stock">Stock footage (fal pipeline)</option>
+                  <option value="mixed">Mixed: stock + Seedance (fal)</option>
+                  <option value="seedance">Seedance via fal.ai</option>
                   <option value="gmi_seedance">GMI Seedance 2</option>
-                  <option value="remote_render">Remote render API</option>
                 </select>
               </label>
             </div>

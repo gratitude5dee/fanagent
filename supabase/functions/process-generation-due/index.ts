@@ -37,9 +37,14 @@ type MediaAsset = {
 const gmiBase = optionalEnv("GMI_API_BASE") ??
   "https://console.gmicloud.ai/api/v1/ie/requestqueue/apikey";
 
+function gmiKey(): string {
+  return optionalEnv("GMI_API_KEY") ?? optionalEnv("GMI_CLOUD_API_KEY") ??
+    (() => { throw new Error("GMI_API_KEY or GMI_CLOUD_API_KEY must be set"); })();
+}
+
 function gmiHeaders(): HeadersInit {
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${requireEnv("GMI_API_KEY")}`,
+    Authorization: `Bearer ${gmiKey()}`,
     "Content-Type": "application/json",
   };
   const orgId = optionalEnv("GMI_ORG_ID");
