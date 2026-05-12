@@ -151,7 +151,7 @@ Deno.serve(async (request) => {
     const supabase = getSupabaseAdmin();
     const due = await supabase.from("generation_items")
       .select("id, generation_batches!inner(paused_at)")
-      .in("status", ["pending", "planning", "generating", "picking_stock"])
+      .in("status", ["pending", "planning", "generating", "picking_stock", "stitched", "transcribing"])
       .lte("scheduled_at", new Date(Date.now() + 60 * 60_000).toISOString())
       .is("generation_batches.paused_at", null)
       .order("scheduled_at", { ascending: true })
