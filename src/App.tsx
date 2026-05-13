@@ -11,11 +11,11 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { Link } from "react-router-dom";
+import AutopilotPanel from "@/components/AutopilotPanel";
 import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
 import type { Account, DashboardPost, GenerationBatch, SourceMode } from "@/lib/fanagent/types";
 
 const FanAgentCalendar = lazy(() => import("@/components/FanAgentCalendar"));
-const AutopilotPanel = lazy(() => import("@/components/AutopilotPanel"));
 
 const privacyLevels = [
   "SELF_ONLY",
@@ -257,9 +257,7 @@ export default function App() {
       {message ? <div className="banner">{message}</div> : null}
 
       {mode === "autopilot" ? (
-        <Suspense fallback={<div className="calendar-loading">Loading autopilot…</div>}>
-          <AutopilotPanel />
-        </Suspense>
+        <AutopilotPanel />
       ) : (
         <section className="dashboard-grid">
           <aside className="panel create-panel">

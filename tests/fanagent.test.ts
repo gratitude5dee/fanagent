@@ -220,6 +220,16 @@ describe("generation reliability fixes", () => {
       ),
     ).toBe(true);
   });
+
+  it("pins Vite dev React chunks to one runtime identity", () => {
+    const app = readFileSync("src/App.tsx", "utf8");
+    const viteConfig = readFileSync("vite.config.ts", "utf8");
+
+    expect(app).toContain('import AutopilotPanel from "@/components/AutopilotPanel"');
+    expect(app).not.toContain('lazy(() => import("@/components/AutopilotPanel"))');
+    expect(viteConfig).toContain('dedupe: ["react", "react-dom"]');
+    expect(viteConfig).toContain('"react-dom/client"');
+  });
 });
 
 describe("GMI parsing", () => {
