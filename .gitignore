@@ -16,6 +16,9 @@ supabase/.temp/
 .tanstack/**
 .nitro
 *.local
+.env
+.env.*
+!.env.example
 
 # Wrangler / Cloudflare
 .wrangler/

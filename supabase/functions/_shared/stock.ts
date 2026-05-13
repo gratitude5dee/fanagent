@@ -26,6 +26,8 @@ export type StockSettings = {
   minDurationSec?: number;
   maxDurationSec?: number;
   perProviderLimit?: number;
+  avoidReuseWithinBatch?: boolean;
+  allowReuseWhenExhausted?: boolean;
 };
 
 const DEFAULT_TARGET_DURATION = 15;
@@ -44,6 +46,8 @@ function normalizeSettings(settings?: StockSettings): Required<StockSettings> {
     minDurationSec: Math.max(1, Number(settings?.minDurationSec ?? DEFAULT_TARGET_DURATION - 1)),
     maxDurationSec: Math.max(1, Number(settings?.maxDurationSec ?? 120)),
     perProviderLimit: Math.max(3, Math.min(Number(settings?.perProviderLimit ?? 20), 80)),
+    avoidReuseWithinBatch: settings?.avoidReuseWithinBatch ?? true,
+    allowReuseWhenExhausted: settings?.allowReuseWhenExhausted ?? true,
   };
 }
 
@@ -124,7 +128,9 @@ async function searchPexels(
   return (data.videos ?? [])
     .map((v) => {
       const files = v.video_files
-        .filter((f) => f.file_type === "video/mp4" && (!settings.portraitOnly || f.height > f.width))
+        .filter(
+          (f) => f.file_type === "video/mp4" && (!settings.portraitOnly || f.height > f.width),
+        )
         .sort((a, b) => {
           const aDelta = Math.abs((a.height ?? 0) - 1280);
           const bDelta = Math.abs((b.height ?? 0) - 1280);
@@ -169,9 +175,7 @@ async function searchPixabay(
   };
   return (data.hits ?? [])
     .map((v) => {
-      const ordered = ["medium", "small", "tiny", "large"]
-        .map((k) => v.videos[k])
-        .filter(Boolean);
+      const ordered = ["medium", "small", "tiny", "large"].map((k) => v.videos[k]).filter(Boolean);
       const variants = ordered.filter((f) => !settings.portraitOnly || f.height > f.width);
       const best = (variants.length ? variants : ordered).sort((a, b) => b.height - a.height)[0];
       return {

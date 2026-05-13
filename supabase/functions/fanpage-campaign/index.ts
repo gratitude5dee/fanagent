@@ -14,6 +14,7 @@
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { errorMessage, serializeError } from "../_shared/errors.ts";
 import { optionalEnv } from "../_shared/env.ts";
+import { createRegenerationReset } from "../_shared/generation.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
 async function callChild(name: string, body: unknown): Promise<Response> {
@@ -261,20 +262,26 @@ Deno.serve(async (request) => {
       case "regenerate": {
         const itemId = body.itemId as string | undefined;
         if (!itemId) throw new Error("itemId required");
+        const item = await supabase
+          .from("generation_items")
+          .select("post_id")
+          .eq("id", itemId)
+          .maybeSingle();
+        if (item.error) throw item.error;
+        if (item.data?.post_id) {
+          await supabase
+            .from("posts")
+            .update({
+              status: "skipped",
+              publish_status: "regenerated",
+              generation_item_id: null,
+            })
+            .eq("id", item.data.post_id)
+            .neq("status", "posted");
+        }
         const r = await supabase
           .from("generation_items")
-          .update({
-            status: "pending",
-            segments: null,
-            stock_clip_url: null,
-            render_job_id: null,
-            final_asset_id: null,
-            provider_request_id: null,
-            error_message: null,
-            attempt_count: 0,
-            locked_at: null,
-            locked_by: null,
-          })
+          .update({ ...createRegenerationReset(), attempt_count: 0 })
           .eq("id", itemId);
         if (r.error) throw r.error;
         return jsonResponse({ ok: true });

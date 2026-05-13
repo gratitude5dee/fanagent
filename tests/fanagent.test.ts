@@ -13,6 +13,15 @@ import {
   isTikTokPrivacyLevelAllowed,
   parseTikTokStatusResponse,
 } from "../src/lib/fanagent/tiktok";
+import {
+  buildBatchSettings,
+  buildGenerationItemInputPayload,
+  collectUsedStockKeys,
+  createRegenerationReset,
+  createSegmentVisualPlan,
+  normalizeClipSelection,
+  selectStockCandidate,
+} from "../supabase/functions/_shared/generation.ts";
 
 describe("schedule generation", () => {
   it("builds bounded schedules from a start date and cadence", () => {
@@ -72,6 +81,122 @@ describe("prompt generation", () => {
 
     expect(plan.prompt).toContain("90 seconds");
     expect(plan.videoPrompt.duration_seconds).toBe(90);
+  });
+});
+
+describe("visual diversity planning", () => {
+  it("prefers unused stock candidates, then marks reuse after inventory is exhausted", () => {
+    const candidates = [
+      {
+        provider: "pexels",
+        externalId: "clip-a",
+        url: "https://cdn.example.com/a.mp4",
+        score: 0.99,
+      },
+      {
+        provider: "pixabay",
+        externalId: "clip-b",
+        url: "https://cdn.example.com/b.mp4",
+        score: 0.9,
+      },
+    ];
+    const used = collectUsedStockKeys([
+      {
+        segments: [
+          {
+            source: "stock",
+            provider: "pexels",
+            externalId: "clip-a",
+            url: "https://cdn.example.com/a.mp4",
+          },
+        ],
+      },
+    ]);
+
+    const firstPick = selectStockCandidate(candidates, used);
+    expect(firstPick).toMatchObject({
+      candidate: { externalId: "clip-b" },
+      reused: false,
+    });
+
+    used.add("pixabay:clip-b");
+    used.add("https://cdn.example.com/b.mp4");
+    const exhaustedPick = selectStockCandidate(candidates, used);
+    expect(exhaustedPick).toMatchObject({
+      candidate: { externalId: "clip-a" },
+      reused: true,
+    });
+  });
+
+  it("varies stock queries and Seedance prompts across items with the same base prompt", () => {
+    const plans = Array.from({ length: 12 }, (_, index) =>
+      createSegmentVisualPlan({
+        basePrompt: "stage lights and a packed venue",
+        itemIndex: index,
+        segmentIndex: 0,
+        transcriptContext: "we go higher every night",
+      }),
+    );
+
+    expect(new Set(plans.map((plan) => plan.query)).size).toBe(plans.length);
+    expect(new Set(plans.map((plan) => plan.prompt)).size).toBe(plans.length);
+    expect(plans[0].prompt).toContain("post 1, segment 1");
+    expect(plans[1].prompt).toContain("post 2, segment 1");
+  });
+
+  it("builds a clean regeneration reset for stale visual fields", () => {
+    const reset = createRegenerationReset("2026-05-13T12:00:00.000Z");
+
+    expect(reset).toMatchObject({
+      status: "pending",
+      segments: null,
+      stock_clip_url: null,
+      final_asset_id: null,
+      render_provider: null,
+      post_id: null,
+      provider_request_id: null,
+      error_message: null,
+      stage_events: [],
+      updated_at: "2026-05-13T12:00:00.000Z",
+    });
+  });
+
+  it("carries selected audio clip metadata into batch settings and item payloads", () => {
+    const clipSelection = normalizeClipSelection(
+      {
+        startSec: 4.3219,
+        endSec: 19.789,
+        durationSec: 15.467,
+        originalFileName: "hook.wav",
+      },
+      15,
+    );
+
+    const settings = buildBatchSettings({
+      stockSettings: { avoidReuseWithinBatch: true },
+      seedanceSettings: { resolution: "720p" },
+      clipSelection,
+    });
+    const payload = buildGenerationItemInputPayload({
+      sourceMode: "stock",
+      promptPlan: { prompt: "vertical edit" },
+      audioAssetId: "audio-asset-1",
+      durationSeconds: 15,
+      stockSettings: { allowReuseWhenExhausted: true },
+      seedanceSettings: {},
+      publishDefaults: { privacyLevel: "SELF_ONLY" },
+      clipSelection,
+    });
+
+    expect(clipSelection).toEqual({
+      startSec: 4.322,
+      endSec: 19.789,
+      durationSec: 15.467,
+      originalFileName: "hook.wav",
+    });
+    expect(settings.clipSelection).toEqual(clipSelection);
+    expect(payload.clip_selection).toEqual(clipSelection);
+    expect(payload.audio_asset_id).toBe("audio-asset-1");
   });
 });
 

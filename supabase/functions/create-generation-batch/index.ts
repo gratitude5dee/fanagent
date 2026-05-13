@@ -2,9 +2,12 @@ import { createMediaAssetFromBytes, decodeBase64 } from "../_shared/assets.ts";
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { optionalEnv } from "../_shared/env.ts";
 import {
+  buildBatchSettings,
+  buildGenerationItemInputPayload,
   buildSchedule,
   createPromptPlan,
   normalizeSourceMode,
+  normalizeClipSelection,
   type SourceMode,
 } from "../_shared/generation.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
@@ -22,6 +25,7 @@ type CreateBatchRequest = {
   timezone?: string;
   durationSeconds?: number;
   lyricTemplateId?: string | null;
+  clipSelection?: unknown;
   stockSettings?: Record<string, unknown>;
   seedanceSettings?: Record<string, unknown>;
   publishDefaults?: Record<string, unknown>;
@@ -52,6 +56,11 @@ function validatePayload(body: CreateBatchRequest) {
   const sourceMode = normalizeSourceMode(body.sourceMode);
   const audioMimeType = body.audioMimeType || "audio/mpeg";
   const startAt = new Date(body.startAt ?? Date.now() + 30 * 60_000);
+  const clipSelection = normalizeClipSelection(
+    body.clipSelection,
+    durationSeconds,
+    body.audioFileName,
+  );
 
   if (!body.accountId) throw new Error("accountId is required.");
   if (!body.audioBase64) throw new Error("audioBase64 is required.");
@@ -75,6 +84,7 @@ function validatePayload(body: CreateBatchRequest) {
     timezone: body.timezone || "America/Los_Angeles",
     durationSeconds,
     lyricTemplateId: body.lyricTemplateId ?? null,
+    clipSelection,
     stockSettings: body.stockSettings ?? {},
     seedanceSettings: body.seedanceSettings ?? {},
     publishDefaults: {
@@ -111,6 +121,7 @@ Deno.serve(async (request) => {
       metadata: {
         original_name: input.audioFileName,
         uploaded_from: "fanagent-react",
+        ...(input.clipSelection ? { clip_selection: input.clipSelection } : {}),
       },
     });
 
@@ -127,10 +138,11 @@ Deno.serve(async (request) => {
         status: "pending",
         duration_seconds: input.durationSeconds,
         lyric_template_id: input.lyricTemplateId,
-        settings: {
-          stock: input.stockSettings,
-          seedance: input.seedanceSettings,
-        },
+        settings: buildBatchSettings({
+          stockSettings: input.stockSettings,
+          seedanceSettings: input.seedanceSettings,
+          clipSelection: input.clipSelection,
+        }),
         publish_defaults: input.publishDefaults,
       })
       .select("*")
@@ -162,15 +174,16 @@ Deno.serve(async (request) => {
         provider: input.sourceMode,
         model_id: modelId,
         prompt: promptPlan.prompt,
-        input_payload: {
-          source_mode: input.sourceMode,
-          prompt_plan: promptPlan,
-          audio_asset_id: audioAsset.id,
-          duration_seconds: input.durationSeconds,
-          stock_settings: input.stockSettings,
-          seedance_settings: input.seedanceSettings,
-          publish_defaults: input.publishDefaults,
-        },
+        input_payload: buildGenerationItemInputPayload({
+          sourceMode: input.sourceMode,
+          promptPlan,
+          audioAssetId: audioAsset.id,
+          durationSeconds: input.durationSeconds,
+          stockSettings: input.stockSettings,
+          seedanceSettings: input.seedanceSettings,
+          publishDefaults: input.publishDefaults,
+          clipSelection: input.clipSelection,
+        }),
         scheduled_at: scheduledAt.toISOString(),
         duration_seconds: input.durationSeconds,
         lyric_template_id: input.lyricTemplateId,

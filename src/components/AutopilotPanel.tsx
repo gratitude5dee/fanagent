@@ -50,6 +50,7 @@ type Item = {
   scheduled_at: string;
   provider?: string | null;
   prompt?: string | null;
+  segments?: Segment[] | null;
   stock_clip_url: string | null;
   render_provider: string | null;
   error_message: string | null;
@@ -118,6 +119,15 @@ type Diagnostics = {
 type SourceMode = "stock" | "seedance" | "mixed" | "gmi_seedance";
 const DURATIONS = [15, 30, 45, 60, 75, 90] as const;
 type Duration = (typeof DURATIONS)[number];
+type Segment = {
+  source?: string | null;
+  url?: string | null;
+  provider?: string | null;
+  externalId?: string | null;
+  query?: string | null;
+  durationSec?: number | null;
+  reused?: boolean | null;
+};
 
 async function blobToBase64(blob: Blob): Promise<string> {
   const buf = await blob.arrayBuffer();
@@ -139,6 +149,11 @@ function tiktokConnectUrl(accountId: string): string {
   return `${SUPABASE_URL}/functions/v1/tiktok-oauth-callback?action=connect&accountId=${encodeURIComponent(accountId)}`;
 }
 
+function toLocalInputValue(date: Date): string {
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
 function statusTone(status: string): string {
   if (["ready", "complete", "posted"].includes(status)) return "good";
   if (["failed", "skipped"].includes(status)) return "bad";
@@ -148,6 +163,18 @@ function statusTone(status: string): string {
   return "idle";
 }
 
+function summarizeSegments(
+  segments: Segment[] | null | undefined,
+  fallback?: string | null,
+): string {
+  if (!segments?.length) return fallback || "visuals pending";
+  const labels = segments.map((segment) => {
+    const source = segment.source || "visual";
+    return segment.provider ? `${source}:${segment.provider}` : source;
+  });
+  return Array.from(new Set(labels)).join(" + ");
+}
+
 export default function AutopilotPanel() {
   const [data, setData] = useState<CampaignList | null>(null);
   const [audioFile, setAudioFile] = useState<File | null>(null);
@@ -155,10 +182,17 @@ export default function AutopilotPanel() {
     blob: Blob;
     durationSec: number;
     name: string;
+    startSec: number;
+    endSec: number;
+    originalFileName: string;
   } | null>(null);
   const [duration, setDuration] = useState<Duration>(15);
   const [sourceMode, setSourceMode] = useState<SourceMode>("stock");
   const [postCount, setPostCount] = useState(14);
+  const [startAt, setStartAt] = useState(() =>
+    toLocalInputValue(new Date(Date.now() + 15 * 60_000)),
+  );
+  const [cadenceMinutes, setCadenceMinutes] = useState(1440);
   const [prompt, setPrompt] = useState("aesthetic vertical cinematic visuals");
   const [stockProviders, setStockProviders] = useState({
     library: true,
@@ -170,6 +204,8 @@ export default function AutopilotPanel() {
   const [stockCategory, setStockCategory] = useState("");
   const [stockMood, setStockMood] = useState("");
   const [stockPortraitOnly, setStockPortraitOnly] = useState(true);
+  const [stockAvoidReuse, setStockAvoidReuse] = useState(true);
+  const [stockAllowReuse, setStockAllowReuse] = useState(true);
   const [seedanceResolution, setSeedanceResolution] = useState<"480p" | "720p" | "1080p">("720p");
   const [publishPrivacy, setPublishPrivacy] = useState("SELF_ONLY");
   const [busy, setBusy] = useState(false);
@@ -239,16 +275,23 @@ export default function AutopilotPanel() {
     if (!trimmedAudio) throw new Error("Trim your audio clip first.");
     if (!account) throw new Error("No account.");
     if (!schemaReady) throw new Error("Database queue schema is not ready.");
-    const startAt = new Date(Date.now() + 15 * 60_000).toISOString();
+    const scheduledStart = new Date(startAt);
+    if (!Number.isFinite(scheduledStart.getTime())) throw new Error("Choose a valid start time.");
     await callCampaign("create", {
       accountId: account.id,
       audioBase64: await blobToBase64(trimmedAudio.blob),
       audioMimeType: "audio/mpeg",
       audioFileName: trimmedAudio.name.replace(/\.[^.]+$/, "") + ".mp3",
+      clipSelection: {
+        startSec: trimmedAudio.startSec,
+        endSec: trimmedAudio.endSec,
+        durationSec: trimmedAudio.durationSec,
+        originalFileName: trimmedAudio.originalFileName,
+      },
       sourceMode,
       durationSeconds: duration,
       postCount,
-      cadenceMinutes: 1440,
+      cadenceMinutes,
       prompt,
       stockSettings: {
         providers: Object.entries(stockProviders)
@@ -267,6 +310,8 @@ export default function AutopilotPanel() {
         portraitOnly: stockPortraitOnly,
         minDurationSec: Math.min(15, duration),
         maxDurationSec: Math.max(15, duration * 3),
+        avoidReuseWithinBatch: stockAvoidReuse,
+        allowReuseWhenExhausted: stockAllowReuse,
       },
       seedanceSettings: {
         resolution: seedanceResolution,
@@ -277,7 +322,7 @@ export default function AutopilotPanel() {
         disableStitch: true,
         disableComment: false,
       },
-      startAt,
+      startAt: scheduledStart.toISOString(),
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       lyricTemplateId: lyricTemplateId || null,
     });
@@ -518,7 +563,7 @@ export default function AutopilotPanel() {
             <section className="panel">
               <div className="panel-title">
                 <UploadCloud size={16} />
-                <h3>2. Upload audio + start daily campaign</h3>
+                <h3>2. Upload audio + schedule campaign</h3>
               </div>
               <form
                 className="stack"
@@ -544,14 +589,15 @@ export default function AutopilotPanel() {
                   <AudioTrimmer
                     file={audioFile}
                     maxDurationSec={duration}
-                    onTrimmed={(blob, durationSec) =>
-                      setTrimmedAudio({ blob, durationSec, name: audioFile.name })
+                    onTrimmed={(blob, selection) =>
+                      setTrimmedAudio({ blob, name: audioFile.name, ...selection })
                     }
                   />
                 ) : null}
                 {trimmedAudio ? (
                   <div className="banner">
-                    ✓ Trimmed clip ready ({trimmedAudio.durationSec.toFixed(1)}s).
+                    Trimmed clip ready ({trimmedAudio.startSec.toFixed(1)}s to{" "}
+                    {trimmedAudio.endSec.toFixed(1)}s, {trimmedAudio.durationSec.toFixed(1)}s).
                   </div>
                 ) : null}
                 {!schemaReady ? (
@@ -613,6 +659,26 @@ export default function AutopilotPanel() {
                     />
                   </label>
                 </div>
+                <div className="split schedule-split">
+                  <label>
+                    First post
+                    <input
+                      type="datetime-local"
+                      value={startAt}
+                      onChange={(e) => setStartAt(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Cadence min
+                    <input
+                      type="number"
+                      min={5}
+                      max={10080}
+                      value={cadenceMinutes}
+                      onChange={(e) => setCadenceMinutes(Number(e.target.value))}
+                    />
+                  </label>
+                </div>
                 <section className="panel subtle-panel">
                   <div className="panel-title">
                     <Info size={14} />
@@ -641,6 +707,22 @@ export default function AutopilotPanel() {
                         onChange={(e) => setStockPortraitOnly(e.target.checked)}
                       />{" "}
                       portrait only
+                    </label>
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={stockAvoidReuse}
+                        onChange={(e) => setStockAvoidReuse(e.target.checked)}
+                      />{" "}
+                      avoid repeats
+                    </label>
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={stockAllowReuse}
+                        onChange={(e) => setStockAllowReuse(e.target.checked)}
+                      />{" "}
+                      reuse if exhausted
                     </label>
                   </div>
                   <div className="split">
@@ -743,7 +825,7 @@ export default function AutopilotPanel() {
                   type="submit"
                 >
                   {busy ? <Loader2 className="spin" size={16} /> : <CalendarClock size={16} />}{" "}
-                  Launch daily campaign
+                  Launch campaign
                 </button>
               </form>
             </section>
@@ -818,6 +900,12 @@ export default function AutopilotPanel() {
                   const itemTpl = item.lyric_template_id
                     ? templateById.get(item.lyric_template_id)
                     : null;
+                  const segments = Array.isArray(item.segments) ? item.segments : [];
+                  const reusedStock = segments.some(
+                    (segment) => segment.source === "stock" && segment.reused,
+                  );
+                  const previewUrl =
+                    post?.video_url ?? item.stock_clip_url ?? segments.find((s) => s.url)?.url;
                   return (
                     <div className="batch-row" key={item.id}>
                       <span className={`dot ${statusTone(item.status)}`} />
@@ -828,7 +916,27 @@ export default function AutopilotPanel() {
                           {item.render_provider ? ` · ${item.render_provider}` : ""}
                           {post ? ` · post ${post.status}` : ""}
                         </span>
+                        <span>
+                          Visuals:{" "}
+                          {summarizeSegments(segments, item.provider ?? item.render_provider)}
+                        </span>
+                        {segments.length ? (
+                          <span>
+                            {segments
+                              .map((segment, index) => {
+                                const provider = segment.provider ?? segment.source ?? "visual";
+                                const reuse = segment.reused ? " reused" : "";
+                                return `${index + 1}:${provider}${reuse}`;
+                              })
+                              .join(" · ")}
+                          </span>
+                        ) : null}
                         {item.prompt ? <span>{item.prompt.slice(0, 120)}</span> : null}
+                        {reusedStock ? (
+                          <span className="status-pill warn" style={{ marginTop: 4 }}>
+                            reused stock
+                          </span>
+                        ) : null}
                         {itemTpl ? (
                           <span className="status-pill" style={{ marginTop: 4 }}>
                             <FileMusic size={12} /> {itemTpl.title}
@@ -849,10 +957,10 @@ export default function AutopilotPanel() {
                           </span>
                         ) : null}
                       </div>
-                      {item.stock_clip_url ? (
+                      {previewUrl ? (
                         <a
                           className="button ghost"
-                          href={item.stock_clip_url}
+                          href={previewUrl}
                           target="_blank"
                           rel="noreferrer"
                         >

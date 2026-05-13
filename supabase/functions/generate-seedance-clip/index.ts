@@ -10,6 +10,11 @@ type Segment = {
   source: "stock" | "seedance";
   url?: string;
   prompt?: string;
+  provider?: string | null;
+  externalId?: string | null;
+  query?: string | null;
+  durationSec?: number | null;
+  reused?: boolean | null;
 };
 
 Deno.serve(async (request) => {
@@ -36,7 +41,10 @@ Deno.serve(async (request) => {
     const prompt = seg.prompt ?? item.data.prompt ?? "cinematic vertical shot";
     const payload = (item.data.input_payload ?? {}) as Record<string, unknown>;
     const seedanceSettings = (payload.seedance_settings ?? {}) as Record<string, unknown>;
-    const durationSeconds = Math.min(15, Number(item.data.duration_seconds ?? 15));
+    const durationSeconds = Math.min(
+      15,
+      Number(seg.durationSec ?? item.data.duration_seconds ?? 15),
+    );
 
     const url = await generateSeedanceClip(prompt, {
       durationSeconds,

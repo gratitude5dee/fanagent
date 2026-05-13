@@ -11,7 +11,15 @@ import { trimAudio } from "@/lib/audio/ffmpeg";
 type Props = {
   file: File;
   maxDurationSec: number;
-  onTrimmed: (blob: Blob, durationSec: number) => void;
+  onTrimmed: (
+    blob: Blob,
+    selection: {
+      startSec: number;
+      endSec: number;
+      durationSec: number;
+      originalFileName: string;
+    },
+  ) => void;
 };
 
 function fmt(t: number): string {
@@ -73,7 +81,8 @@ export default function AudioTrimmer({ file, maxDurationSec, onTrimmed }: Props)
       setRegion({ start: 0, end });
 
       r.on("update", () => {
-        let { start, end: e } = r;
+        const { start } = r;
+        let { end: e } = r;
         if (e - start > maxDurationSec) {
           // Clamp by adjusting the handle that moved last; simplest: cap end.
           e = start + maxDurationSec;
@@ -133,7 +142,12 @@ export default function AudioTrimmer({ file, maxDurationSec, onTrimmed }: Props)
     setError(null);
     try {
       const blob = await trimAudio(file, region.start, region.end);
-      onTrimmed(blob, region.end - region.start);
+      onTrimmed(blob, {
+        startSec: region.start,
+        endSec: region.end,
+        durationSec: region.end - region.start,
+        originalFileName: file.name,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -152,7 +166,12 @@ export default function AudioTrimmer({ file, maxDurationSec, onTrimmed }: Props)
       <div className="audio-trimmer__card">
         <div ref={containerRef} className="audio-trimmer__wave" />
         <div className="audio-trimmer__controls">
-          <button type="button" className="button ghost" onClick={() => skip(-5)} aria-label="Back 5s">
+          <button
+            type="button"
+            className="button ghost"
+            onClick={() => skip(-5)}
+            aria-label="Back 5s"
+          >
             <ChevronsLeft size={18} />
           </button>
           <button
@@ -163,7 +182,12 @@ export default function AudioTrimmer({ file, maxDurationSec, onTrimmed }: Props)
           >
             {isPlaying ? <Pause size={18} /> : <Play size={18} />}
           </button>
-          <button type="button" className="button ghost" onClick={() => skip(5)} aria-label="Forward 5s">
+          <button
+            type="button"
+            className="button ghost"
+            onClick={() => skip(5)}
+            aria-label="Forward 5s"
+          >
             <ChevronsRight size={18} />
           </button>
           <span className="audio-trimmer__time">
@@ -173,8 +197,13 @@ export default function AudioTrimmer({ file, maxDurationSec, onTrimmed }: Props)
       </div>
       <div className="audio-trimmer__footer">
         <div>
-          Selected: <strong>{fmt(region.start)} → {fmt(region.end)}</strong>{" "}
-          <span className="muted">({selLen.toFixed(1)}s of {maxDurationSec}s)</span>
+          Selected:{" "}
+          <strong>
+            {fmt(region.start)} → {fmt(region.end)}
+          </strong>{" "}
+          <span className="muted">
+            ({selLen.toFixed(1)}s of {maxDurationSec}s)
+          </span>
         </div>
         <button
           type="button"
@@ -187,7 +216,8 @@ export default function AudioTrimmer({ file, maxDurationSec, onTrimmed }: Props)
       </div>
       {tooShort ? (
         <div className="banner warn">
-          Audio is only {duration.toFixed(1)}s — shorter than the {maxDurationSec}s post duration. Pick a longer file or a shorter post duration.
+          Audio is only {duration.toFixed(1)}s — shorter than the {maxDurationSec}s post duration.
+          Pick a longer file or a shorter post duration.
         </div>
       ) : null}
       {error ? <div className="banner bad">{error}</div> : null}

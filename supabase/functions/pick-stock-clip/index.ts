@@ -6,11 +6,61 @@
 //   - mixed/seedance with pending segments → "planning" (orchestrator dispatches seedance)
 
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
-import { normalizeSourceMode } from "../_shared/generation.ts";
+import {
+  collectUsedStockKeys,
+  createSegmentVisualPlan,
+  createStockSegment,
+  normalizeSourceMode,
+  selectStockCandidate,
+  stockIdentityKeys,
+} from "../_shared/generation.ts";
 import { cacheStockClip, searchStock, type StockSettings } from "../_shared/stock.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
-type Segment = { source: "stock" | "seedance"; url?: string; prompt?: string };
+type Segment = {
+  source: "stock" | "seedance";
+  url?: string;
+  prompt?: string;
+  provider?: string | null;
+  externalId?: string | null;
+  query?: string | null;
+  durationSec?: number | null;
+  reused?: boolean | null;
+};
+
+function transcriptText(value: unknown): string {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value !== "object") return "";
+  const transcript = value as Record<string, unknown>;
+  const words = Array.isArray(transcript.words) ? transcript.words : [];
+  if (words.length > 0) {
+    return words
+      .map((word) => {
+        if (typeof word === "string") return word;
+        if (!word || typeof word !== "object") return "";
+        const record = word as Record<string, unknown>;
+        return String(record.text ?? record.word ?? "");
+      })
+      .filter(Boolean)
+      .join(" ");
+  }
+  const blocks = Array.isArray(transcript.blocks) ? transcript.blocks : [];
+  return blocks
+    .map((block) => {
+      if (!block || typeof block !== "object") return "";
+      return String((block as Record<string, unknown>).text ?? "");
+    })
+    .filter(Boolean)
+    .join(" ");
+}
+
+function transcriptSnippet(value: unknown, itemIndex: number, segmentIndex: number): string {
+  const words = transcriptText(value).split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "";
+  const start = (itemIndex * 17 + segmentIndex * 11) % words.length;
+  return [...words, ...words].slice(start, start + 14).join(" ");
+}
 
 Deno.serve(async (request) => {
   const opt = handleOptions(request);
@@ -24,20 +74,21 @@ Deno.serve(async (request) => {
     const supabase = getSupabaseAdmin();
     const item = await supabase
       .from("generation_items")
-      .select("id,account_id,batch_id,prompt,input_payload,duration_seconds")
+      .select("id,account_id,batch_id,item_index,prompt,input_payload,duration_seconds")
       .eq("id", body.itemId)
       .single();
     if (item.error) throw item.error;
 
     const batch = await supabase
       .from("generation_batches")
-      .select("source_mode,duration_seconds,settings")
+      .select("source_mode,duration_seconds,settings,audio_asset_id")
       .eq("id", item.data.batch_id)
       .single();
     if (batch.error) throw batch.error;
 
     const total = Number(item.data.duration_seconds ?? batch.data.duration_seconds ?? 15);
     const segCount = Math.max(1, Math.ceil(total / 15));
+    const segmentDuration = Math.max(1, Math.min(15, Math.ceil(total / segCount)));
     const sourceMode = normalizeSourceMode(batch.data.source_mode);
 
     const prompt = item.data.prompt ?? "music aesthetic vertical";
@@ -49,6 +100,26 @@ Deno.serve(async (request) => {
       minDurationSec: Math.min(15, total),
     } as StockSettings;
 
+    const priorItems = await supabase
+      .from("generation_items")
+      .select("segments,stock_clip_url")
+      .eq("batch_id", item.data.batch_id)
+      .lt("item_index", item.data.item_index ?? 0)
+      .order("item_index", { ascending: true });
+    if (priorItems.error) throw priorItems.error;
+
+    const usedStockKeys = collectUsedStockKeys(priorItems.data ?? []);
+
+    const audio = batch.data.audio_asset_id
+      ? await supabase
+          .from("media_assets")
+          .select("transcript")
+          .eq("id", batch.data.audio_asset_id)
+          .maybeSingle()
+      : null;
+    if (audio?.error) throw audio.error;
+    const transcript = audio?.data?.transcript ?? null;
+
     // Decide source per segment.
     const sources: Array<"stock" | "seedance"> = Array.from({ length: segCount }, (_, i) => {
       if (sourceMode === "stock") return "stock";
@@ -57,31 +128,60 @@ Deno.serve(async (request) => {
       return i % 2 === 0 ? "stock" : "seedance";
     });
 
-    // Fill stock segments by ranking candidates and rotating through them.
-    let stockCandidates: Awaited<ReturnType<typeof searchStock>> = [];
-    if (sources.includes("stock")) {
-      stockCandidates = await searchStock({
-        accountId: item.data.account_id,
-        query: prompt,
-        settings: stockSettings,
-      });
-      if (stockCandidates.length === 0 && sourceMode === "stock") {
-        throw new Error(`No stock candidates for prompt: ${prompt}`);
-      }
-    }
-
     const segments: Segment[] = [];
-    let stockIdx = 0;
-    for (const src of sources) {
-      if (src === "stock" && stockCandidates.length > 0) {
-        const pick = stockCandidates[stockIdx % stockCandidates.length];
-        stockIdx += 1;
-        const url = await cacheStockClip(pick);
-        segments.push({ source: "stock", url });
-      } else {
-        // Seedance segment — write prompt, leave url empty.
-        segments.push({ source: "seedance", prompt });
+    for (let segmentIndex = 0; segmentIndex < sources.length; segmentIndex += 1) {
+      const src = sources[segmentIndex];
+      const visualPlan = createSegmentVisualPlan({
+        basePrompt: prompt,
+        itemIndex: Number(item.data.item_index ?? 0),
+        segmentIndex,
+        totalSegments: segCount,
+        durationSeconds: segmentDuration,
+        transcriptContext: transcriptSnippet(
+          transcript,
+          Number(item.data.item_index ?? 0),
+          segmentIndex,
+        ),
+      });
+
+      if (src === "stock") {
+        const stockCandidates = await searchStock({
+          accountId: item.data.account_id,
+          query: visualPlan.query,
+          settings: stockSettings,
+        });
+        const selected = selectStockCandidate(stockCandidates, usedStockKeys, {
+          avoidReuseWithinBatch: stockSettings.avoidReuseWithinBatch !== false,
+          allowReuseWhenExhausted: stockSettings.allowReuseWhenExhausted !== false,
+        });
+
+        if (selected) {
+          const url = await cacheStockClip(selected.candidate);
+          segments.push(
+            createStockSegment({
+              clip: selected.candidate,
+              url,
+              query: visualPlan.query,
+              reused: selected.reused,
+            }) as Segment,
+          );
+          for (const key of stockIdentityKeys(selected.candidate)) usedStockKeys.add(key);
+          usedStockKeys.add(url);
+          continue;
+        }
+
+        if (sourceMode === "stock") {
+          throw new Error(`No stock candidates for prompt: ${visualPlan.query}`);
+        }
       }
+
+      segments.push({
+        source: "seedance",
+        prompt: visualPlan.prompt,
+        query: visualPlan.query,
+        durationSec: segmentDuration,
+        reused: false,
+      });
     }
 
     const allFilled = segments.every((s) => !!s.url);
