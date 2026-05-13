@@ -39,6 +39,11 @@ function pickUrl(out: any): string | undefined {
   );
 }
 
+export function isFalIdleTimeout(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(504|IDLE_TIMEOUT|idle timeout|timeout limit)\b/i.test(message);
+}
+
 // ---------- ffmpeg-api primitives ----------
 
 export async function mergeVideos(videoUrls: string[]): Promise<{ url: string; raw: any }> {
@@ -155,6 +160,11 @@ export async function stitchClipsWithAudio(input: {
   const { clipUrls, audioUrl, segmentSeconds, totalSeconds, forceCompose } = input;
   const expectedTotal = segmentSeconds * clipUrls.length;
   const evenSplit = Math.abs(expectedTotal - totalSeconds) <= 1;
+
+  if (!forceCompose && clipUrls.length === 1) {
+    const out = await mergeAudioVideo(clipUrls[0], audioUrl);
+    return out.url;
+  }
 
   if (!forceCompose && evenSplit) {
     try {

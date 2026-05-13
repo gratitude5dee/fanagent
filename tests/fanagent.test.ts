@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { findGmiVideoUrl } from "../src/lib/fanagent/gmi";
 import { createPromptPlan } from "../src/lib/fanagent/prompt";
@@ -13,6 +14,7 @@ import {
   isTikTokPrivacyLevelAllowed,
   parseTikTokStatusResponse,
 } from "../src/lib/fanagent/tiktok";
+import { isFalIdleTimeout } from "../supabase/functions/_shared/fal.ts";
 import {
   buildBatchSettings,
   buildGenerationItemInputPayload,
@@ -197,6 +199,26 @@ describe("visual diversity planning", () => {
     expect(settings.clipSelection).toEqual(clipSelection);
     expect(payload.clip_selection).toEqual(clipSelection);
     expect(payload.audio_asset_id).toBe("audio-asset-1");
+  });
+});
+
+describe("generation reliability fixes", () => {
+  it("keeps browser audio trimming off ffmpeg.wasm core imports", () => {
+    const source = readFileSync("src/lib/audio/ffmpeg.ts", "utf8");
+
+    expect(source).not.toContain("@ffmpeg/ffmpeg");
+    expect(source).not.toContain("ffmpeg-core.js");
+    expect(source).toContain("audio/wav");
+  });
+
+  it("classifies fal and Supabase idle timeouts as retryable stitch failures", () => {
+    expect(
+      isFalIdleTimeout(
+        new Error(
+          'stitch-segments failed [504]: {"code":"IDLE_TIMEOUT","message":"Request idle timeout limit (150s) reached"}',
+        ),
+      ),
+    ).toBe(true);
   });
 });
 

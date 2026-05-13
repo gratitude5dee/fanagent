@@ -1,6 +1,6 @@
 // Audio waveform + trim UI for the Autopilot wizard's Step 1.
-// Uses wavesurfer.js for the dark-card waveform and ffmpeg.wasm to render
-// the trimmed slice as an mp3 Blob the parent uploads to Supabase Storage.
+// Uses wavesurfer.js for the dark-card waveform and Web Audio to render
+// the trimmed slice as a WAV Blob the parent uploads to Supabase Storage.
 
 import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";

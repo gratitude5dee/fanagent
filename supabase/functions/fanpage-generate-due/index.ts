@@ -77,6 +77,11 @@ function isRetryable(error: unknown): boolean {
   return /\b(408|409|429|500|502|503|504|timeout|rate_limit|temporar|network)\b/i.test(message);
 }
 
+function isIdleTimeout(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(IDLE_TIMEOUT|idle timeout|timeout limit|504)\b/i.test(message);
+}
+
 function gmiKey(): string {
   const key = optionalEnv("GMI_API_KEY") ?? optionalEnv("GMI_CLOUD_API_KEY");
   if (!key) throw new Error("GMI_API_KEY or GMI_CLOUD_API_KEY must be set");
@@ -475,7 +480,10 @@ Deno.serve(async (request) => {
         errors += 1;
         const serialized = serializeError(err);
         const msg = errorMessage(err);
-        const retry = isRetryable(err) && (row.attempt_count ?? 0) < (row.max_attempts ?? 3);
+        const maxAttempts = isIdleTimeout(err)
+          ? Math.max(row.max_attempts ?? 3, 5)
+          : (row.max_attempts ?? 3);
+        const retry = isRetryable(err) && (row.attempt_count ?? 0) < maxAttempts;
         errorList.push({ itemId: row.id, error: msg, retry });
         await supabase
           .from("generation_items")

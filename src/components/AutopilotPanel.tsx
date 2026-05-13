@@ -280,8 +280,8 @@ export default function AutopilotPanel() {
     await callCampaign("create", {
       accountId: account.id,
       audioBase64: await blobToBase64(trimmedAudio.blob),
-      audioMimeType: "audio/mpeg",
-      audioFileName: trimmedAudio.name.replace(/\.[^.]+$/, "") + ".mp3",
+      audioMimeType: trimmedAudio.blob.type || "audio/wav",
+      audioFileName: trimmedAudio.name.replace(/\.[^.]+$/, "") + ".wav",
       clipSelection: {
         startSec: trimmedAudio.startSec,
         endSec: trimmedAudio.endSec,

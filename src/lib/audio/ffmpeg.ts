@@ -1,69 +1,75 @@
-// Lazy-loaded ffmpeg.wasm singleton for client-side audio trimming.
-// Only imported by browser code (AudioTrimmer). Never import from server code.
+// Browser-native audio trimming. This intentionally avoids wasm transcoder
+// loading, which is brittle under hosted CSP/COEP/CDN conditions.
 
-import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { fetchFile, toBlobURL } from "@ffmpeg/util";
+type AudioContextConstructor = typeof AudioContext;
 
-let instance: FFmpeg | null = null;
-let loadingPromise: Promise<FFmpeg> | null = null;
-
-const CORE_BASE = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd";
-
-async function load(): Promise<FFmpeg> {
-  const ff = new FFmpeg();
-  await ff.load({
-    coreURL: await toBlobURL(`${CORE_BASE}/ffmpeg-core.js`, "text/javascript"),
-    wasmURL: await toBlobURL(`${CORE_BASE}/ffmpeg-core.wasm`, "application/wasm"),
-  });
-  return ff;
+function audioContextCtor(): AudioContextConstructor {
+  const globalAudio = window as unknown as {
+    AudioContext?: AudioContextConstructor;
+    webkitAudioContext?: AudioContextConstructor;
+  };
+  const Ctor = globalAudio.AudioContext ?? globalAudio.webkitAudioContext;
+  if (!Ctor) throw new Error("This browser does not support Web Audio decoding.");
+  return Ctor;
 }
 
-export async function getFFmpeg(): Promise<FFmpeg> {
-  if (instance) return instance;
-  if (!loadingPromise) {
-    loadingPromise = load().then((ff) => {
-      instance = ff;
-      return ff;
-    });
+function writeString(view: DataView, offset: number, value: string) {
+  for (let index = 0; index < value.length; index += 1) {
+    view.setUint8(offset + index, value.charCodeAt(index));
   }
-  return loadingPromise;
 }
 
-function extOf(file: File): string {
-  const m = /\.([a-z0-9]+)$/i.exec(file.name);
-  if (m) return m[1].toLowerCase();
-  if (file.type.includes("wav")) return "wav";
-  if (file.type.includes("mp4") || file.type.includes("m4a")) return "m4a";
-  return "mp3";
+function audioBufferToWav(buffer: AudioBuffer, startSec: number, endSec: number): Blob {
+  const channelCount = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const startFrame = Math.max(0, Math.floor(startSec * sampleRate));
+  const endFrame = Math.min(
+    buffer.length,
+    Math.max(startFrame + 1, Math.ceil(endSec * sampleRate)),
+  );
+  const frameCount = endFrame - startFrame;
+  const bytesPerSample = 2;
+  const blockAlign = channelCount * bytesPerSample;
+  const dataBytes = frameCount * blockAlign;
+  const wav = new ArrayBuffer(44 + dataBytes);
+  const view = new DataView(wav);
+
+  writeString(view, 0, "RIFF");
+  view.setUint32(4, 36 + dataBytes, true);
+  writeString(view, 8, "WAVE");
+  writeString(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channelCount, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bytesPerSample * 8, true);
+  writeString(view, 36, "data");
+  view.setUint32(40, dataBytes, true);
+
+  let offset = 44;
+  const channels = Array.from({ length: channelCount }, (_, channel) =>
+    buffer.getChannelData(channel),
+  );
+  for (let frame = startFrame; frame < endFrame; frame += 1) {
+    for (let channel = 0; channel < channelCount; channel += 1) {
+      const sample = Math.max(-1, Math.min(1, channels[channel][frame] ?? 0));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      offset += bytesPerSample;
+    }
+  }
+
+  return new Blob([wav], { type: "audio/wav" });
 }
 
-export async function trimAudio(
-  file: File,
-  startSec: number,
-  endSec: number,
-): Promise<Blob> {
-  const ff = await getFFmpeg();
-  const inExt = extOf(file);
-  const inName = `in.${inExt}`;
-  const outName = `out.mp3`;
-  await ff.writeFile(inName, await fetchFile(file));
-  const dur = Math.max(0.1, endSec - startSec);
-  // Re-encode to mp3 to guarantee a clean cut and a portable container.
-  await ff.exec([
-    "-ss", startSec.toFixed(3),
-    "-t", dur.toFixed(3),
-    "-i", inName,
-    "-vn",
-    "-acodec", "libmp3lame",
-    "-q:a", "2",
-    outName,
-  ]);
-  const data = await ff.readFile(outName);
-  await ff.deleteFile(inName).catch(() => {});
-  await ff.deleteFile(outName).catch(() => {});
-  const src = data instanceof Uint8Array ? data : new TextEncoder().encode(String(data));
-  // Copy into a fresh ArrayBuffer to satisfy Blob's BlobPart typing (avoids SharedArrayBuffer typing).
-  const buf = new ArrayBuffer(src.byteLength);
-  new Uint8Array(buf).set(src);
-  return new Blob([buf], { type: "audio/mpeg" });
+export async function trimAudio(file: File, startSec: number, endSec: number): Promise<Blob> {
+  const Ctor = audioContextCtor();
+  const context = new Ctor();
+  try {
+    const decoded = await context.decodeAudioData(await file.arrayBuffer());
+    return audioBufferToWav(decoded, startSec, endSec);
+  } finally {
+    await context.close().catch(() => {});
+  }
 }

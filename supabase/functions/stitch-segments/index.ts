@@ -4,10 +4,17 @@
 // post ready to publish.
 
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
-import { stitchClipsWithAudio } from "../_shared/fal.ts";
+import { isFalIdleTimeout, mergeAudioVideo, stitchClipsWithAudio } from "../_shared/fal.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
-type Segment = { source: string; url?: string; prompt?: string };
+type Segment = {
+  source: string;
+  url?: string;
+  prompt?: string;
+  provider?: string | null;
+  externalId?: string | null;
+  reused?: boolean | null;
+};
 
 Deno.serve(async (request) => {
   const opt = handleOptions(request);
@@ -54,20 +61,36 @@ Deno.serve(async (request) => {
     const clipUrls = segments.map((s) => s.url!);
     const segmentDurations = new Array(segments.length).fill(segSec);
     const avgSeg = segmentDurations.reduce((a, b) => a + b, 0) / segmentDurations.length;
-    const finalUrl = await stitchClipsWithAudio({
-      clipUrls,
-      audioUrl: audio.data.public_url,
-      segmentSeconds: Math.max(1, Math.round(avgSeg)),
-      totalSeconds: total,
-    });
+    let finalUrl: string;
+    let stitchMode = "full";
+    try {
+      finalUrl = await stitchClipsWithAudio({
+        clipUrls,
+        audioUrl: audio.data.public_url,
+        segmentSeconds: Math.max(1, Math.round(avgSeg)),
+        totalSeconds: total,
+      });
+    } catch (error) {
+      if (!isFalIdleTimeout(error) || clipUrls.length < 2) throw error;
+      const fallback = await mergeAudioVideo(clipUrls[0], audio.data.public_url);
+      finalUrl = fallback.url;
+      stitchMode = "single_visual_timeout_fallback";
+    }
 
     const upd = await supabase
       .from("generation_items")
-      .update({ stock_clip_url: finalUrl, status: "stitched" })
+      .update({
+        stock_clip_url: finalUrl,
+        status: "stitched",
+        segments: segments.map((segment, index) => ({
+          ...segment,
+          stitchSelected: stitchMode === "full" || index === 0,
+        })),
+      })
       .eq("id", body.itemId);
     if (upd.error) throw upd.error;
 
-    return jsonResponse({ ok: true, itemId: body.itemId, url: finalUrl });
+    return jsonResponse({ ok: true, itemId: body.itemId, url: finalUrl, stitchMode });
   } catch (error) {
     return errorResponse(error);
   }
