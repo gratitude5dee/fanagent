@@ -9,18 +9,18 @@
 //   resume   { batchId }                → clears paused_at
 //   skip     { itemId }                 → marks item skipped
 //   regenerate { itemId }              → resets item to pending so the worker reruns it
+//   recoverRecentFailures { since, limit } → bulk-reset recent failed unposted items
 
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import { errorMessage, serializeError } from "../_shared/errors.ts";
 import { optionalEnv } from "../_shared/env.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
 async function callChild(name: string, body: unknown): Promise<Response> {
   const url = `${optionalEnv("SUPABASE_URL")}/functions/v1/${name}`;
-  const serviceKey = optionalEnv("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   return fetch(url, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${serviceKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
@@ -29,12 +29,10 @@ async function callChild(name: string, body: unknown): Promise<Response> {
 
 async function callWorker(name: string, body: unknown): Promise<Response> {
   const url = `${optionalEnv("SUPABASE_URL")}/functions/v1/${name}`;
-  const serviceKey = optionalEnv("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   const cronSecret = optionalEnv("CRON_SECRET") ?? "";
   return fetch(url, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${serviceKey}`,
       "Content-Type": "application/json",
       "x-cron-secret": cronSecret,
     },
@@ -125,7 +123,22 @@ Deno.serve(async (request) => {
           .select("id,status,provider,error_message,updated_at")
           .eq("status", "failed")
           .order("updated_at", { ascending: false })
-          .limit(10);
+          .limit(50);
+        const queueRows = await supabase.from("generation_items").select("status").limit(5000);
+        const queueCounts = (queueRows.data ?? []).reduce<Record<string, number>>((acc, row) => {
+          const status = String((row as { status?: string }).status ?? "unknown");
+          acc[status] = (acc[status] ?? 0) + 1;
+          return acc;
+        }, {});
+        const accountRow = await supabase
+          .from("accounts")
+          .select("id,platform,handle,tiktok_connected_at,tiktok_creator_info,is_primary")
+          .eq("platform", "tiktok")
+          .eq("is_primary", true)
+          .maybeSingle();
+        const workerRuns = recentWorkerRuns.data ?? [];
+        const lastWorkerError =
+          workerRuns.find((run) => Number(run.errors_count ?? 0) > 0)?.detail ?? null;
 
         return jsonResponse({
           env: envStatus,
@@ -139,7 +152,23 @@ Deno.serve(async (request) => {
             workerRuns: !schemaChecks[2].error,
             errors: schemaChecks.map((check) => check.error?.message).filter(Boolean),
           },
-          recentWorkerRuns: recentWorkerRuns.data ?? [],
+          account: accountRow.data
+            ? {
+                id: accountRow.data.id,
+                platform: accountRow.data.platform,
+                handle: accountRow.data.handle,
+                tiktokConnected: !!accountRow.data.tiktok_connected_at,
+                tiktokCreatorInfo: accountRow.data.tiktok_creator_info ?? null,
+              }
+            : null,
+          queueCounts,
+          lastWorkerError,
+          cron: {
+            configured: envStatus.cronSecret,
+            schedule: "*/5 * * * *",
+            detectable: false,
+          },
+          recentWorkerRuns: workerRuns,
           recentFailedItems: recentFailedItems.data ?? [],
         });
       }
@@ -153,7 +182,7 @@ Deno.serve(async (request) => {
           durationSeconds: (body.durationSeconds as number) ?? 15,
         });
         const json = await res.json();
-        if (!res.ok) return errorResponse(json.error ?? "create failed", 500);
+        if (!res.ok) return errorResponse(json.errorDetail ?? json.error ?? "create failed", 500);
         const audioAssetId = json?.audioAsset?.id;
         const batchId = json?.batch?.id;
         if (audioAssetId) {
@@ -171,21 +200,28 @@ Deno.serve(async (request) => {
         if (!batchId) throw new Error("batchId required");
         const r = await callChild("generate-video-prompts", { batchId });
         const j = await r.json();
-        if (!r.ok) return errorResponse(j.error ?? "prompts failed", 500);
+        if (!r.ok) return errorResponse(j.errorDetail ?? j.error ?? "prompts failed", 500);
         return jsonResponse(j);
       }
 
       case "runGenerationWorkers": {
         const res = await callWorker("fanpage-generate-due", {});
         const json = await res.json().catch(() => ({}));
-        if (!res.ok) return errorResponse(json.error ?? "fanpage-generate-due failed", 500);
+        if (!res.ok) {
+          return errorResponse(
+            json.errorDetail ?? json.error ?? "fanpage-generate-due failed",
+            500,
+          );
+        }
         return jsonResponse(json);
       }
 
       case "runPublishWorker": {
         const res = await callWorker("fanpage-publish-due", {});
         const json = await res.json().catch(() => ({}));
-        if (!res.ok) return errorResponse(json.error ?? "fanpage-publish-due failed", 500);
+        if (!res.ok) {
+          return errorResponse(json.errorDetail ?? json.error ?? "fanpage-publish-due failed", 500);
+        }
         return jsonResponse(json);
       }
 
@@ -229,13 +265,63 @@ Deno.serve(async (request) => {
           .from("generation_items")
           .update({
             status: "pending",
+            segments: null,
             stock_clip_url: null,
             render_job_id: null,
+            final_asset_id: null,
+            provider_request_id: null,
             error_message: null,
+            attempt_count: 0,
+            locked_at: null,
+            locked_by: null,
           })
           .eq("id", itemId);
         if (r.error) throw r.error;
         return jsonResponse({ ok: true });
+      }
+
+      case "recoverRecentFailures": {
+        const since = String(body.since ?? "2026-05-12T00:00:00.000Z");
+        const limit = Math.max(1, Math.min(Number(body.limit ?? 250), 250));
+        const failed = await supabase
+          .from("generation_items")
+          .select("id,stage_events")
+          .eq("status", "failed")
+          .is("post_id", null)
+          .gte("updated_at", since)
+          .order("updated_at", { ascending: false })
+          .limit(limit);
+        if (failed.error) throw failed.error;
+
+        const recoveredIds: string[] = [];
+        for (const row of failed.data ?? []) {
+          const events = Array.isArray(row.stage_events) ? row.stage_events : [];
+          const update = await supabase
+            .from("generation_items")
+            .update({
+              status: "pending",
+              segments: null,
+              stock_clip_url: null,
+              render_job_id: null,
+              final_asset_id: null,
+              provider_request_id: null,
+              error_message: null,
+              attempt_count: 0,
+              locked_at: null,
+              locked_by: null,
+              last_attempt_at: null,
+              stage_events: [
+                ...events.slice(-40),
+                { stage: "recovered", at: new Date().toISOString(), reason: "live repair" },
+              ],
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", row.id);
+          if (update.error) throw update.error;
+          recoveredIds.push(row.id as string);
+        }
+
+        return jsonResponse({ ok: true, recovered: recoveredIds.length, recoveredIds });
       }
 
       case "setLyricTemplate": {
@@ -269,6 +355,9 @@ Deno.serve(async (request) => {
         return errorResponse(`Unknown action: ${action}`, 400);
     }
   } catch (error) {
-    return errorResponse(error);
+    return errorResponse({
+      ...serializeError(error),
+      message: errorMessage(error),
+    });
   }
 });

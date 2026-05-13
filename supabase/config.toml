@@ -11,3 +11,27 @@ verify_jwt = false
 
 [functions.fanpage-publish-due]
 verify_jwt = false
+
+[functions.create-generation-batch]
+verify_jwt = false
+
+[functions.generate-video-prompts]
+verify_jwt = false
+
+[functions.transcribe-audio]
+verify_jwt = false
+
+[functions.pick-stock-clip]
+verify_jwt = false
+
+[functions.generate-seedance-clip]
+verify_jwt = false
+
+[functions.stitch-segments]
+verify_jwt = false
+
+[functions.render-karaoke]
+verify_jwt = false
+
+[functions.publish-tiktok-due]
+verify_jwt = false

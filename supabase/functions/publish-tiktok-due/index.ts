@@ -1,5 +1,6 @@
 import { downloadBytes } from "../_shared/assets.ts";
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import { errorMessage, serializeError } from "../_shared/errors.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 import {
   fetchPublishStatus,
@@ -84,10 +85,7 @@ async function applyPublishStatus(post: Post, accessToken: string) {
   return { id: post.id, status: data.status };
 }
 
-function ensureCreatorAllowsPost(
-  creatorInfo: Record<string, unknown>,
-  post: Post,
-) {
+function ensureCreatorAllowsPost(creatorInfo: Record<string, unknown>, post: Post) {
   const options = Array.isArray(creatorInfo.privacy_level_options)
     ? creatorInfo.privacy_level_options.map(String)
     : [];
@@ -95,9 +93,7 @@ function ensureCreatorAllowsPost(
     throw new Error("Choose a TikTok privacy level before publishing.");
   }
   if (options.length > 0 && !options.includes(post.tiktok_privacy_level)) {
-    throw new Error(
-      "Selected TikTok privacy level is not available for this creator.",
-    );
+    throw new Error("Selected TikTok privacy level is not available for this creator.");
   }
   if (creatorInfo.duet_disabled === true && !post.tiktok_disable_duet) {
     throw new Error("TikTok creator settings require duet to be disabled.");
@@ -111,8 +107,33 @@ function ensureCreatorAllowsPost(
 }
 
 function isRetryable(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   return /\b(429|500|502|503|504|rate_limit|internal_error)\b/i.test(message);
+}
+
+function isTikTokDisconnected(error: unknown): boolean {
+  return /TikTok account is not connected/i.test(errorMessage(error));
+}
+
+async function blockPostUntilTikTokConnected(post: Post, error: unknown) {
+  const supabase = getSupabaseAdmin();
+  const message = "Connect TikTok to auto-post.";
+  const updated = await supabase
+    .from("posts")
+    .update({
+      status: post.status === "posting" ? "posting" : "pending",
+      publish_status: "blocked_account_not_connected",
+      publish_error: message,
+      error_message: message,
+    })
+    .eq("id", post.id);
+  if (updated.error) throw updated.error;
+  return {
+    id: post.id,
+    status: "blocked_account_not_connected",
+    error: message,
+    errorDetail: serializeError(error),
+  };
 }
 
 async function backoffPost(post: Post, error: unknown) {
@@ -137,12 +158,13 @@ async function backoffPost(post: Post, error: unknown) {
     status: "retry_scheduled",
     delayMinutes,
     error: message,
+    errorDetail: serializeError(error),
   };
 }
 
 async function failPost(post: Post, error: unknown) {
   const supabase = getSupabaseAdmin();
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   const updated = await supabase
     .from("posts")
     .update({
@@ -153,7 +175,17 @@ async function failPost(post: Post, error: unknown) {
     })
     .eq("id", post.id);
   if (updated.error) throw updated.error;
-  return { id: post.id, status: "failed", error: message };
+  return { id: post.id, status: "failed", error: message, errorDetail: serializeError(error) };
+}
+
+async function handlePublishError(post: Post, error: unknown) {
+  if (isTikTokDisconnected(error)) {
+    return blockPostUntilTikTokConnected(post, error);
+  }
+  if (isRetryable(error)) {
+    return backoffPost(post, error);
+  }
+  return failPost(post, error);
 }
 
 async function publishPost(post: Post) {
@@ -168,13 +200,8 @@ async function publishPost(post: Post) {
   ensureCreatorAllowsPost(creatorInfo, post);
 
   const video = await downloadBytes(post.video_url);
-  if (
-    !video.mimeType.includes("mp4") &&
-    video.mimeType !== "application/octet-stream"
-  ) {
-    throw new Error(
-      `TikTok Direct Post expects a TikTok-safe MP4; got ${video.mimeType}.`,
-    );
+  if (!video.mimeType.includes("mp4") && video.mimeType !== "application/octet-stream") {
+    throw new Error(`TikTok Direct Post expects a TikTok-safe MP4; got ${video.mimeType}.`);
   }
 
   const posting = await supabase
@@ -188,16 +215,20 @@ async function publishPost(post: Post) {
     .eq("id", post.id);
   if (posting.error) throw posting.error;
 
-  const init = await initDirectPost(accessToken, {
-    title: titleForPost(post),
-    privacyLevel: post.tiktok_privacy_level,
-    disableDuet: post.tiktok_disable_duet,
-    disableComment: post.tiktok_disable_comment,
-    disableStitch: post.tiktok_disable_stitch,
-    isAigc: post.tiktok_is_aigc,
-    brandContentToggle: post.tiktok_brand_content,
-    brandOrganicToggle: post.tiktok_brand_organic,
-  }, video.bytes.byteLength);
+  const init = await initDirectPost(
+    accessToken,
+    {
+      title: titleForPost(post),
+      privacyLevel: post.tiktok_privacy_level,
+      disableDuet: post.tiktok_disable_duet,
+      disableComment: post.tiktok_disable_comment,
+      disableStitch: post.tiktok_disable_stitch,
+      isAigc: post.tiktok_is_aigc,
+      brandContentToggle: post.tiktok_brand_content,
+      brandOrganicToggle: post.tiktok_brand_organic,
+    },
+    video.bytes.byteLength,
+  );
 
   const initialized = await supabase
     .from("posts")
@@ -245,18 +276,12 @@ Deno.serve(async (request) => {
       .limit(20);
     if (posting.error) throw posting.error;
 
-    for (
-      const post of await processOnePerAccount((posting.data ?? []) as Post[])
-    ) {
+    for (const post of await processOnePerAccount((posting.data ?? []) as Post[])) {
       try {
         const accessToken = await getAccessToken(post.account_id);
         results.push(await applyPublishStatus(post, accessToken));
       } catch (error) {
-        results.push(
-          isRetryable(error)
-            ? await backoffPost(post, error)
-            : await failPost(post, error),
-        );
+        results.push(await handlePublishError(post, error));
       }
     }
 
@@ -275,11 +300,7 @@ Deno.serve(async (request) => {
       try {
         results.push(await publishPost(post));
       } catch (error) {
-        results.push(
-          isRetryable(error)
-            ? await backoffPost(post, error)
-            : await failPost(post, error),
-        );
+        results.push(await handlePublishError(post, error));
       }
     }
 

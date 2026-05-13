@@ -123,9 +123,15 @@ async function searchPexels(
   };
   return (data.videos ?? [])
     .map((v) => {
-      const file = v.video_files
-        .filter((f) => f.file_type === "video/mp4")
-        .sort((a, b) => (b.height ?? 0) - (a.height ?? 0))[0];
+      const files = v.video_files
+        .filter((f) => f.file_type === "video/mp4" && (!settings.portraitOnly || f.height > f.width))
+        .sort((a, b) => {
+          const aDelta = Math.abs((a.height ?? 0) - 1280);
+          const bDelta = Math.abs((b.height ?? 0) - 1280);
+          if (aDelta !== bDelta) return aDelta - bDelta;
+          return (a.height ?? 0) - (b.height ?? 0);
+        });
+      const file = files[0] ?? v.video_files.filter((f) => f.file_type === "video/mp4")[0];
       return {
         provider: "pexels" as const,
         externalId: String(v.id),
@@ -163,8 +169,11 @@ async function searchPixabay(
   };
   return (data.hits ?? [])
     .map((v) => {
-      const variants = ["large", "medium", "small", "tiny"].map((k) => v.videos[k]).filter(Boolean);
-      const best = variants.sort((a, b) => b.height - a.height)[0];
+      const ordered = ["medium", "small", "tiny", "large"]
+        .map((k) => v.videos[k])
+        .filter(Boolean);
+      const variants = ordered.filter((f) => !settings.portraitOnly || f.height > f.width);
+      const best = (variants.length ? variants : ordered).sort((a, b) => b.height - a.height)[0];
       return {
         provider: "pixabay" as const,
         externalId: String(v.id),

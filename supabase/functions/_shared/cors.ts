@@ -1,3 +1,5 @@
+import { serializeError } from "./errors.ts";
+
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -16,13 +18,16 @@ export function jsonResponse(body: unknown, status = 200): Response {
 }
 
 export function handleOptions(request: Request): Response | null {
-  return request.method === "OPTIONS"
-    ? new Response("ok", { headers: corsHeaders })
-    : null;
+  return request.method === "OPTIONS" ? new Response("ok", { headers: corsHeaders }) : null;
 }
 
 export function errorResponse(error: unknown, status = 500): Response {
-  return jsonResponse({
-    error: error instanceof Error ? error.message : String(error),
-  }, status);
+  const serialized = serializeError(error);
+  return jsonResponse(
+    {
+      error: serialized.message,
+      errorDetail: serialized,
+    },
+    status,
+  );
 }

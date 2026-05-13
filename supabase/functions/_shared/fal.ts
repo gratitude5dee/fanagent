@@ -42,7 +42,11 @@ function pickUrl(out: any): string | undefined {
 // ---------- ffmpeg-api primitives ----------
 
 export async function mergeVideos(videoUrls: string[]): Promise<{ url: string; raw: any }> {
-  const out = await falRun<any>("fal-ai/ffmpeg-api/merge-videos", { video_urls: videoUrls });
+  const out = await falRun<any>("fal-ai/ffmpeg-api/merge-videos", {
+    video_urls: videoUrls,
+    target_fps: 24,
+    resolution: { width: 720, height: 1280 },
+  });
   const url = pickUrl(out);
   if (!url) throw new Error(`merge-videos returned no URL: ${JSON.stringify(out).slice(0, 300)}`);
   return { url, raw: out };

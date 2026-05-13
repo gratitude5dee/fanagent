@@ -4,12 +4,13 @@
 
 import { createMediaAssetFromBytes, downloadBytes } from "../_shared/assets.ts";
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import { errorMessage, serializeError } from "../_shared/errors.ts";
 import { optionalEnv } from "../_shared/env.ts";
 import { findGmiVideoUrl, normalizeSourceMode } from "../_shared/generation.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 import { endWorkerRun, isAuthorizedCronCall, startWorkerRun } from "../_shared/workers.ts";
 
-const MAX_PER_RUN = 5;
+const MAX_PER_RUN = 1;
 const FUNCTION_NAME = "fanpage-generate-due";
 const GMI_BASE =
   optionalEnv("GMI_API_BASE") ?? "https://console.gmicloud.ai/api/v1/ie/requestqueue/apikey";
@@ -55,12 +56,10 @@ function fnUrl(name: string): string {
 }
 
 async function invokeChild(name: string, body: unknown): Promise<Response> {
-  const serviceKey = optionalEnv("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   return fetch(fnUrl(name), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${serviceKey}`,
     },
     body: JSON.stringify(body),
   });
@@ -448,7 +447,7 @@ async function claimDueItems(limit: number) {
   const claimed = await supabase.rpc("claim_generation_items", {
     p_limit: limit,
     p_worker_id: `${FUNCTION_NAME}-${crypto.randomUUID()}`,
-    p_claim_window_minutes: 15,
+    p_claim_window_minutes: 3,
   });
   if (claimed.error) throw claimed.error;
   return (claimed.data ?? []) as GenerationItem[];
@@ -474,7 +473,8 @@ Deno.serve(async (request) => {
         processed += 1;
       } catch (err) {
         errors += 1;
-        const msg = err instanceof Error ? err.message : String(err);
+        const serialized = serializeError(err);
+        const msg = errorMessage(err);
         const retry = isRetryable(err) && (row.attempt_count ?? 0) < (row.max_attempts ?? 3);
         errorList.push({ itemId: row.id, error: msg, retry });
         await supabase
@@ -486,7 +486,10 @@ Deno.serve(async (request) => {
             updated_at: new Date().toISOString(),
           })
           .eq("id", row.id);
-        await addStageEvent(row.id, retry ? "retry_scheduled" : "failed", { error: msg });
+        await addStageEvent(row.id, retry ? "retry_scheduled" : "failed", {
+          error: msg,
+          errorDetail: serialized,
+        });
         if (!retry) await refreshBatchStatus(row.batch_id);
       }
     }
@@ -495,7 +498,8 @@ Deno.serve(async (request) => {
     return jsonResponse({ processed, errors, errorList });
   } catch (error) {
     await endWorkerRun(runId, processed, errors + 1, {
-      fatal: error instanceof Error ? error.message : String(error),
+      fatal: errorMessage(error),
+      fatalDetail: serializeError(error),
     });
     return errorResponse(error);
   }

@@ -78,6 +78,20 @@ type CampaignList = {
 type Diagnostics = {
   env: Record<string, boolean>;
   buckets: Array<{ name: string; ok: boolean }>;
+  account: {
+    id: string;
+    platform: string;
+    handle: string | null;
+    tiktokConnected: boolean;
+    tiktokCreatorInfo: Record<string, unknown> | null;
+  } | null;
+  queueCounts: Record<string, number>;
+  lastWorkerError: unknown;
+  cron: {
+    configured: boolean;
+    schedule: string;
+    detectable: boolean;
+  };
   schema: {
     generationBatchesSettings: boolean;
     generationItemsQueueColumns: boolean;
@@ -90,6 +104,7 @@ type Diagnostics = {
     ended_at: string | null;
     items_processed: number;
     errors_count: number;
+    detail?: unknown;
   }>;
   recentFailedItems: Array<{
     id: string;
@@ -171,10 +186,15 @@ export default function AutopilotPanel() {
 
   const account = data?.account ?? null;
   const isConnected = !!account?.tiktok_connected_at;
-  const activeBatch = useMemo(
-    () => (data?.batches ?? []).find((b) => !b.paused_at && b.status !== "complete") ?? null,
+  const activeBatches = useMemo(
+    () => (data?.batches ?? []).filter((b) => !b.paused_at && b.status !== "complete"),
     [data],
   );
+  const schemaReady = diagnostics
+    ? diagnostics.schema.generationBatchesSettings &&
+      diagnostics.schema.generationItemsQueueColumns &&
+      diagnostics.schema.workerRuns
+    : false;
 
   async function refresh() {
     try {
@@ -218,7 +238,7 @@ export default function AutopilotPanel() {
   async function startCampaign() {
     if (!trimmedAudio) throw new Error("Trim your audio clip first.");
     if (!account) throw new Error("No account.");
-    if (!isConnected) throw new Error("Connect TikTok first.");
+    if (!schemaReady) throw new Error("Database queue schema is not ready.");
     const startAt = new Date(Date.now() + 15 * 60_000).toISOString();
     await callCampaign("create", {
       accountId: account.id,
@@ -307,21 +327,25 @@ export default function AutopilotPanel() {
           </div>
           <div className="batch-list">
             <div className="batch-row">
-              <span
-                className={`dot ${
-                  diagnostics.schema.generationBatchesSettings &&
-                  diagnostics.schema.generationItemsQueueColumns &&
-                  diagnostics.schema.workerRuns
-                    ? "good"
-                    : "bad"
-                }`}
-              />
+              <span className={`dot ${schemaReady ? "good" : "bad"}`} />
               <div>
                 <strong>Database queue schema</strong>
                 <span>
                   {diagnostics.schema.errors.length
                     ? diagnostics.schema.errors.join(" · ")
                     : "ready"}
+                </span>
+              </div>
+            </div>
+            <div className="batch-row">
+              <span className={`dot ${diagnostics.account?.tiktokConnected ? "good" : "warn"}`} />
+              <div>
+                <strong>TikTok account</strong>
+                <span>
+                  {diagnostics.account?.handle ?? diagnostics.account?.id?.slice(0, 8) ?? "none"} ·{" "}
+                  {diagnostics.account?.tiktokConnected
+                    ? "connected for auto-post"
+                    : "generation enabled, publishing waits for connection"}
                 </span>
               </div>
             </div>
@@ -384,6 +408,28 @@ export default function AutopilotPanel() {
                 </span>
               </div>
             </div>
+            <div className="batch-row">
+              <span className={`dot ${diagnostics.cron.configured ? "good" : "warn"}`} />
+              <div>
+                <strong>Workers</strong>
+                <span>
+                  cron {diagnostics.cron.configured ? diagnostics.cron.schedule : "manual only"} ·{" "}
+                  queue{" "}
+                  {Object.entries(diagnostics.queueCounts)
+                    .map(([status, count]) => `${status}:${count}`)
+                    .join(" · ") || "empty"}
+                </span>
+              </div>
+            </div>
+            {diagnostics.lastWorkerError ? (
+              <div className="batch-row">
+                <span className="dot bad" />
+                <div>
+                  <strong>Last worker error</strong>
+                  <span>{JSON.stringify(diagnostics.lastWorkerError).slice(0, 240)}</span>
+                </div>
+              </div>
+            ) : null}
           </div>
           <div className="action-row">
             <button className="button ghost" type="button" onClick={refreshDiagnostics}>
@@ -467,8 +513,8 @@ export default function AutopilotPanel() {
             )}
           </section>
 
-          {/* STEP 2 — Source + cadence (only if no active campaign) */}
-          {isConnected && !activeBatch ? (
+          {/* STEP 2 — Source + cadence */}
+          {account ? (
             <section className="panel">
               <div className="panel-title">
                 <UploadCloud size={16} />
@@ -506,6 +552,18 @@ export default function AutopilotPanel() {
                 {trimmedAudio ? (
                   <div className="banner">
                     ✓ Trimmed clip ready ({trimmedAudio.durationSec.toFixed(1)}s).
+                  </div>
+                ) : null}
+                {!schemaReady ? (
+                  <div className="banner bad">
+                    Database queue schema is not ready. Generation is blocked until the live
+                    migration is applied.
+                  </div>
+                ) : null}
+                {!isConnected ? (
+                  <div className="banner warn">
+                    TikTok is not connected. Videos can still generate; auto-posting will wait until
+                    OAuth is connected.
                   </div>
                 ) : null}
                 <label>
@@ -679,7 +737,11 @@ export default function AutopilotPanel() {
                     {Math.ceil(duration / 15)} clips per post will be stitched together with ffmpeg.
                   </div>
                 ) : null}
-                <button className="button primary" disabled={busy || !trimmedAudio} type="submit">
+                <button
+                  className="button primary"
+                  disabled={busy || !trimmedAudio || !schemaReady}
+                  type="submit"
+                >
                   {busy ? <Loader2 className="spin" size={16} /> : <CalendarClock size={16} />}{" "}
                   Launch daily campaign
                 </button>
@@ -688,22 +750,35 @@ export default function AutopilotPanel() {
           ) : null}
 
           {/* STEP 3 — Active campaign */}
-          {activeBatch ? (
+          {activeBatches.length ? (
             <section className="panel">
               <div className="panel-title">
                 <CalendarClock size={16} />
-                <h3>Active campaign · {activeBatch.source_mode}</h3>
+                <h3>Active campaigns</h3>
+              </div>
+              <div className="batch-list">
+                {activeBatches.slice(0, 8).map((batch) => (
+                  <div className="batch-row" key={batch.id}>
+                    <span className={`dot ${statusTone(batch.status)}`} />
+                    <div style={{ flex: 1 }}>
+                      <strong>{batch.source_mode}</strong>
+                      <span>
+                        {batch.status} · {batch.post_count} posts · every {batch.cadence_minutes}m
+                      </span>
+                    </div>
+                    <button
+                      className="button"
+                      disabled={busy}
+                      onClick={() =>
+                        run("Pause", () => callCampaign("pause", { batchId: batch.id }))
+                      }
+                    >
+                      <PauseCircle size={16} /> Pause
+                    </button>
+                  </div>
+                ))}
               </div>
               <div className="action-row">
-                <button
-                  className="button"
-                  disabled={busy}
-                  onClick={() =>
-                    run("Pause", () => callCampaign("pause", { batchId: activeBatch.id }))
-                  }
-                >
-                  <PauseCircle size={16} /> Pause
-                </button>
                 <button className="button" disabled={busy} onClick={() => run("Refresh", refresh)}>
                   <RefreshCcw size={16} /> Refresh
                 </button>
