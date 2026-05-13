@@ -5,14 +5,21 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const reactRoot = path.resolve(__dirname, "node_modules/react");
+const reactDomRoot = path.resolve(__dirname, "node_modules/react-dom");
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     dedupe: ["react", "react-dom"],
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
-    },
+    alias: [
+      { find: "@", replacement: path.resolve(__dirname, "./src") },
+      { find: /^react$/, replacement: path.join(reactRoot, "index.js") },
+      { find: /^react\/jsx-runtime$/, replacement: path.join(reactRoot, "jsx-runtime.js") },
+      { find: /^react\/jsx-dev-runtime$/, replacement: path.join(reactRoot, "jsx-dev-runtime.js") },
+      { find: /^react-dom$/, replacement: path.join(reactDomRoot, "index.js") },
+      { find: /^react-dom\/client$/, replacement: path.join(reactDomRoot, "client.js") },
+    ],
   },
   optimizeDeps: {
     include: [

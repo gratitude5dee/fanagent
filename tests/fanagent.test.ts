@@ -228,6 +228,8 @@ describe("generation reliability fixes", () => {
     expect(app).toContain('import AutopilotPanel from "@/components/AutopilotPanel"');
     expect(app).not.toContain('lazy(() => import("@/components/AutopilotPanel"))');
     expect(viteConfig).toContain('dedupe: ["react", "react-dom"]');
+    expect(viteConfig).toContain("node_modules/react");
+    expect(viteConfig).toContain("node_modules/react-dom");
     expect(viteConfig).toContain('"react-dom/client"');
   });
 });
