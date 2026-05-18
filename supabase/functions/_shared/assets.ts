@@ -8,7 +8,7 @@ export type MediaKind =
   | "thumbnail"
   | "other";
 
-const bucket = "post-assets";
+const defaultBucket = "post-assets";
 
 function extensionFromMime(mimeType: string, fileName: string): string {
   const ext = fileName.split(".").pop()?.toLowerCase();
@@ -32,26 +32,23 @@ export async function createMediaAssetFromBytes(input: {
   bytes: Uint8Array;
   mimeType: string;
   fileName: string;
+  storageBucket?: string;
+  storagePath?: string;
   metadata?: Record<string, unknown>;
 }) {
   const supabase = getSupabaseAdmin();
   const ext = extensionFromMime(input.mimeType, input.fileName);
-  const storagePath = `${input.kind}/${crypto.randomUUID()}.${ext}`;
-  const upload = await supabase.storage.from(bucket).upload(
-    storagePath,
-    input.bytes,
-    {
-      contentType: input.mimeType,
-      cacheControl: "3600",
-      upsert: false,
-    },
-  );
+  const bucket = input.storageBucket ?? defaultBucket;
+  const storagePath = input.storagePath ?? `${input.kind}/${crypto.randomUUID()}.${ext}`;
+  const upload = await supabase.storage.from(bucket).upload(storagePath, input.bytes, {
+    contentType: input.mimeType,
+    cacheControl: "3600",
+    upsert: false,
+  });
 
   if (upload.error) throw upload.error;
 
-  const { data: publicUrl } = supabase.storage.from(bucket).getPublicUrl(
-    storagePath,
-  );
+  const { data: publicUrl } = supabase.storage.from(bucket).getPublicUrl(storagePath);
   const inserted = await supabase
     .from("media_assets")
     .insert({
@@ -90,7 +87,7 @@ export async function registerMediaAsset(input: {
       account_id: input.accountId,
       kind: input.kind,
       source: input.source,
-      storage_bucket: bucket,
+      storage_bucket: defaultBucket,
       public_url: input.publicUrl,
       mime_type: input.mimeType ?? "video/mp4",
       file_name: input.fileName ?? null,
@@ -104,18 +101,13 @@ export async function registerMediaAsset(input: {
   return inserted.data;
 }
 
-export async function downloadBytes(
-  url: string,
-): Promise<{ bytes: Uint8Array; mimeType: string }> {
+export async function downloadBytes(url: string): Promise<{ bytes: Uint8Array; mimeType: string }> {
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(
-      `Download failed: ${response.status} ${response.statusText}`,
-    );
+    throw new Error(`Download failed: ${response.status} ${response.statusText}`);
   }
   return {
     bytes: new Uint8Array(await response.arrayBuffer()),
-    mimeType: response.headers.get("content-type")?.split(";")[0] ??
-      "application/octet-stream",
+    mimeType: response.headers.get("content-type")?.split(";")[0] ?? "application/octet-stream",
   };
 }

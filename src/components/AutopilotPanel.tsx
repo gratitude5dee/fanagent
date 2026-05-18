@@ -3,24 +3,21 @@
 // top-level mode in App.tsx.
 
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import {
   CalendarClock,
-  CheckCircle2,
   FileMusic,
   Info,
-  Loader2,
   PauseCircle,
-  Plus,
   PlayCircle,
-  PlugZap,
   RefreshCcw,
   RotateCcw,
   Sparkles,
-  UploadCloud,
 } from "lucide-react";
 import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
-import AudioTrimmer from "@/components/autopilot/AudioTrimmer";
+import { CampaignStep, type SourceMode } from "@/components/autopilot/CampaignStep";
+import { ConnectStep } from "@/components/autopilot/ConnectStep";
+import { LyricsStep } from "@/components/autopilot/LyricsStep";
+import { UploadStep, type Duration } from "@/components/autopilot/UploadStep";
 import type { LyricTemplateSummary } from "@/lib/lyrics/types";
 
 type Account = {
@@ -116,9 +113,6 @@ type Diagnostics = {
   }>;
 };
 
-type SourceMode = "stock" | "seedance" | "mixed" | "gmi_seedance";
-const DURATIONS = [15, 30, 45, 60, 75, 90] as const;
-type Duration = (typeof DURATIONS)[number];
 type Segment = {
   source?: string | null;
   url?: string | null;
@@ -128,6 +122,21 @@ type Segment = {
   durationSec?: number | null;
   reused?: boolean | null;
 };
+
+type FunctionEnvelope<T> = {
+  success: boolean;
+  code?: string;
+  message?: string;
+  data: T | null;
+  error?: string | null;
+};
+
+function unwrapFunctionData<T>(value: unknown): T {
+  if (typeof value !== "object" || value === null || !("success" in value)) return value as T;
+  const envelope = value as FunctionEnvelope<T>;
+  if (envelope.success) return envelope.data as T;
+  throw new Error(envelope.error || envelope.message || envelope.code || "Function failed");
+}
 
 async function blobToBase64(blob: Blob): Promise<string> {
   const buf = await blob.arrayBuffer();
@@ -141,8 +150,11 @@ async function callCampaign<T>(action: string, body?: Record<string, unknown>): 
   const { data, error } = await supabase.functions.invoke<T>("fanpage-campaign", {
     body: { action, ...(body ?? {}) },
   });
-  if (error) throw new Error(error.message);
-  return data as T;
+  if (error) {
+    if (data) return unwrapFunctionData<T>(data);
+    throw new Error(error.message);
+  }
+  return unwrapFunctionData<T>(data);
 }
 
 function tiktokConnectUrl(accountId: string): string {
@@ -212,6 +224,7 @@ export default function AutopilotPanel() {
   const [message, setMessage] = useState<string | null>(null);
   const [tab, setTab] = useState<"campaign" | "lyrics">("campaign");
   const [lyricTemplateId, setLyricTemplateId] = useState<string | "">("");
+  const [lyricsDrawerOpen, setLyricsDrawerOpen] = useState(false);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
 
   const lyricTemplates = useMemo(() => data?.lyricTemplates ?? [], [data?.lyricTemplates]);
@@ -231,6 +244,50 @@ export default function AutopilotPanel() {
       diagnostics.schema.generationItemsQueueColumns &&
       diagnostics.schema.workerRuns
     : false;
+  const sourceOptions = useMemo(
+    () => [
+      { value: "stock" as const, label: "Stock footage" },
+      {
+        value: "mixed" as const,
+        label: "Mixed: stock + Seedance 2",
+        disabled: diagnostics ? !diagnostics.env.fal : false,
+        reason: "FAL key missing",
+      },
+      {
+        value: "seedance" as const,
+        label: "Seedance 2 only",
+        disabled: diagnostics ? !diagnostics.env.fal : false,
+        reason: "FAL key missing",
+      },
+      {
+        value: "gmi_seedance" as const,
+        label: "GMI Seedance 2",
+        disabled: diagnostics ? !diagnostics.env.gmi : false,
+        reason: "GMI key missing",
+      },
+      {
+        value: "sports_edit" as const,
+        label: "Sports edit",
+        disabled: diagnostics
+          ? !(diagnostics.env.youtubeApiKey && diagnostics.env.sportsAllowed)
+          : false,
+        reason: "YouTube key or allowlist missing",
+      },
+      {
+        value: "streamer_clip" as const,
+        label: "Streamer clips",
+        disabled: diagnostics
+          ? !(
+              diagnostics.env.twitchClientId &&
+              diagnostics.env.twitchClientSecret &&
+              diagnostics.env.streamerAllowed
+            )
+          : false,
+        reason: "Twitch credentials or allowlist missing",
+      },
+    ],
+    [diagnostics],
+  );
 
   async function refresh() {
     try {
@@ -256,6 +313,10 @@ export default function AutopilotPanel() {
     const t = setInterval(refresh, 15_000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    if (trimmedAudio && !lyricTemplateId) setLyricsDrawerOpen(true);
+  }, [trimmedAudio, lyricTemplateId]);
 
   async function run<T>(label: string, fn: () => Promise<T>) {
     setBusy(true);
@@ -485,86 +546,24 @@ export default function AutopilotPanel() {
       ) : null}
 
       {tab === "lyrics" ? (
-        <section className="panel">
-          <div className="panel-title">
-            <FileMusic size={16} />
-            <h3>Lyrics templates</h3>
-          </div>
-          <div className="action-row">
-            <Link className="button primary" to="/lyrics/new">
-              <Plus size={14} /> New template
-            </Link>
-            <Link className="button ghost" to="/lyrics">
-              Open builder
-            </Link>
-          </div>
-          {lyricTemplates.length === 0 ? (
-            <div className="empty-state">
-              No templates yet. Create one to drive word timing + cut markers in renders.
-            </div>
-          ) : (
-            <div className="batch-list">
-              {lyricTemplates.map((t) => (
-                <div className="batch-row" key={t.id}>
-                  <span
-                    className={`dot ${t.status === "saved" ? "good" : t.status === "failed" ? "bad" : "warn"}`}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <strong>{t.title}</strong>
-                    <span>
-                      {t.status} · {(t.selection_duration_ms / 1000).toFixed(1)}s of{" "}
-                      {(t.total_duration_ms / 1000).toFixed(1)}s
-                    </span>
-                  </div>
-                  <Link className="button ghost" to={`/lyrics/templates/${t.id}`}>
-                    Edit
-                  </Link>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+        <LyricsStep
+          lyricTemplateId={lyricTemplateId}
+          lyricTemplates={lyricTemplates}
+          drawerOpen={lyricsDrawerOpen}
+          onDrawerOpen={setLyricsDrawerOpen}
+          onTemplate={setLyricTemplateId}
+        />
       ) : null}
 
       {tab !== "campaign" ? null : (
         <>
-          {/* STEP 1 — Connect TikTok */}
-          <section className="panel">
-            <div className="panel-title">
-              <PlugZap size={16} />
-              <h3>1. Connect TikTok</h3>
-            </div>
-            {account ? (
-              <div className="stack">
-                <div>
-                  Account:{" "}
-                  <strong>
-                    {account.handle ?? account.tiktok_display_name ?? account.id.slice(0, 8)}
-                  </strong>{" "}
-                  {isConnected ? (
-                    <span className="status-pill good">
-                      <CheckCircle2 size={14} /> connected
-                    </span>
-                  ) : (
-                    <span className="status-pill warn">not connected</span>
-                  )}
-                </div>
-                <a className="button ghost" href={tiktokConnectUrl(account.id)}>
-                  <PlugZap size={16} /> {isConnected ? "Reconnect" : "Connect TikTok"}
-                </a>
-              </div>
-            ) : (
-              <div className="empty-state">Loading account…</div>
-            )}
-          </section>
-
-          {/* STEP 2 — Source + cadence */}
+          <ConnectStep
+            account={account}
+            isConnected={isConnected}
+            connectUrl={account ? tiktokConnectUrl(account.id) : null}
+          />
           {account ? (
-            <section className="panel">
-              <div className="panel-title">
-                <UploadCloud size={16} />
-                <h3>2. Upload audio + schedule campaign</h3>
-              </div>
+            <>
               <form
                 className="stack"
                 onSubmit={(e) => {
@@ -572,263 +571,62 @@ export default function AutopilotPanel() {
                   run("Campaign launch", startCampaign);
                 }}
               >
-                <label>
-                  Audio (MP3/WAV/M4A)
-                  <input
-                    type="file"
-                    accept="audio/*"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0] ?? null;
-                      setAudioFile(f);
-                      setTrimmedAudio(null);
-                    }}
-                    required={!trimmedAudio}
-                  />
-                </label>
-                {audioFile ? (
-                  <AudioTrimmer
-                    file={audioFile}
-                    maxDurationSec={duration}
-                    onTrimmed={(blob, selection) =>
-                      setTrimmedAudio({ blob, name: audioFile.name, ...selection })
-                    }
-                  />
-                ) : null}
-                {trimmedAudio ? (
-                  <div className="banner">
-                    Trimmed clip ready ({trimmedAudio.startSec.toFixed(1)}s to{" "}
-                    {trimmedAudio.endSec.toFixed(1)}s, {trimmedAudio.durationSec.toFixed(1)}s).
-                  </div>
-                ) : null}
-                {!schemaReady ? (
-                  <div className="banner bad">
-                    Database queue schema is not ready. Generation is blocked until the live
-                    migration is applied.
-                  </div>
-                ) : null}
-                {!isConnected ? (
-                  <div className="banner warn">
-                    TikTok is not connected. Videos can still generate; auto-posting will wait until
-                    OAuth is connected.
-                  </div>
-                ) : null}
-                <label>
-                  Post duration
-                  <div className="action-row" style={{ flexWrap: "wrap", gap: 6 }}>
-                    {DURATIONS.map((d) => (
-                      <button
-                        type="button"
-                        key={d}
-                        className={`button ${duration === d ? "primary" : "ghost"}`}
-                        onClick={() => {
-                          setDuration(d);
-                          // Re-trim required if user shrinks below current selection.
-                          setTrimmedAudio(null);
-                        }}
-                      >
-                        {d}s
-                      </button>
-                    ))}
-                  </div>
-                </label>
-                <label>
-                  Theme / visual prompt (AI will generate per-post shot prompts)
-                  <textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-                </label>
-                <div className="split">
-                  <label>
-                    Source
-                    <select
-                      value={sourceMode}
-                      onChange={(e) => setSourceMode(e.target.value as SourceMode)}
-                    >
-                      <option value="stock">Stock footage (Pexels + Pixabay)</option>
-                      <option value="mixed">Mixed: stock + Seedance 2</option>
-                      <option value="seedance">Seedance 2 only</option>
-                      <option value="gmi_seedance">GMI Seedance 2</option>
-                    </select>
-                  </label>
-                  <label>
-                    Posts to queue
-                    <input
-                      type="number"
-                      min={1}
-                      max={250}
-                      value={postCount}
-                      onChange={(e) => setPostCount(Number(e.target.value))}
-                    />
-                  </label>
-                </div>
-                <div className="split schedule-split">
-                  <label>
-                    First post
-                    <input
-                      type="datetime-local"
-                      value={startAt}
-                      onChange={(e) => setStartAt(e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Cadence min
-                    <input
-                      type="number"
-                      min={5}
-                      max={10080}
-                      value={cadenceMinutes}
-                      onChange={(e) => setCadenceMinutes(Number(e.target.value))}
-                    />
-                  </label>
-                </div>
-                <section className="panel subtle-panel">
-                  <div className="panel-title">
-                    <Info size={14} />
-                    <h4>Stock controls</h4>
-                  </div>
-                  <div className="action-row" style={{ flexWrap: "wrap" }}>
-                    {(["library", "pexels", "pixabay"] as const).map((provider) => (
-                      <label className="check" key={provider}>
-                        <input
-                          type="checkbox"
-                          checked={stockProviders[provider]}
-                          onChange={(e) =>
-                            setStockProviders((current) => ({
-                              ...current,
-                              [provider]: e.target.checked,
-                            }))
-                          }
-                        />{" "}
-                        {provider}
-                      </label>
-                    ))}
-                    <label className="check">
-                      <input
-                        type="checkbox"
-                        checked={stockPortraitOnly}
-                        onChange={(e) => setStockPortraitOnly(e.target.checked)}
-                      />{" "}
-                      portrait only
-                    </label>
-                    <label className="check">
-                      <input
-                        type="checkbox"
-                        checked={stockAvoidReuse}
-                        onChange={(e) => setStockAvoidReuse(e.target.checked)}
-                      />{" "}
-                      avoid repeats
-                    </label>
-                    <label className="check">
-                      <input
-                        type="checkbox"
-                        checked={stockAllowReuse}
-                        onChange={(e) => setStockAllowReuse(e.target.checked)}
-                      />{" "}
-                      reuse if exhausted
-                    </label>
-                  </div>
-                  <div className="split">
-                    <label>
-                      Keywords
-                      <input
-                        value={stockKeywords}
-                        onChange={(e) => setStockKeywords(e.target.value)}
-                        placeholder="concert, neon, crowd"
-                      />
-                    </label>
-                    <label>
-                      Avoid
-                      <input
-                        value={stockNegativeKeywords}
-                        onChange={(e) => setStockNegativeKeywords(e.target.value)}
-                        placeholder="logo, watermark"
-                      />
-                    </label>
-                  </div>
-                  <div className="split">
-                    <label>
-                      Category
-                      <input
-                        value={stockCategory}
-                        onChange={(e) => setStockCategory(e.target.value)}
-                        placeholder="music"
-                      />
-                    </label>
-                    <label>
-                      Mood
-                      <input
-                        value={stockMood}
-                        onChange={(e) => setStockMood(e.target.value)}
-                        placeholder="high energy"
-                      />
-                    </label>
-                  </div>
-                  <label>
-                    fal Seedance resolution
-                    <select
-                      value={seedanceResolution}
-                      onChange={(e) =>
-                        setSeedanceResolution(e.target.value as "480p" | "720p" | "1080p")
-                      }
-                    >
-                      <option value="480p">480p draft</option>
-                      <option value="720p">720p balanced</option>
-                      <option value="1080p">1080p final</option>
-                    </select>
-                  </label>
-                  <label>
-                    TikTok privacy default
-                    <select
-                      value={publishPrivacy}
-                      onChange={(e) => setPublishPrivacy(e.target.value)}
-                    >
-                      <option value="SELF_ONLY">SELF_ONLY</option>
-                      <option value="MUTUAL_FOLLOW_FRIENDS">MUTUAL_FOLLOW_FRIENDS</option>
-                      <option value="FOLLOWER_OF_CREATOR">FOLLOWER_OF_CREATOR</option>
-                      <option value="PUBLIC_TO_EVERYONE">PUBLIC_TO_EVERYONE</option>
-                    </select>
-                  </label>
-                </section>
-                <label>
-                  Lyrics template (optional)
-                  <select
-                    value={lyricTemplateId}
-                    onChange={(e) => setLyricTemplateId(e.target.value)}
-                  >
-                    <option value="">None — basic captions only</option>
-                    {lyricTemplates.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.title} ({(t.selection_duration_ms / 1000).toFixed(0)}s · {t.status})
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <div
-                  className="banner"
-                  style={{ display: "flex", gap: 8, alignItems: "flex-start" }}
-                >
-                  <Info size={14} style={{ marginTop: 2, flexShrink: 0 }} />
-                  <span>
-                    <strong>Stock footage</strong> is sourced from Pexels + Pixabay (and any clips
-                    you've added to your library), ranked for portrait aspect, and cached privately
-                    in Supabase Storage. <strong>Seedance 2</strong> generates per-segment AI video
-                    via fal.ai. <strong>GMI Seedance</strong> is available when its API keys are
-                    configured.
-                  </span>
-                </div>
-                {duration > 15 ? (
-                  <div className="banner">
-                    {Math.ceil(duration / 15)} clips per post will be stitched together with ffmpeg.
-                  </div>
-                ) : null}
-                <button
-                  className="button primary"
-                  disabled={busy || !trimmedAudio || !schemaReady}
-                  type="submit"
-                >
-                  {busy ? <Loader2 className="spin" size={16} /> : <CalendarClock size={16} />}{" "}
-                  Launch campaign
-                </button>
+                <UploadStep
+                  audioFile={audioFile}
+                  duration={duration}
+                  isConnected={isConnected}
+                  schemaReady={schemaReady}
+                  trimmedAudio={trimmedAudio}
+                  onAudioFile={setAudioFile}
+                  onDuration={setDuration}
+                  onTrimmedAudio={setTrimmedAudio}
+                />
+                <LyricsStep
+                  lyricTemplateId={lyricTemplateId}
+                  lyricTemplates={lyricTemplates}
+                  drawerOpen={lyricsDrawerOpen}
+                  onDrawerOpen={setLyricsDrawerOpen}
+                  onTemplate={setLyricTemplateId}
+                />
+                <CampaignStep
+                  busy={busy}
+                  cadenceMinutes={cadenceMinutes}
+                  duration={duration}
+                  postCount={postCount}
+                  prompt={prompt}
+                  publishPrivacy={publishPrivacy}
+                  schemaReady={schemaReady}
+                  seedanceResolution={seedanceResolution}
+                  sourceMode={sourceMode}
+                  sourceOptions={sourceOptions}
+                  startAt={startAt}
+                  stockAllowReuse={stockAllowReuse}
+                  stockAvoidReuse={stockAvoidReuse}
+                  stockCategory={stockCategory}
+                  stockKeywords={stockKeywords}
+                  stockMood={stockMood}
+                  stockNegativeKeywords={stockNegativeKeywords}
+                  stockPortraitOnly={stockPortraitOnly}
+                  stockProviders={stockProviders}
+                  trimmedAudioReady={!!trimmedAudio}
+                  onCadenceMinutes={setCadenceMinutes}
+                  onPostCount={setPostCount}
+                  onPrompt={setPrompt}
+                  onPublishPrivacy={setPublishPrivacy}
+                  onSeedanceResolution={setSeedanceResolution}
+                  onSourceMode={setSourceMode}
+                  onStartAt={setStartAt}
+                  onStockAllowReuse={setStockAllowReuse}
+                  onStockAvoidReuse={setStockAvoidReuse}
+                  onStockCategory={setStockCategory}
+                  onStockKeywords={setStockKeywords}
+                  onStockMood={setStockMood}
+                  onStockNegativeKeywords={setStockNegativeKeywords}
+                  onStockPortraitOnly={setStockPortraitOnly}
+                  onStockProviders={setStockProviders}
+                />
               </form>
-            </section>
+            </>
           ) : null}
 
           {/* STEP 3 — Active campaign */}

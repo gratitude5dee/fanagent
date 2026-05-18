@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState, useTransition } from "rea
 import type { EventDropArg, EventInput } from "@fullcalendar/core";
 import {
   CalendarDays,
+  Images,
   Music4,
   PlugZap,
   RefreshCcw,
@@ -48,14 +49,30 @@ async function fileToBase64(file: File): Promise<string> {
   return btoa(binary);
 }
 
+type FunctionEnvelope<T> = {
+  success: boolean;
+  code?: string;
+  message?: string;
+  data: T | null;
+  error?: string | null;
+};
+
+function unwrapFunctionData<T>(value: unknown): T {
+  if (typeof value !== "object" || value === null || !("success" in value)) return value as T;
+  const envelope = value as FunctionEnvelope<T>;
+  if (envelope.success) return envelope.data as T;
+  throw new Error(envelope.error || envelope.message || envelope.code || "Function failed");
+}
+
 async function invokeFunction<T>(name: string, body?: Record<string, unknown>): Promise<T> {
   const { data, error } = await supabase.functions.invoke<T>(name, { body: body ?? {} });
 
   if (error) {
+    if (data) return unwrapFunctionData<T>(data);
     throw new Error(error.message);
   }
 
-  return data as T;
+  return unwrapFunctionData<T>(data);
 }
 
 function tiktokConnectUrl(accountId: string): string {
@@ -226,6 +243,12 @@ export default function App() {
             </button>
             <Link className="button ghost" to="/lyrics">
               <Music4 size={14} /> Lyrics
+            </Link>
+            <Link className="button ghost" to="/library">
+              <Images size={14} /> Library
+            </Link>
+            <Link className="button ghost" to="/calendar">
+              <CalendarDays size={14} /> Calendar
             </Link>
           </div>
           {mode === "studio" ? (

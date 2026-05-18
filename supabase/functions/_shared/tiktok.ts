@@ -1,9 +1,39 @@
 import { decryptSecret, encryptSecret } from "./crypto.ts";
 import { requireEnv } from "./env.ts";
-import { getSupabaseAdmin } from "./supabase.ts";
 
 const apiBase = "https://open.tiktokapis.com";
 const authBase = "https://www.tiktok.com/v2/auth/authorize/";
+
+export type TikTokPublishBlockStatus =
+  | "blocked_account_not_connected"
+  | "blocked_missing_privacy"
+  | "blocked_creator_restriction"
+  | "blocked_missing_video";
+
+export type TikTokPublishErrorClassification =
+  | {
+      kind: "blocked";
+      publishStatus: TikTokPublishBlockStatus;
+      message: string;
+    }
+  | {
+      kind: "retryable";
+      message: string;
+    }
+  | {
+      kind: "failed";
+      message: string;
+    };
+
+export class TikTokPublishBlockedError extends Error {
+  publishStatus: TikTokPublishBlockStatus;
+
+  constructor(message: string, publishStatus: TikTokPublishBlockStatus) {
+    super(message);
+    this.name = "TikTokPublishBlockedError";
+    this.publishStatus = publishStatus;
+  }
+}
 
 export type TikTokPostSettings = {
   title: string;
@@ -15,6 +45,117 @@ export type TikTokPostSettings = {
   brandContentToggle: boolean;
   brandOrganicToggle: boolean;
 };
+
+type TikTokPublishPreflightPost = {
+  video_url?: string | null;
+  tiktok_privacy_level?: string | null;
+};
+
+async function getSupabase() {
+  const { getSupabaseAdmin } = await import("./supabase.ts");
+  return getSupabaseAdmin();
+}
+
+export function isBlockedPublishStatus(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.startsWith("blocked_");
+}
+
+export function getTikTokPublishBlock(
+  post: TikTokPublishPreflightPost,
+): { publishStatus: TikTokPublishBlockStatus; message: string } | null {
+  if (!post.video_url) {
+    return {
+      publishStatus: "blocked_missing_video",
+      message: "Post is missing a final video URL.",
+    };
+  }
+  if (!post.tiktok_privacy_level) {
+    return {
+      publishStatus: "blocked_missing_privacy",
+      message: "Choose a TikTok privacy level before publishing.",
+    };
+  }
+  return null;
+}
+
+export function isRetryableTikTokPublishError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(429|500|502|503|504|rate_limit|internal_error)\b/i.test(message);
+}
+
+export function classifyTikTokPublishError(error: unknown): TikTokPublishErrorClassification {
+  if (error instanceof TikTokPublishBlockedError) {
+    return {
+      kind: "blocked",
+      publishStatus: error.publishStatus,
+      message: error.message,
+    };
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  if (/TikTok account is not connected/i.test(message)) {
+    return {
+      kind: "blocked",
+      publishStatus: "blocked_account_not_connected",
+      message: "Connect TikTok to auto-post.",
+    };
+  }
+
+  if (isRetryableTikTokPublishError(error)) {
+    return {
+      kind: "retryable",
+      message,
+    };
+  }
+
+  return {
+    kind: "failed",
+    message,
+  };
+}
+
+export function ensureCreatorAllowsPost(
+  creatorInfo: Record<string, unknown>,
+  post: TikTokPublishPreflightPost & {
+    tiktok_disable_duet?: boolean;
+    tiktok_disable_stitch?: boolean;
+    tiktok_disable_comment?: boolean;
+  },
+) {
+  const options = Array.isArray(creatorInfo.privacy_level_options)
+    ? creatorInfo.privacy_level_options.map(String)
+    : [];
+  if (!post.tiktok_privacy_level) {
+    throw new TikTokPublishBlockedError(
+      "Choose a TikTok privacy level before publishing.",
+      "blocked_missing_privacy",
+    );
+  }
+  if (options.length > 0 && !options.includes(post.tiktok_privacy_level)) {
+    throw new TikTokPublishBlockedError(
+      "Selected TikTok privacy level is not available for this creator.",
+      "blocked_creator_restriction",
+    );
+  }
+  if (creatorInfo.duet_disabled === true && !post.tiktok_disable_duet) {
+    throw new TikTokPublishBlockedError(
+      "TikTok creator settings require duet to be disabled.",
+      "blocked_creator_restriction",
+    );
+  }
+  if (creatorInfo.stitch_disabled === true && !post.tiktok_disable_stitch) {
+    throw new TikTokPublishBlockedError(
+      "TikTok creator settings require stitch to be disabled.",
+      "blocked_creator_restriction",
+    );
+  }
+  if (creatorInfo.comment_disabled === true && !post.tiktok_disable_comment) {
+    throw new TikTokPublishBlockedError(
+      "TikTok creator settings require comments to be disabled.",
+      "blocked_creator_restriction",
+    );
+  }
+}
 
 export function encodeOAuthState(
   state: { accountId: string; createdAt: number },
@@ -100,7 +241,7 @@ export async function saveTokens(accountId: string, tokens: {
   scope?: string;
   expires_in?: number;
 }) {
-  const supabase = getSupabaseAdmin();
+  const supabase = await getSupabase();
   const values: Record<string, unknown> = {
     tiktok_open_id: tokens.open_id,
     tiktok_access_token_encrypted: await encryptSecret(tokens.access_token),
@@ -154,7 +295,7 @@ async function refreshAccessToken(
 }
 
 export async function getAccessToken(accountId: string): Promise<string> {
-  const supabase = getSupabaseAdmin();
+  const supabase = await getSupabase();
   const account = await supabase
     .from("accounts")
     .select(
@@ -164,7 +305,10 @@ export async function getAccessToken(accountId: string): Promise<string> {
     .single();
   if (account.error) throw account.error;
   if (!account.data.tiktok_access_token_encrypted) {
-    throw new Error("TikTok account is not connected.");
+    throw new TikTokPublishBlockedError(
+      "TikTok account is not connected.",
+      "blocked_account_not_connected",
+    );
   }
   const expiresAt = Date.parse(account.data.tiktok_token_expires_at ?? "");
   if (Number.isFinite(expiresAt) && expiresAt < Date.now() + 5 * 60_000) {

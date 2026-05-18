@@ -21,7 +21,10 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@/lib/library/*": ["./src/lib/library/*"],
+      "@/lib/sources/*": ["./src/lib/sources/*"],
+      "@/lib/calendar/*": ["./src/lib/calendar/*"]
     }
   }
 }

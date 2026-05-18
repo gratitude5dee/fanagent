@@ -6,15 +6,17 @@
 //   - mixed/seedance with pending segments → "planning" (orchestrator dispatches seedance)
 
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
-import {
-  collectUsedStockKeys,
-  createSegmentVisualPlan,
-  createStockSegment,
-  normalizeSourceMode,
-  selectStockCandidate,
-  stockIdentityKeys,
-} from "../_shared/generation.ts";
-import { cacheStockClip, searchStock, type StockSettings } from "../_shared/stock.ts";
+import { optionalEnv } from "../_shared/env.ts";
+import { createSegmentVisualPlan, normalizeSourceMode } from "../_shared/generation.ts";
+import { candidateDedupeKeys, selectUnique } from "../_shared/sources/dedupe.ts";
+import { filterByDuration, filterPortrait } from "../_shared/sources/filters.ts";
+import { getSourceAdapter, normalizeSourceType } from "../_shared/sources/registry.ts";
+import type {
+  DedupeStrategy,
+  SourceCandidate,
+  SourceSegmentRequest,
+  SourceType,
+} from "../_shared/sources/types.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
 type Segment = {
@@ -23,10 +25,33 @@ type Segment = {
   prompt?: string;
   provider?: string | null;
   externalId?: string | null;
+  candidateId?: string | null;
   query?: string | null;
   durationSec?: number | null;
+  toleranceSec?: number | null;
   reused?: boolean | null;
 };
+
+type CandidateSearchEnvelope = {
+  data?: {
+    candidates?: Record<string, SourceCandidate[]>;
+  };
+  candidates?: Record<string, SourceCandidate[]>;
+  error?: unknown;
+  errorDetail?: unknown;
+};
+
+function fnUrl(name: string): string {
+  return `${optionalEnv("SUPABASE_URL")}/functions/v1/${name}`;
+}
+
+async function invokeChild(name: string, body: unknown): Promise<Response> {
+  return fetch(fnUrl(name), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
 
 function transcriptText(value: unknown): string {
   if (!value) return "";
@@ -62,6 +87,126 @@ function transcriptSnippet(value: unknown, itemIndex: number, segmentIndex: numb
   return [...words, ...words].slice(start, start + 14).join(" ");
 }
 
+async function searchCandidates(input: {
+  audioClipId: string;
+  accountId: string;
+  segment: SourceSegmentRequest;
+  tolerancePreferredSec: number;
+  toleranceFallbackSec: number;
+  portraitOnly: boolean;
+}): Promise<SourceCandidate[]> {
+  const response = await invokeChild("source-candidate-search", {
+    audioClipId: input.audioClipId,
+    accountId: input.accountId,
+    tolerancePreferredSec: input.tolerancePreferredSec,
+    toleranceFallbackSec: input.toleranceFallbackSec,
+    portraitOnly: input.portraitOnly,
+    segments: [input.segment],
+  });
+  const json = (await response.json().catch(() => ({}))) as CandidateSearchEnvelope;
+  if (!response.ok) {
+    throw new Error(
+      `source-candidate-search failed [${response.status}]: ${JSON.stringify(
+        json.errorDetail ?? json.error ?? json,
+      )}`,
+    );
+  }
+  return (
+    json.data?.candidates?.[String(input.segment.segmentIndex)] ??
+    json.candidates?.[String(input.segment.segmentIndex)] ??
+    []
+  );
+}
+
+async function loadUsedCandidateKeys(input: {
+  accountId: string;
+  audioClipId: string;
+}): Promise<Set<string>> {
+  const supabase = getSupabaseAdmin();
+  const used = new Set<string>();
+  const byClip = await supabase
+    .from("source_candidate_uses")
+    .select("source_candidates(*)")
+    .eq("audio_clip_id", input.audioClipId);
+  if (byClip.error) throw byClip.error;
+
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const byAccount = await supabase
+    .from("source_candidate_uses")
+    .select("source_candidates(*)")
+    .eq("account_id", input.accountId)
+    .gte("created_at", thirtyDaysAgo);
+  if (byAccount.error) throw byAccount.error;
+
+  for (const row of [...(byClip.data ?? []), ...(byAccount.data ?? [])]) {
+    const candidate = (row as { source_candidates?: SourceCandidate | SourceCandidate[] })
+      .source_candidates;
+    const resolved = Array.isArray(candidate) ? candidate[0] : candidate;
+    if (!resolved) continue;
+    for (const key of candidateDedupeKeys(resolved)) used.add(key);
+  }
+  return used;
+}
+
+async function recordCandidateUse(input: {
+  candidate: SourceCandidate;
+  accountId: string;
+  audioClipId: string;
+  batchId: string;
+  generationItemId: string;
+  segmentIndex: number;
+  reused: boolean;
+  toleranceSecondsUsed: number | null;
+}): Promise<void> {
+  if (!input.candidate.id) return;
+  const supabase = getSupabaseAdmin();
+  const upsert = await supabase.from("source_candidate_uses").upsert(
+    {
+      candidate_id: input.candidate.id,
+      account_id: input.accountId,
+      audio_clip_id: input.audioClipId,
+      batch_id: input.batchId,
+      generation_item_id: input.generationItemId,
+      segment_index: input.segmentIndex,
+      reused: input.reused,
+      tolerance_seconds_used: input.toleranceSecondsUsed,
+    },
+    { onConflict: "generation_item_id,segment_index" },
+  );
+  if (upsert.error) throw upsert.error;
+}
+
+function plannedSourceForSegment(sourceMode: string, segmentIndex: number): "stock" | "seedance" {
+  if (sourceMode === "seedance" || sourceMode === "gmi_seedance") return "seedance";
+  if (sourceMode === "mixed") return segmentIndex % 2 === 0 ? "stock" : "seedance";
+  return "stock";
+}
+
+function sourceTypeForSearch(sourceMode: string): SourceType {
+  if (sourceMode === "sports_edit" || sourceMode === "streamer_clip") return sourceMode;
+  return "stock";
+}
+
+function buildCandidateSegment(input: {
+  candidate: SourceCandidate;
+  url: string;
+  query: string;
+  reused: boolean;
+  toleranceSecondsUsed: number | null;
+}): Segment {
+  return {
+    source: "stock",
+    url: input.url,
+    provider: input.candidate.provider,
+    externalId: input.candidate.external_id ?? null,
+    candidateId: input.candidate.id ?? null,
+    query: input.query,
+    durationSec: Number(input.candidate.duration_seconds),
+    toleranceSec: input.toleranceSecondsUsed,
+    reused: input.reused,
+  };
+}
+
 Deno.serve(async (request) => {
   const opt = handleOptions(request);
   if (opt) return opt;
@@ -74,17 +219,24 @@ Deno.serve(async (request) => {
     const supabase = getSupabaseAdmin();
     const item = await supabase
       .from("generation_items")
-      .select("id,account_id,batch_id,item_index,prompt,input_payload,duration_seconds")
+      .select(
+        "id,account_id,batch_id,item_index,prompt,input_payload,duration_seconds,audio_clip_id",
+      )
       .eq("id", body.itemId)
       .single();
     if (item.error) throw item.error;
 
     const batch = await supabase
       .from("generation_batches")
-      .select("source_mode,duration_seconds,settings,audio_asset_id")
+      .select(
+        "source_mode,duration_seconds,settings,audio_asset_id,audio_clip_id,dedupe_strategy,duration_tolerance_seconds,duration_tolerance_fallback_seconds",
+      )
       .eq("id", item.data.batch_id)
       .single();
     if (batch.error) throw batch.error;
+
+    const audioClipId = item.data.audio_clip_id ?? batch.data.audio_clip_id;
+    if (!audioClipId) throw new Error("audio_clip_id is required for source candidate dedupe.");
 
     const total = Number(item.data.duration_seconds ?? batch.data.duration_seconds ?? 15);
     const segCount = Math.max(1, Math.ceil(total / 15));
@@ -98,17 +250,14 @@ Deno.serve(async (request) => {
       ...((batchSettings.stock ?? {}) as Record<string, unknown>),
       ...((payload.stock_settings ?? {}) as Record<string, unknown>),
       minDurationSec: Math.min(15, total),
-    } as StockSettings;
-
-    const priorItems = await supabase
-      .from("generation_items")
-      .select("segments,stock_clip_url")
-      .eq("batch_id", item.data.batch_id)
-      .lt("item_index", item.data.item_index ?? 0)
-      .order("item_index", { ascending: true });
-    if (priorItems.error) throw priorItems.error;
-
-    const usedStockKeys = collectUsedStockKeys(priorItems.data ?? []);
+    } as Record<string, unknown>;
+    const preferredTolerance = Number(batch.data.duration_tolerance_seconds ?? 5);
+    const fallbackTolerance = Number(batch.data.duration_tolerance_fallback_seconds ?? 10);
+    const dedupeStrategy = String(batch.data.dedupe_strategy ?? "strict") as DedupeStrategy;
+    const usedCandidateKeys = await loadUsedCandidateKeys({
+      accountId: item.data.account_id,
+      audioClipId,
+    });
 
     const audio = batch.data.audio_asset_id
       ? await supabase
@@ -122,10 +271,7 @@ Deno.serve(async (request) => {
 
     // Decide source per segment.
     const sources: Array<"stock" | "seedance"> = Array.from({ length: segCount }, (_, i) => {
-      if (sourceMode === "stock") return "stock";
-      if (sourceMode === "seedance") return "seedance";
-      // mixed: alternate
-      return i % 2 === 0 ? "stock" : "seedance";
+      return plannedSourceForSegment(sourceMode, i);
     });
 
     const segments: Segment[] = [];
@@ -145,32 +291,65 @@ Deno.serve(async (request) => {
       });
 
       if (src === "stock") {
-        const stockCandidates = await searchStock({
+        const sourceType = sourceTypeForSearch(sourceMode);
+        const rawCandidates = await searchCandidates({
+          audioClipId,
           accountId: item.data.account_id,
-          query: visualPlan.query,
-          settings: stockSettings,
+          tolerancePreferredSec: preferredTolerance,
+          toleranceFallbackSec: fallbackTolerance,
+          portraitOnly: stockSettings.portraitOnly !== false,
+          segment: {
+            segmentIndex,
+            sourceType,
+            targetDurationSec: segmentDuration,
+            query: visualPlan.query,
+            settings: stockSettings,
+          },
         });
-        const selected = selectStockCandidate(stockCandidates, usedStockKeys, {
-          avoidReuseWithinBatch: stockSettings.avoidReuseWithinBatch !== false,
-          allowReuseWhenExhausted: stockSettings.allowReuseWhenExhausted !== false,
-        });
+        const portraitCandidates =
+          stockSettings.portraitOnly === false ? rawCandidates : filterPortrait(rawCandidates);
+        const durationFiltered = filterByDuration(
+          portraitCandidates,
+          segmentDuration,
+          preferredTolerance,
+          fallbackTolerance,
+        );
+        const selected = selectUnique(
+          durationFiltered.candidates,
+          usedCandidateKeys,
+          dedupeStrategy,
+        );
 
         if (selected) {
-          const url = await cacheStockClip(selected.candidate);
+          const adapter = getSourceAdapter(normalizeSourceType(selected.candidate.source_type));
+          const cached = await adapter.cache(selected.candidate);
           segments.push(
-            createStockSegment({
-              clip: selected.candidate,
-              url,
+            buildCandidateSegment({
+              candidate: selected.candidate,
+              url: cached.url,
               query: visualPlan.query,
               reused: selected.reused,
-            }) as Segment,
+              toleranceSecondsUsed:
+                selected.candidate.tolerance_seconds_used ?? durationFiltered.toleranceUsed,
+            }),
           );
-          for (const key of stockIdentityKeys(selected.candidate)) usedStockKeys.add(key);
-          usedStockKeys.add(url);
+          await recordCandidateUse({
+            candidate: selected.candidate,
+            accountId: item.data.account_id,
+            audioClipId,
+            batchId: item.data.batch_id,
+            generationItemId: item.data.id,
+            segmentIndex,
+            reused: selected.reused,
+            toleranceSecondsUsed:
+              selected.candidate.tolerance_seconds_used ?? durationFiltered.toleranceUsed,
+          });
+          for (const key of candidateDedupeKeys(selected.candidate)) usedCandidateKeys.add(key);
+          if (cached.url) usedCandidateKeys.add(`url:${cached.url}`);
           continue;
         }
 
-        if (sourceMode === "stock") {
+        if (sourceMode === "stock" && !optionalEnv("FAL_KEY")) {
           throw new Error(`No stock candidates for prompt: ${visualPlan.query}`);
         }
       }
@@ -185,11 +364,17 @@ Deno.serve(async (request) => {
     }
 
     const allFilled = segments.every((s) => !!s.url);
+    const toleranceValues = segments
+      .map((segment) => segment.toleranceSec)
+      .filter((value): value is number => typeof value === "number");
     const updated = await supabase
       .from("generation_items")
       .update({
         segments,
         stock_clip_url: segments[0]?.url ?? null,
+        duration_tolerance_seconds_used: toleranceValues.length
+          ? Math.max(...toleranceValues)
+          : null,
         status: allFilled ? "picking_stock" : "planning",
       })
       .eq("id", body.itemId);

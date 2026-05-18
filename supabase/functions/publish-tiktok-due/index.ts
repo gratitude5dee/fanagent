@@ -3,10 +3,15 @@ import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { errorMessage, serializeError } from "../_shared/errors.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 import {
+  classifyTikTokPublishError,
+  ensureCreatorAllowsPost,
   fetchPublishStatus,
   getAccessToken,
+  getTikTokPublishBlock,
   initDirectPost,
+  isBlockedPublishStatus,
   queryCreatorInfo,
+  type TikTokPublishBlockStatus,
   uploadChunks,
 } from "../_shared/tiktok.ts";
 
@@ -28,6 +33,11 @@ type Post = {
   tiktok_is_aigc: boolean;
   tiktok_brand_content: boolean;
   tiktok_brand_organic: boolean;
+  updated_at?: string | null;
+};
+
+type RequestBody = {
+  rescanBlockedMinutes?: number;
 };
 
 function titleForPost(post: Post): string {
@@ -53,7 +63,7 @@ async function applyPublishStatus(post: Post, accessToken: string) {
       .update({
         status: "posted",
         posted_at: new Date().toISOString(),
-        publish_status: data.status,
+        publish_status: "publish_complete",
         tiktok_post_id: publicIds[0] ?? null,
         publish_error: null,
         error_message: null,
@@ -68,7 +78,7 @@ async function applyPublishStatus(post: Post, accessToken: string) {
       .from("posts")
       .update({
         status: "failed",
-        publish_status: data.status,
+        publish_status: "failed",
         publish_error: data.fail_reason ?? "TikTok publish failed.",
         error_message: data.fail_reason ?? "TikTok publish failed.",
       })
@@ -79,50 +89,24 @@ async function applyPublishStatus(post: Post, accessToken: string) {
 
   const updated = await supabase
     .from("posts")
-    .update({ status: "posting", publish_status: data.status })
+    .update({ status: "posting", publish_status: "processing" })
     .eq("id", post.id);
   if (updated.error) throw updated.error;
   return { id: post.id, status: data.status };
 }
 
-function ensureCreatorAllowsPost(creatorInfo: Record<string, unknown>, post: Post) {
-  const options = Array.isArray(creatorInfo.privacy_level_options)
-    ? creatorInfo.privacy_level_options.map(String)
-    : [];
-  if (!post.tiktok_privacy_level) {
-    throw new Error("Choose a TikTok privacy level before publishing.");
-  }
-  if (options.length > 0 && !options.includes(post.tiktok_privacy_level)) {
-    throw new Error("Selected TikTok privacy level is not available for this creator.");
-  }
-  if (creatorInfo.duet_disabled === true && !post.tiktok_disable_duet) {
-    throw new Error("TikTok creator settings require duet to be disabled.");
-  }
-  if (creatorInfo.stitch_disabled === true && !post.tiktok_disable_stitch) {
-    throw new Error("TikTok creator settings require stitch to be disabled.");
-  }
-  if (creatorInfo.comment_disabled === true && !post.tiktok_disable_comment) {
-    throw new Error("TikTok creator settings require comments to be disabled.");
-  }
-}
-
-function isRetryable(error: unknown): boolean {
-  const message = errorMessage(error);
-  return /\b(429|500|502|503|504|rate_limit|internal_error)\b/i.test(message);
-}
-
-function isTikTokDisconnected(error: unknown): boolean {
-  return /TikTok account is not connected/i.test(errorMessage(error));
-}
-
-async function blockPostUntilTikTokConnected(post: Post, error: unknown) {
+async function blockPost(
+  post: Post,
+  publishStatus: TikTokPublishBlockStatus,
+  message: string,
+  error?: unknown,
+) {
   const supabase = getSupabaseAdmin();
-  const message = "Connect TikTok to auto-post.";
   const updated = await supabase
     .from("posts")
     .update({
-      status: post.status === "posting" ? "posting" : "pending",
-      publish_status: "blocked_account_not_connected",
+      status: "pending",
+      publish_status: publishStatus,
       publish_error: message,
       error_message: message,
     })
@@ -130,9 +114,9 @@ async function blockPostUntilTikTokConnected(post: Post, error: unknown) {
   if (updated.error) throw updated.error;
   return {
     id: post.id,
-    status: "blocked_account_not_connected",
+    status: publishStatus,
     error: message,
-    errorDetail: serializeError(error),
+    errorDetail: error ? serializeError(error) : null,
   };
 }
 
@@ -179,27 +163,28 @@ async function failPost(post: Post, error: unknown) {
 }
 
 async function handlePublishError(post: Post, error: unknown) {
-  if (isTikTokDisconnected(error)) {
-    return blockPostUntilTikTokConnected(post, error);
+  const classification = classifyTikTokPublishError(error);
+  if (classification.kind === "blocked") {
+    return blockPost(post, classification.publishStatus, classification.message, error);
   }
-  if (isRetryable(error)) {
+  if (classification.kind === "retryable") {
     return backoffPost(post, error);
   }
   return failPost(post, error);
 }
 
 async function publishPost(post: Post) {
-  if (!post.video_url) throw new Error("Post is missing a final video URL.");
-  if (!post.tiktok_privacy_level) {
-    throw new Error("Choose a TikTok privacy level before publishing.");
-  }
+  const block = getTikTokPublishBlock(post);
+  if (block) return blockPost(post, block.publishStatus, block.message);
+  const videoUrl = post.video_url as string;
+  const privacyLevel = post.tiktok_privacy_level as string;
 
   const supabase = getSupabaseAdmin();
   const accessToken = await getAccessToken(post.account_id);
   const creatorInfo = await queryCreatorInfo(accessToken);
   ensureCreatorAllowsPost(creatorInfo, post);
 
-  const video = await downloadBytes(post.video_url);
+  const video = await downloadBytes(videoUrl);
   if (!video.mimeType.includes("mp4") && video.mimeType !== "application/octet-stream") {
     throw new Error(`TikTok Direct Post expects a TikTok-safe MP4; got ${video.mimeType}.`);
   }
@@ -219,7 +204,7 @@ async function publishPost(post: Post) {
     accessToken,
     {
       title: titleForPost(post),
-      privacyLevel: post.tiktok_privacy_level,
+      privacyLevel,
       disableDuet: post.tiktok_disable_duet,
       disableComment: post.tiktok_disable_comment,
       disableStitch: post.tiktok_disable_stitch,
@@ -256,6 +241,23 @@ async function processOnePerAccount(posts: Post[]) {
   return selected;
 }
 
+function blockedRescanCutoff(minutes: number | undefined): number | null {
+  if (!minutes || minutes <= 0) return null;
+  return Date.now() - minutes * 60_000;
+}
+
+function isEligiblePendingPost(post: Post, cutoff: number | null): boolean {
+  if (!isBlockedPublishStatus(post.publish_status)) return true;
+  if (cutoff === null) return false;
+  const changedAt = Date.parse(post.updated_at ?? post.scheduled_at);
+  return Number.isFinite(changedAt) && changedAt <= cutoff;
+}
+
+async function readBody(request: Request): Promise<RequestBody> {
+  if (!request.body) return {};
+  return (await request.json().catch(() => ({}))) as RequestBody;
+}
+
 Deno.serve(async (request) => {
   const options = handleOptions(request);
   if (options) return options;
@@ -265,6 +267,8 @@ Deno.serve(async (request) => {
 
   const supabase = getSupabaseAdmin();
   const results: unknown[] = [];
+  const body = await readBody(request);
+  const rescanCutoff = blockedRescanCutoff(body.rescanBlockedMinutes);
 
   try {
     const posting = await supabase
@@ -290,13 +294,15 @@ Deno.serve(async (request) => {
       .select("*")
       .eq("status", "pending")
       .lte("scheduled_at", new Date().toISOString())
-      .not("video_url", "is", null)
-      .not("tiktok_privacy_level", "is", null)
       .order("scheduled_at", { ascending: true })
-      .limit(20);
+      .limit(80);
     if (due.error) throw due.error;
 
-    for (const post of await processOnePerAccount((due.data ?? []) as Post[])) {
+    const eligibleDue = ((due.data ?? []) as Post[])
+      .filter((post) => isEligiblePendingPost(post, rescanCutoff))
+      .slice(0, 20);
+
+    for (const post of await processOnePerAccount(eligibleDue)) {
       try {
         results.push(await publishPost(post));
       } catch (error) {

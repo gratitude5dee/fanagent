@@ -21,7 +21,11 @@ export async function transcribeAudioBytes(
 ): Promise<Transcript> {
   const apiKey = requireEnv("ELEVENLABS_API_KEY");
   const form = new FormData();
-  form.append("file", new Blob([bytes]), fileName);
+  const fileBytes = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
+  form.append("file", new Blob([fileBytes]), fileName);
   form.append("model_id", "scribe_v2");
   form.append("tag_audio_events", "false");
   form.append("diarize", "false");
@@ -35,7 +39,7 @@ export async function transcribeAudioBytes(
     const errText = await res.text();
     throw new Error(`Scribe v2 failed [${res.status}]: ${errText}`);
   }
-  const data = await res.json() as {
+  const data = (await res.json()) as {
     text?: string;
     language_code?: string;
     words?: Array<{ text: string; start: number; end: number; type?: string }>;

@@ -6,6 +6,9 @@ import "./styles.css";
 
 const LyricsLanding = lazy(() => import("./pages/lyrics/LyricsLanding"));
 const LyricsWizard = lazy(() => import("./pages/lyrics/LyricsWizard"));
+const LibraryLanding = lazy(() => import("./pages/library/LibraryLanding"));
+const LibraryDetail = lazy(() => import("./pages/library/LibraryDetail"));
+const CalendarPage = lazy(() => import("./pages/calendar/CalendarPage"));
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -33,6 +36,30 @@ createRoot(document.getElementById("root")!).render(
           element={
             <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
               <LyricsWizard />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/library"
+          element={
+            <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
+              <LibraryLanding />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/library/:audioClipId"
+          element={
+            <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
+              <LibraryDetail />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/calendar"
+          element={
+            <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
+              <CalendarPage />
             </Suspense>
           }
         />

@@ -27,7 +27,7 @@ Deno.serve(async (request) => {
       headers: {
         "Content-Type": "application/json",
       },
-      body: "{}",
+      body: JSON.stringify({ rescanBlockedMinutes: 30 }),
     });
     const body = (await res.json()) as {
       processed?: number;

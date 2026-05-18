@@ -10,14 +10,18 @@ import {
   normalizeClipSelection,
   type SourceMode,
 } from "../_shared/generation.ts";
+import { buildLibrarySlotRows } from "../_shared/library.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
 type CreateBatchRequest = {
   accountId?: string;
   audioBase64?: string;
+  audioClipId?: string;
   audioMimeType?: string;
   audioFileName?: string;
   count?: number;
+  postCount?: number;
+  quantity?: number;
   sourceMode?: SourceMode;
   prompt?: string;
   startAt?: string;
@@ -26,6 +30,11 @@ type CreateBatchRequest = {
   durationSeconds?: number;
   lyricTemplateId?: string | null;
   clipSelection?: unknown;
+  durationTolerance?: {
+    preferredSeconds?: number;
+    fallbackSeconds?: number;
+  };
+  dedupeStrategy?: string;
   stockSettings?: Record<string, unknown>;
   seedanceSettings?: Record<string, unknown>;
   publishDefaults?: Record<string, unknown>;
@@ -45,7 +54,10 @@ function normalizeAudioBase64(value: string): string {
 }
 
 function validatePayload(body: CreateBatchRequest) {
-  const count = Math.max(1, Math.min(Math.floor(Number(body.count ?? 1)), 250));
+  const count = Math.max(
+    1,
+    Math.min(Math.floor(Number(body.quantity ?? body.count ?? body.postCount ?? 1)), 250),
+  );
   const cadenceMinutes = Math.max(
     5,
     Math.min(Math.floor(Number(body.cadenceMinutes ?? 240)), 10_080),
@@ -56,15 +68,37 @@ function validatePayload(body: CreateBatchRequest) {
   const sourceMode = normalizeSourceMode(body.sourceMode);
   const audioMimeType = body.audioMimeType || "audio/mpeg";
   const startAt = new Date(body.startAt ?? Date.now() + 30 * 60_000);
-  const clipSelection = normalizeClipSelection(
-    body.clipSelection,
-    durationSeconds,
-    body.audioFileName,
-  );
+  const clipSelection =
+    normalizeClipSelection(body.clipSelection, durationSeconds, body.audioFileName) ??
+    (body.audioClipId
+      ? null
+      : {
+          startSec: 0,
+          endSec: durationSeconds,
+          durationSec: durationSeconds,
+          originalFileName: body.audioFileName,
+        });
+  const durationTolerance = {
+    preferredSeconds: Math.max(
+      1,
+      Math.min(Math.floor(Number(body.durationTolerance?.preferredSeconds ?? 5)), 10),
+    ),
+    fallbackSeconds: Math.max(
+      1,
+      Math.min(Math.floor(Number(body.durationTolerance?.fallbackSeconds ?? 10)), 10),
+    ),
+  };
+  const dedupeStrategy = ["strict", "allow_reuse_after_exhaustion", "allow_reuse_freely"].includes(
+    String(body.dedupeStrategy),
+  )
+    ? String(body.dedupeStrategy)
+    : "strict";
 
   if (!body.accountId) throw new Error("accountId is required.");
-  if (!body.audioBase64) throw new Error("audioBase64 is required.");
-  if (!supportedAudio.has(audioMimeType)) {
+  if (!body.audioClipId && !body.audioBase64) {
+    throw new Error("audioClipId or audioBase64 is required.");
+  }
+  if (body.audioBase64 && !supportedAudio.has(audioMimeType)) {
     throw new Error(`Unsupported audio MIME type: ${audioMimeType}`);
   }
   if (!Number.isFinite(startAt.getTime())) {
@@ -73,7 +107,8 @@ function validatePayload(body: CreateBatchRequest) {
 
   return {
     accountId: body.accountId,
-    audioBytes: decodeBase64(normalizeAudioBase64(body.audioBase64)),
+    audioClipId: body.audioClipId ?? null,
+    audioBytes: body.audioBase64 ? decodeBase64(normalizeAudioBase64(body.audioBase64)) : null,
     audioMimeType,
     audioFileName: body.audioFileName || "audio-upload",
     count,
@@ -83,6 +118,8 @@ function validatePayload(body: CreateBatchRequest) {
     startAt,
     timezone: body.timezone || "America/Los_Angeles",
     durationSeconds,
+    durationTolerance,
+    dedupeStrategy,
     lyricTemplateId: body.lyricTemplateId ?? null,
     clipSelection,
     stockSettings: body.stockSettings ?? {},
@@ -107,36 +144,81 @@ Deno.serve(async (request) => {
   try {
     const supabase = getSupabaseAdmin();
     const input = validatePayload(await request.json());
-    if (input.audioBytes.byteLength > 12 * 1024 * 1024) {
-      throw new Error("Audio uploads are limited to 12MB.");
+    if (input.audioBytes && input.audioBytes.byteLength > 50 * 1024 * 1024) {
+      throw new Error("Audio uploads are limited to 50MB.");
     }
 
-    const audioAsset = await createMediaAssetFromBytes({
-      accountId: input.accountId,
-      kind: "audio",
-      source: "upload",
-      bytes: input.audioBytes,
-      mimeType: input.audioMimeType,
-      fileName: input.audioFileName,
-      metadata: {
-        original_name: input.audioFileName,
-        uploaded_from: "fanagent-react",
-        ...(input.clipSelection ? { clip_selection: input.clipSelection } : {}),
-      },
-    });
+    let audioAsset: Record<string, unknown>;
+    let audioClip: Record<string, unknown>;
+
+    if (input.audioClipId) {
+      const clip = await supabase
+        .from("audio_clips")
+        .select("*")
+        .eq("id", input.audioClipId)
+        .single();
+      if (clip.error) throw clip.error;
+      audioClip = clip.data;
+      const assetId = clip.data.trimmed_asset_id ?? clip.data.source_asset_id;
+      const asset = await supabase.from("media_assets").select("*").eq("id", assetId).single();
+      if (asset.error) throw asset.error;
+      audioAsset = asset.data;
+      input.durationSeconds = Number(clip.data.duration_sec ?? input.durationSeconds);
+    } else {
+      const ext = input.audioFileName.split(".").pop()?.toLowerCase() || "wav";
+      const storagePath = `${input.accountId}/${crypto.randomUUID()}.${ext}`;
+      audioAsset = await createMediaAssetFromBytes({
+        accountId: input.accountId,
+        kind: "audio",
+        source: "upload",
+        bytes: input.audioBytes!,
+        mimeType: input.audioMimeType,
+        fileName: input.audioFileName,
+        storageBucket: "audio-uploads",
+        storagePath,
+        metadata: {
+          original_name: input.audioFileName,
+          uploaded_from: "create-generation-batch",
+          ...(input.clipSelection ? { clip_selection: input.clipSelection } : {}),
+        },
+      });
+      const clip = await supabase
+        .from("audio_clips")
+        .insert({
+          account_id: input.accountId,
+          source_asset_id: audioAsset.id,
+          trimmed_asset_id: audioAsset.id,
+          selection_start_sec: input.clipSelection?.startSec ?? 0,
+          selection_end_sec: input.clipSelection?.endSec ?? input.durationSeconds,
+          duration_sec: input.durationSeconds,
+          file_name: input.audioFileName,
+          transcription_status: "pending",
+          metadata: { created_from: "create-generation-batch" },
+        })
+        .select("*")
+        .single();
+      if (clip.error) throw clip.error;
+      audioClip = clip.data;
+    }
 
     const batch = await supabase
       .from("generation_batches")
       .insert({
         account_id: input.accountId,
         audio_asset_id: audioAsset.id,
+        audio_clip_id: audioClip.id,
         source_mode: input.sourceMode,
         prompt: input.prompt,
         post_count: input.count,
+        quantity: input.count,
         cadence_minutes: input.cadenceMinutes,
         timezone: input.timezone,
         status: "pending",
         duration_seconds: input.durationSeconds,
+        duration_tolerance_seconds: input.durationTolerance.preferredSeconds,
+        duration_tolerance_fallback_seconds: input.durationTolerance.fallbackSeconds,
+        dedupe_strategy: input.dedupeStrategy,
+        library_status: "building",
         lyric_template_id: input.lyricTemplateId,
         settings: buildBatchSettings({
           stockSettings: input.stockSettings,
@@ -150,6 +232,22 @@ Deno.serve(async (request) => {
 
     if (batch.error) throw batch.error;
 
+    const libraryRows = buildLibrarySlotRows({
+      accountId: input.accountId,
+      audioClipId: String(audioClip.id),
+      batchId: batch.data.id,
+      quantity: input.count,
+      durationSec: input.durationSeconds,
+    });
+    const insertedLibraryItems = await supabase
+      .from("video_library_items")
+      .insert(libraryRows)
+      .select("*");
+    if (insertedLibraryItems.error) throw insertedLibraryItems.error;
+    const libraryItemsByIndex = new Map(
+      (insertedLibraryItems.data ?? []).map((row) => [Number(row.library_index), row]),
+    );
+
     const schedule = buildSchedule(input.startAt, input.count, input.cadenceMinutes);
     const modelId =
       input.sourceMode === "seedance" || input.sourceMode === "mixed"
@@ -159,6 +257,7 @@ Deno.serve(async (request) => {
           : "stock-pipeline";
 
     const items = schedule.map((scheduledAt, index) => {
+      const libraryItem = libraryItemsByIndex.get(index);
       const promptPlan = createPromptPlan({
         basePrompt: input.prompt,
         index,
@@ -169,6 +268,8 @@ Deno.serve(async (request) => {
       return {
         batch_id: batch.data.id,
         account_id: input.accountId,
+        audio_clip_id: audioClip.id,
+        library_item_id: libraryItem?.id ?? null,
         item_index: index,
         status: "pending",
         provider: input.sourceMode,
@@ -177,8 +278,11 @@ Deno.serve(async (request) => {
         input_payload: buildGenerationItemInputPayload({
           sourceMode: input.sourceMode,
           promptPlan,
-          audioAssetId: audioAsset.id,
+          audioAssetId: String(audioAsset.id),
+          audioClipId: String(audioClip.id),
+          libraryItemId: libraryItem?.id ?? null,
           durationSeconds: input.durationSeconds,
+          durationTolerance: input.durationTolerance,
           stockSettings: input.stockSettings,
           seedanceSettings: input.seedanceSettings,
           publishDefaults: input.publishDefaults,
@@ -195,8 +299,11 @@ Deno.serve(async (request) => {
 
     return jsonResponse({
       batch: batch.data,
+      audioClip,
       audioAsset,
+      video_library_items: insertedLibraryItems.data,
       items: insertedItems.data,
+      items_total: insertedItems.data?.length ?? 0,
     });
   } catch (error) {
     return errorResponse(error);

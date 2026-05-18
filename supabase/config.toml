@@ -15,6 +15,27 @@ verify_jwt = false
 [functions.create-generation-batch]
 verify_jwt = false
 
+[functions.audio-clip-register]
+verify_jwt = false
+
+[functions.audio-clip-transcribe]
+verify_jwt = false
+
+[functions.library-finalize]
+verify_jwt = false
+
+[functions.library-schedule]
+verify_jwt = false
+
+[functions.library-bulk-schedule]
+verify_jwt = false
+
+[functions.source-candidate-search]
+verify_jwt = false
+
+[functions.source-candidate-replace]
+verify_jwt = false
+
 [functions.generate-video-prompts]
 verify_jwt = false
 

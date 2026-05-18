@@ -1,4 +1,11 @@
-export const sourceModes = ["stock", "mixed", "seedance", "gmi_seedance"] as const;
+export const sourceModes = [
+  "stock",
+  "mixed",
+  "seedance",
+  "gmi_seedance",
+  "sports_edit",
+  "streamer_clip",
+] as const;
 export type SourceMode = (typeof sourceModes)[number];
 export type VideoDuration = 15 | 30 | 45 | 60 | 75 | 90;
 export type ClipSelection = {
@@ -268,7 +275,13 @@ export function buildGenerationItemInputPayload(input: {
   sourceMode: SourceMode;
   promptPlan: unknown;
   audioAssetId: string;
+  audioClipId?: string | null;
+  libraryItemId?: string | null;
   durationSeconds: number;
+  durationTolerance?: {
+    preferredSeconds?: number;
+    fallbackSeconds?: number;
+  };
   stockSettings?: Record<string, unknown>;
   seedanceSettings?: Record<string, unknown>;
   publishDefaults?: Record<string, unknown>;
@@ -278,7 +291,17 @@ export function buildGenerationItemInputPayload(input: {
     source_mode: input.sourceMode,
     prompt_plan: input.promptPlan,
     audio_asset_id: input.audioAssetId,
+    ...(input.audioClipId ? { audio_clip_id: input.audioClipId } : {}),
+    ...(input.libraryItemId ? { library_item_id: input.libraryItemId } : {}),
     duration_seconds: input.durationSeconds,
+    ...(input.durationTolerance
+      ? {
+          duration_tolerance: {
+            preferred_seconds: input.durationTolerance.preferredSeconds ?? 5,
+            fallback_seconds: input.durationTolerance.fallbackSeconds ?? 10,
+          },
+        }
+      : {}),
     stock_settings: input.stockSettings ?? {},
     seedance_settings: input.seedanceSettings ?? {},
     publish_defaults: input.publishDefaults ?? {},

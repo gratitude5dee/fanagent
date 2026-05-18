@@ -1,4 +1,5 @@
-import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import { handleOptions } from "../_shared/cors.ts";
+import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
 type UpdatePostRequest = {
@@ -10,6 +11,7 @@ type UpdatePostRequest = {
   disableDuet?: boolean;
   disableStitch?: boolean;
   disableComment?: boolean;
+  privacySettings?: Record<string, unknown>;
 };
 
 const privacyLevels = new Set([
@@ -28,11 +30,24 @@ function normalizeHashtags(values?: string[]): string[] | undefined {
     .slice(0, 20);
 }
 
+function record(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function assertWithinScheduleWindow(scheduledAt: Date): void {
+  const maxFuture = Date.now() + 90 * 24 * 60 * 60 * 1000;
+  if (scheduledAt.getTime() > maxFuture) {
+    throw new Error("scheduledAt cannot be more than 90 days in the future.");
+  }
+}
+
 Deno.serve(async (request) => {
   const options = handleOptions(request);
   if (options) return options;
   if (request.method !== "POST" && request.method !== "PATCH") {
-    return errorResponse("Method not allowed.", 405);
+    return errorEnvelope("Method not allowed.", "METHOD_NOT_ALLOWED", 405);
   }
 
   try {
@@ -40,10 +55,11 @@ Deno.serve(async (request) => {
     if (!body.postId) throw new Error("postId is required.");
 
     const supabase = getSupabaseAdmin();
-    const current = await supabase.from("posts").select("id,status").eq(
-      "id",
-      body.postId,
-    ).single();
+    const current = await supabase
+      .from("posts")
+      .select("id,status,privacy_settings")
+      .eq("id", body.postId)
+      .single();
     if (current.error) throw current.error;
     if (current.data.status === "posted") {
       throw new Error("Posted TikToks cannot be rescheduled.");
@@ -55,6 +71,7 @@ Deno.serve(async (request) => {
       if (!Number.isFinite(scheduledAt.getTime())) {
         throw new Error("scheduledAt must be a valid ISO date.");
       }
+      assertWithinScheduleWindow(scheduledAt);
       update.scheduled_at = scheduledAt.toISOString();
     }
     if (typeof body.caption === "string") {
@@ -65,7 +82,8 @@ Deno.serve(async (request) => {
     }
     if (body.privacyLevel !== undefined) {
       if (
-        body.privacyLevel !== null && body.privacyLevel !== "" &&
+        body.privacyLevel !== null &&
+        body.privacyLevel !== "" &&
         !privacyLevels.has(body.privacyLevel)
       ) {
         throw new Error("Unsupported TikTok privacy level.");
@@ -81,15 +99,23 @@ Deno.serve(async (request) => {
     if (typeof body.disableComment === "boolean") {
       update.tiktok_disable_comment = body.disableComment;
     }
+    if (body.privacySettings && typeof body.privacySettings === "object") {
+      update.privacy_settings = {
+        ...record(current.data.privacy_settings),
+        ...body.privacySettings,
+      };
+    }
 
-    const updated = await supabase.from("posts").update(update).eq(
-      "id",
-      body.postId,
-    ).select("*").single();
+    const updated = await supabase
+      .from("posts")
+      .update(update)
+      .eq("id", body.postId)
+      .select("*")
+      .single();
     if (updated.error) throw updated.error;
 
-    return jsonResponse({ post: updated.data });
+    return okEnvelope({ post: updated.data });
   } catch (error) {
-    return errorResponse(error);
+    return errorEnvelope(error, "UPDATE_POST_SCHEDULE_FAILED", 500);
   }
 });

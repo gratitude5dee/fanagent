@@ -6,7 +6,16 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", ".output", ".vinxi", ".tanstack", "supabase/functions", "supabase/.temp"] },
+  {
+    ignores: [
+      "dist",
+      ".output",
+      ".vinxi",
+      ".tanstack",
+      "supabase/.temp",
+      "supabase/functions/*/index.ts",
+    ],
+  },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],
@@ -25,4 +34,52 @@ export default tseslint.config(
     },
   },
   eslintPluginPrettier,
+  {
+    files: ["supabase/functions/_shared/**/*.ts"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      globals: {
+        ...globals.serviceworker,
+        Deno: "readonly",
+      },
+    },
+    rules: {
+      "prettier/prettier": "off",
+      "@typescript-eslint/no-explicit-any": "off",
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "node-fetch",
+              message: "Supabase Edge shared code runs on Deno. Use the runtime fetch instead.",
+            },
+          ],
+        },
+      ],
+      "no-restricted-globals": [
+        "error",
+        {
+          name: "window",
+          message: "Supabase Edge shared code must not depend on browser window.",
+        },
+        {
+          name: "document",
+          message: "Supabase Edge shared code must not depend on browser document.",
+        },
+        {
+          name: "localStorage",
+          message: "Supabase Edge shared code must not depend on browser localStorage.",
+        },
+        {
+          name: "sessionStorage",
+          message: "Supabase Edge shared code must not depend on browser sessionStorage.",
+        },
+        {
+          name: "HTMLElement",
+          message: "Supabase Edge shared code must not depend on DOM element globals.",
+        },
+      ],
+    },
+  },
 );

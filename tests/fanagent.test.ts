@@ -49,6 +49,8 @@ describe("source mode normalization", () => {
   it("normalizes legacy and invalid source modes", () => {
     expect(normalizeSourceMode("hybrid")).toBe("mixed");
     expect(normalizeSourceMode("seedance")).toBe("seedance");
+    expect(normalizeSourceMode("sports_edit")).toBe("sports_edit");
+    expect(normalizeSourceMode("streamer_clip")).toBe("streamer_clip");
     expect(normalizeSourceMode("remote_render")).toBe("stock");
   });
 
@@ -83,6 +85,22 @@ describe("prompt generation", () => {
 
     expect(plan.prompt).toContain("90 seconds");
     expect(plan.videoPrompt.duration_seconds).toBe(90);
+  });
+
+  it("covers every allowed campaign duration in generation prompts", () => {
+    const durations = [15, 30, 45, 60, 75, 90] as const;
+
+    for (const durationSeconds of durations) {
+      const plan = createPromptPlan({
+        basePrompt: "night market performance",
+        index: durationSeconds,
+        total: durations.length,
+        durationSeconds,
+      });
+
+      expect(plan.prompt).toContain(`${durationSeconds} seconds`);
+      expect(plan.videoPrompt.duration_seconds).toBe(durationSeconds);
+    }
   });
 });
 
@@ -188,6 +206,9 @@ describe("visual diversity planning", () => {
       seedanceSettings: {},
       publishDefaults: { privacyLevel: "SELF_ONLY" },
       clipSelection,
+      audioClipId: "audio-clip-1",
+      libraryItemId: "library-item-1",
+      durationTolerance: { preferredSeconds: 5, fallbackSeconds: 10 },
     });
 
     expect(clipSelection).toEqual({
@@ -199,6 +220,9 @@ describe("visual diversity planning", () => {
     expect(settings.clipSelection).toEqual(clipSelection);
     expect(payload.clip_selection).toEqual(clipSelection);
     expect(payload.audio_asset_id).toBe("audio-asset-1");
+    expect(payload.audio_clip_id).toBe("audio-clip-1");
+    expect(payload.library_item_id).toBe("library-item-1");
+    expect(payload.duration_tolerance).toEqual({ preferred_seconds: 5, fallback_seconds: 10 });
   });
 });
 
@@ -231,6 +255,16 @@ describe("generation reliability fixes", () => {
     expect(viteConfig).toContain("node_modules/react");
     expect(viteConfig).toContain("node_modules/react-dom");
     expect(viteConfig).toContain('"react-dom/client"');
+  });
+
+  it("keeps persisted publish statuses aligned with the schema enum", () => {
+    const publishSource = readFileSync("supabase/functions/publish-tiktok-due/index.ts", "utf8");
+    const campaignSource = readFileSync("supabase/functions/fanpage-campaign/index.ts", "utf8");
+
+    expect(publishSource).not.toContain("publish_status: data.status");
+    expect(publishSource).toContain('publish_status: "publish_complete"');
+    expect(publishSource).toContain('publish_status: "processing"');
+    expect(campaignSource).not.toContain('publish_status: "regenerated"');
   });
 });
 

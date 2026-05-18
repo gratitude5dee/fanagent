@@ -11,11 +11,42 @@
 //   regenerate { itemId }              → resets item to pending so the worker reruns it
 //   recoverRecentFailures { since, limit } → bulk-reset recent failed unposted items
 
-import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
-import { errorMessage, serializeError } from "../_shared/errors.ts";
+import { handleOptions } from "../_shared/cors.ts";
+import {
+  buildCampaignCreateBatchPayload,
+  normalizeCampaignCreateResponse,
+} from "../_shared/campaign.ts";
+import { okEnvelope, errorEnvelope, unwrapEnvelopeData } from "../_shared/envelope.ts";
 import { optionalEnv } from "../_shared/env.ts";
 import { createRegenerationReset } from "../_shared/generation.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
+
+function record(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+async function readJson(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { message: text };
+  }
+}
+
+function childError(json: unknown, fallback: string): unknown {
+  const data = record(json);
+  return data.errorDetail ?? data.error ?? data.message ?? fallback;
+}
+
+function maybeId(value: unknown): string | null {
+  const data = record(value);
+  const id = data.id;
+  return typeof id === "string" && id ? id : null;
+}
 
 async function callChild(name: string, body: unknown): Promise<Response> {
   const url = `${optionalEnv("SUPABASE_URL")}/functions/v1/${name}`;
@@ -44,7 +75,9 @@ async function callWorker(name: string, body: unknown): Promise<Response> {
 Deno.serve(async (request) => {
   const opt = handleOptions(request);
   if (opt) return opt;
-  if (request.method !== "POST") return errorResponse("Method not allowed", 405);
+  if (request.method !== "POST") {
+    return errorEnvelope("Method not allowed", "METHOD_NOT_ALLOWED", 405);
+  }
 
   try {
     const supabase = getSupabaseAdmin();
@@ -80,7 +113,7 @@ Deno.serve(async (request) => {
           .is("archived_at", null)
           .order("updated_at", { ascending: false })
           .limit(100);
-        return jsonResponse({
+        return okEnvelope({
           account: account.data ?? null,
           batches: batches.data ?? [],
           items: items.data ?? [],
@@ -104,15 +137,29 @@ Deno.serve(async (request) => {
           gmi: !!(optionalEnv("GMI_API_KEY") ?? optionalEnv("GMI_CLOUD_API_KEY")),
           elevenLabs: !!optionalEnv("ELEVENLABS_API_KEY"),
           lovable: !!optionalEnv("LOVABLE_API_KEY"),
+          twitchClientId: !!optionalEnv("TWITCH_CLIENT_ID"),
+          twitchClientSecret: !!optionalEnv("TWITCH_CLIENT_SECRET"),
+          youtubeApiKey: !!optionalEnv("YOUTUBE_API_KEY"),
+          sportsAllowed: !!optionalEnv("SPORTS_EDITS_ALLOWED_CHANNELS"),
+          streamerAllowed: !!optionalEnv("STREAMER_CLIP_ALLOWED_CHANNELS"),
         };
 
         const buckets = await supabase.storage.listBuckets();
-        const expectedBuckets = ["post-assets", "stock-cache", "audio-uploads", "renders"];
+        const expectedBuckets = [
+          "post-assets",
+          "stock-cache",
+          "audio-uploads",
+          "renders",
+          "thumbnails",
+        ];
         const bucketNames = new Set((buckets.data ?? []).map((bucket) => bucket.name));
         const schemaChecks = await Promise.all([
           supabase.from("generation_batches").select("settings,publish_defaults").limit(1),
           supabase.from("generation_items").select("attempt_count,locked_at,stage_events").limit(1),
           supabase.from("worker_runs").select("id").limit(1),
+          supabase.from("video_library_items").select("id,status,final_asset_id").limit(1),
+          supabase.from("source_candidates").select("id,source_type,provider").limit(1),
+          supabase.from("render_attempts").select("id,stage,status").limit(1),
         ]);
         const recentWorkerRuns = await supabase
           .from("worker_runs")
@@ -131,6 +178,19 @@ Deno.serve(async (request) => {
           acc[status] = (acc[status] ?? 0) + 1;
           return acc;
         }, {});
+        const blockedPublishRows = await supabase
+          .from("posts")
+          .select("publish_status")
+          .like("publish_status", "blocked_%")
+          .limit(5000);
+        const blockedPublishCounts = (blockedPublishRows.data ?? []).reduce<Record<string, number>>(
+          (acc, row) => {
+            const status = String((row as { publish_status?: string }).publish_status ?? "");
+            if (status) acc[status] = (acc[status] ?? 0) + 1;
+            return acc;
+          },
+          {},
+        );
         const accountRow = await supabase
           .from("accounts")
           .select("id,platform,handle,tiktok_connected_at,tiktok_creator_info,is_primary")
@@ -141,7 +201,7 @@ Deno.serve(async (request) => {
         const lastWorkerError =
           workerRuns.find((run) => Number(run.errors_count ?? 0) > 0)?.detail ?? null;
 
-        return jsonResponse({
+        return okEnvelope({
           env: envStatus,
           buckets: expectedBuckets.map((name) => ({
             name,
@@ -151,6 +211,9 @@ Deno.serve(async (request) => {
             generationBatchesSettings: !schemaChecks[0].error,
             generationItemsQueueColumns: !schemaChecks[1].error,
             workerRuns: !schemaChecks[2].error,
+            videoLibrary: !schemaChecks[3].error,
+            sourceCandidates: !schemaChecks[4].error,
+            renderAttempts: !schemaChecks[5].error,
             errors: schemaChecks.map((check) => check.error?.message).filter(Boolean),
           },
           account: accountRow.data
@@ -163,6 +226,7 @@ Deno.serve(async (request) => {
               }
             : null,
           queueCounts,
+          blockedPublishCounts,
           lastWorkerError,
           cron: {
             configured: envStatus.cronSecret,
@@ -175,17 +239,17 @@ Deno.serve(async (request) => {
       }
 
       case "create": {
-        const res = await callChild("create-generation-batch", {
-          ...body,
-          sourceMode: (body.sourceMode as string) ?? "stock",
-          cadenceMinutes: (body.cadenceMinutes as number) ?? 1440,
-          count: (body.postCount as number) ?? 14,
-          durationSeconds: (body.durationSeconds as number) ?? 15,
-        });
-        const json = await res.json();
-        if (!res.ok) return errorResponse(json.errorDetail ?? json.error ?? "create failed", 500);
-        const audioAssetId = json?.audioAsset?.id;
-        const batchId = json?.batch?.id;
+        const res = await callChild(
+          "create-generation-batch",
+          buildCampaignCreateBatchPayload(body),
+        );
+        const json = await readJson(res);
+        if (!res.ok) {
+          return errorEnvelope(childError(json, "create failed"), "CREATE_FAILED", res.status);
+        }
+        const data = normalizeCampaignCreateResponse(json);
+        const audioAssetId = maybeId(data.audio_asset);
+        const batchId = maybeId(data.batch);
         if (audioAssetId) {
           callChild("transcribe-audio", { audioAssetId }).catch(() => {});
         }
@@ -193,37 +257,44 @@ Deno.serve(async (request) => {
         if (batchId) {
           callChild("generate-video-prompts", { batchId }).catch(() => {});
         }
-        return jsonResponse(json);
+        return okEnvelope(data, "Campaign created.");
       }
 
       case "generatePrompts": {
         const batchId = body.batchId as string | undefined;
         if (!batchId) throw new Error("batchId required");
         const r = await callChild("generate-video-prompts", { batchId });
-        const j = await r.json();
-        if (!r.ok) return errorResponse(j.errorDetail ?? j.error ?? "prompts failed", 500);
-        return jsonResponse(j);
+        const j = await readJson(r);
+        if (!r.ok) {
+          return errorEnvelope(childError(j, "prompts failed"), "PROMPTS_FAILED", r.status);
+        }
+        return okEnvelope(unwrapEnvelopeData(j));
       }
 
       case "runGenerationWorkers": {
         const res = await callWorker("fanpage-generate-due", {});
-        const json = await res.json().catch(() => ({}));
+        const json = await readJson(res);
         if (!res.ok) {
-          return errorResponse(
-            json.errorDetail ?? json.error ?? "fanpage-generate-due failed",
-            500,
+          return errorEnvelope(
+            childError(json, "fanpage-generate-due failed"),
+            "GENERATION_WORKER_FAILED",
+            res.status,
           );
         }
-        return jsonResponse(json);
+        return okEnvelope(unwrapEnvelopeData(json));
       }
 
       case "runPublishWorker": {
         const res = await callWorker("fanpage-publish-due", {});
-        const json = await res.json().catch(() => ({}));
+        const json = await readJson(res);
         if (!res.ok) {
-          return errorResponse(json.errorDetail ?? json.error ?? "fanpage-publish-due failed", 500);
+          return errorEnvelope(
+            childError(json, "fanpage-publish-due failed"),
+            "PUBLISH_WORKER_FAILED",
+            res.status,
+          );
         }
-        return jsonResponse(json);
+        return okEnvelope(unwrapEnvelopeData(json));
       }
 
       case "pause": {
@@ -234,7 +305,7 @@ Deno.serve(async (request) => {
           .update({ paused_at: new Date().toISOString(), status: "paused" })
           .eq("id", batchId);
         if (r.error) throw r.error;
-        return jsonResponse({ ok: true });
+        return okEnvelope({ ok: true });
       }
 
       case "resume": {
@@ -245,7 +316,7 @@ Deno.serve(async (request) => {
           .update({ paused_at: null, status: "pending" })
           .eq("id", batchId);
         if (r.error) throw r.error;
-        return jsonResponse({ ok: true });
+        return okEnvelope({ ok: true });
       }
 
       case "skip": {
@@ -256,7 +327,7 @@ Deno.serve(async (request) => {
           .update({ status: "failed", error_message: "skipped by user" })
           .eq("id", itemId);
         await supabase.from("posts").update({ status: "skipped" }).eq("generation_item_id", itemId);
-        return jsonResponse({ ok: true });
+        return okEnvelope({ ok: true });
       }
 
       case "regenerate": {
@@ -264,7 +335,7 @@ Deno.serve(async (request) => {
         if (!itemId) throw new Error("itemId required");
         const item = await supabase
           .from("generation_items")
-          .select("post_id")
+          .select("post_id,library_item_id")
           .eq("id", itemId)
           .maybeSingle();
         if (item.error) throw item.error;
@@ -273,18 +344,34 @@ Deno.serve(async (request) => {
             .from("posts")
             .update({
               status: "skipped",
-              publish_status: "regenerated",
+              publish_status: null,
               generation_item_id: null,
             })
             .eq("id", item.data.post_id)
             .neq("status", "posted");
+        }
+        await supabase.from("source_candidate_uses").delete().eq("generation_item_id", itemId);
+        if (item.data?.library_item_id) {
+          await supabase
+            .from("video_library_items")
+            .update({
+              status: "not_ready",
+              final_asset_id: null,
+              thumbnail_url: null,
+              duration_sec: null,
+              segments: null,
+              provenance: null,
+              perceptual_hash: null,
+              error_message: null,
+            })
+            .eq("id", item.data.library_item_id);
         }
         const r = await supabase
           .from("generation_items")
           .update({ ...createRegenerationReset(), attempt_count: 0 })
           .eq("id", itemId);
         if (r.error) throw r.error;
-        return jsonResponse({ ok: true });
+        return okEnvelope({ ok: true });
       }
 
       case "recoverRecentFailures": {
@@ -328,7 +415,7 @@ Deno.serve(async (request) => {
           recoveredIds.push(row.id as string);
         }
 
-        return jsonResponse({ ok: true, recovered: recoveredIds.length, recoveredIds });
+        return okEnvelope({ ok: true, recovered: recoveredIds.length, recoveredIds });
       }
 
       case "setLyricTemplate": {
@@ -355,16 +442,13 @@ Deno.serve(async (request) => {
         } else {
           throw new Error("itemId or batchId required");
         }
-        return jsonResponse({ ok: true });
+        return okEnvelope({ ok: true });
       }
 
       default:
-        return errorResponse(`Unknown action: ${action}`, 400);
+        return errorEnvelope(`Unknown action: ${action}`, "UNKNOWN_ACTION", 400);
     }
   } catch (error) {
-    return errorResponse({
-      ...serializeError(error),
-      message: errorMessage(error),
-    });
+    return errorEnvelope(error, "INTERNAL_ERROR", 500);
   }
 });

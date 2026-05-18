@@ -4,6 +4,7 @@
 // marks the item ready. No external Remotion host required.
 
 import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import { optionalEnv } from "../_shared/env.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 import { composeWithSubtitles, extractFrame } from "../_shared/fal.ts";
 import { downloadBytes, createMediaAssetFromBytes } from "../_shared/assets.ts";
@@ -17,6 +18,23 @@ type Word = {
   end?: number;
 };
 type Block = { text?: string; startMs?: number; endMs?: number; words?: Word[] };
+
+function fnUrl(name: string): string {
+  return `${optionalEnv("SUPABASE_URL")}/functions/v1/${name}`;
+}
+
+async function finalizeLibraryItem(generationItemId: string): Promise<unknown> {
+  const response = await fetch(fnUrl("library-finalize"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ generationItemId }),
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(`library-finalize failed [${response.status}]: ${JSON.stringify(json)}`);
+  }
+  return json;
+}
 
 function fmtTs(ms: number): string {
   if (ms < 0) ms = 0;
@@ -160,12 +178,15 @@ Deno.serve(async (request) => {
       .eq("id", body.itemId);
     if (upd.error) throw upd.error;
 
+    const finalized = await finalizeLibraryItem(body.itemId);
+
     return jsonResponse({
       itemId: body.itemId,
       provider,
       finalAssetId: asset.id,
       url: asset.public_url,
       thumbnailUrl,
+      finalized,
     });
   } catch (error) {
     return errorResponse(error);

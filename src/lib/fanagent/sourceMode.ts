@@ -1,4 +1,11 @@
-export const sourceModes = ["stock", "mixed", "seedance", "gmi_seedance"] as const;
+export const sourceModes = [
+  "stock",
+  "mixed",
+  "seedance",
+  "gmi_seedance",
+  "sports_edit",
+  "streamer_clip",
+] as const;
 
 export type SourceMode = (typeof sourceModes)[number];
 

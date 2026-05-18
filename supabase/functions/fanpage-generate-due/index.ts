@@ -144,6 +144,11 @@ async function transcribeBestEffort(audioAssetId: string, itemId: string) {
   }
 }
 
+async function finalizeLibraryItem(itemId: string) {
+  await ok(await invokeChild("library-finalize", { generationItemId: itemId }), "library-finalize");
+  await addStageEvent(itemId, "library_finalized");
+}
+
 async function enqueueGmi(item: GenerationItem, audioAsset: MediaAsset) {
   const model = item.model_id ?? optionalEnv("GMI_SEEDANCE_MODEL_ID") ?? "Seedance-2.0";
   return readJson<{ request_id: string; status?: string }>(
@@ -176,7 +181,7 @@ async function pollGmi(requestId: string) {
   );
 }
 
-async function processGmiItem(item: GenerationItem, batch: Batch, audioAsset: MediaAsset) {
+async function processGmiItem(item: GenerationItem, audioAsset: MediaAsset) {
   const supabase = getSupabaseAdmin();
   let requestId = item.provider_request_id;
   if (!requestId) {
@@ -249,7 +254,7 @@ async function processGmiItem(item: GenerationItem, batch: Batch, audioAsset: Me
     .eq("id", item.id);
   if (updated.error) throw updated.error;
   await addStageEvent(item.id, "gmi_complete", { requestId, finalAssetId: asset.id });
-  await createPostForItem(item.id, batch);
+  await finalizeLibraryItem(item.id);
   return { status: "complete", requestId };
 }
 
@@ -277,12 +282,12 @@ async function processItem(itemId: string): Promise<void> {
 
   const sourceMode = normalizeSourceMode(batch.source_mode ?? item.provider);
   if (sourceMode === "gmi_seedance") {
-    await processGmiItem(item, batch, audioAsset);
+    await processGmiItem(item, audioAsset);
     return;
   }
 
   if (item.status === "ready" && item.final_asset_id) {
-    await createPostForItem(item.id, batch);
+    await finalizeLibraryItem(item.id);
     return;
   }
 
@@ -320,8 +325,6 @@ async function processItem(itemId: string): Promise<void> {
 
   await addStageEvent(item.id, "render_start");
   await ok(await invokeChild("render-karaoke", { itemId }), "render-karaoke");
-
-  await createPostForItem(item.id, batch);
 }
 
 async function refreshBatchStatus(batchId: string) {
@@ -356,95 +359,6 @@ async function refreshBatchStatus(batchId: string) {
 
   const updated = await supabase.from("generation_batches").update(update).eq("id", batchId);
   if (updated.error) throw updated.error;
-}
-
-async function createPostForItem(itemId: string, batchData?: Batch) {
-  const supabase = getSupabaseAdmin();
-  const item = await supabase
-    .from("generation_items")
-    .select(
-      "id,account_id,batch_id,scheduled_at,final_asset_id,input_payload,post_id,provider,render_provider",
-    )
-    .eq("id", itemId)
-    .single();
-  if (item.error) throw item.error;
-  if (item.data.post_id) return;
-
-  const asset = await supabase
-    .from("media_assets")
-    .select("public_url")
-    .eq("id", item.data.final_asset_id)
-    .single();
-  if (asset.error) throw asset.error;
-
-  const batch = batchData
-    ? { data: batchData, error: null }
-    : await supabase
-        .from("generation_batches")
-        .select("id,audio_asset_id,source_mode,publish_defaults")
-        .eq("id", item.data.batch_id)
-        .single();
-  if (batch.error) throw batch.error;
-
-  const audio = await supabase
-    .from("media_assets")
-    .select("public_url")
-    .eq("id", batch.data.audio_asset_id)
-    .single();
-  if (audio.error) throw audio.error;
-
-  const inputPayload = (item.data.input_payload ?? {}) as Record<string, unknown>;
-  const plan = (inputPayload.prompt_plan ?? {}) as Record<string, unknown>;
-  const publishDefaults: Record<string, unknown> = {
-    privacyLevel: "SELF_ONLY",
-    disableDuet: true,
-    disableStitch: true,
-    disableComment: false,
-    ...((inputPayload.publish_defaults ?? {}) as Record<string, unknown>),
-    ...((batch.data.publish_defaults ?? {}) as Record<string, unknown>),
-  };
-
-  const post = await supabase
-    .from("posts")
-    .insert({
-      account_id: item.data.account_id,
-      platform: "tiktok",
-      post_type: "video",
-      video_url: asset.data.public_url,
-      video_source: item.data.render_provider ?? item.data.provider ?? "stock",
-      audio_url: audio.data.public_url,
-      caption: String(plan.caption ?? "sound on"),
-      hashtags: Array.isArray(plan.hashtags) ? plan.hashtags : ["#fyp", "#music", "#edit"],
-      hook_text: String(plan.hookText ?? "sound on"),
-      scheduled_at: item.data.scheduled_at,
-      status: "pending",
-      publish_status: "ready",
-      batch_id: item.data.batch_id,
-      generation_item_id: itemId,
-      final_asset_id: item.data.final_asset_id,
-      tiktok_privacy_level: String(publishDefaults.privacyLevel ?? "SELF_ONLY"),
-      tiktok_disable_duet: publishDefaults.disableDuet !== false,
-      tiktok_disable_stitch: publishDefaults.disableStitch !== false,
-      tiktok_disable_comment: publishDefaults.disableComment === true,
-      tiktok_is_aigc: true,
-      tiktok_brand_content: publishDefaults.brandContentToggle === true,
-      tiktok_brand_organic: publishDefaults.brandOrganicToggle === true,
-    })
-    .select("id")
-    .single();
-  if (post.error) throw post.error;
-
-  await supabase
-    .from("generation_items")
-    .update({
-      status: "complete",
-      post_id: post.data.id,
-      locked_at: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", itemId);
-  await addStageEvent(itemId, "post_created", { postId: post.data.id });
-  await refreshBatchStatus(item.data.batch_id);
 }
 
 async function claimDueItems(limit: number) {
