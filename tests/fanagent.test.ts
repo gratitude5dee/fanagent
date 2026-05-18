@@ -16,7 +16,13 @@ import {
   isTikTokPrivacyLevelAllowed,
   parseTikTokStatusResponse,
 } from "../src/lib/fanagent/tiktok";
-import { extractFrame, isFalIdleTimeout } from "../supabase/functions/_shared/fal.ts";
+import {
+  compose,
+  extractFrame,
+  getMediaMetadata,
+  isFalIdleTimeout,
+  waveform,
+} from "../supabase/functions/_shared/fal.ts";
 import {
   buildBatchSettings,
   buildGenerationItemInputPayload,
@@ -339,6 +345,66 @@ describe("visual diversity planning", () => {
     expect(payload.audio_clip_id).toBe("audio-clip-1");
     expect(payload.library_item_id).toBe("library-item-1");
     expect(payload.duration_tolerance).toEqual({ preferred_seconds: 5, fallback_seconds: 10 });
+  });
+});
+
+describe("fal.ai ffmpeg endpoint wrappers", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete (globalThis as typeof globalThis & { Deno?: unknown }).Deno;
+  });
+
+  function mockFalResponse(payload: unknown) {
+    (
+      globalThis as typeof globalThis & {
+        Deno: { env: { get: (name: string) => string | undefined } };
+      }
+    ).Deno = {
+      env: { get: (name: string) => (name === "FAL_KEY" ? "test-fal-key" : undefined) },
+    };
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("passes compose options through to the compose endpoint", async () => {
+    const fetchMock = mockFalResponse({ video_url: "https://cdn.example.com/composed.mp4" });
+
+    await expect(
+      compose([{ id: "video", type: "video", keyframes: [] }], { output_format: "mp4" }),
+    ).resolves.toMatchObject({ url: "https://cdn.example.com/composed.mp4" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://fal.run/fal-ai/ffmpeg-api/compose",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          tracks: [{ id: "video", type: "video", keyframes: [] }],
+          output_format: "mp4",
+        }),
+      }),
+    );
+  });
+
+  it("normalizes metadata and waveform responses under data", async () => {
+    const metadataFetch = mockFalResponse({ duration: 15, width: 720 });
+    await expect(getMediaMetadata("https://cdn.example.com/video.mp4")).resolves.toEqual({
+      data: { duration: 15, width: 720 },
+    });
+    expect(JSON.parse(String(metadataFetch.mock.calls[0]?.[1]?.body))).toEqual({
+      file_url: "https://cdn.example.com/video.mp4",
+    });
+
+    mockFalResponse({ waveform: [0, 1, 0] });
+    await expect(waveform("https://cdn.example.com/audio.wav", { width: 640 })).resolves.toEqual({
+      data: { waveform: [0, 1, 0] },
+    });
   });
 });
 
@@ -877,3 +943,4 @@ describe("TikTok request helpers", () => {
     expect(isTikTokPrivacyLevelAllowed(null, {})).toBe(false);
   });
 });
+
