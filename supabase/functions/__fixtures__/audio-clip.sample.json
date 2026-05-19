@@ -1,0 +1,23 @@
+{
+  "description": "30 second audio clip registration request used by dry-run tests. The WAV bytes are intentionally tiny; clipSelection carries the 30s contract under test.",
+  "request": {
+    "accountId": "00000000-0000-4000-8000-000000000001",
+    "audioBase64": "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=",
+    "audioMimeType": "audio/wav",
+    "audioFileName": "night-drive-hook.wav",
+    "clipSelection": {
+      "startSec": 12,
+      "endSec": 42,
+      "durationSec": 30,
+      "originalFileName": "night-drive.mp3"
+    }
+  },
+  "expectedAudioClip": {
+    "account_id": "00000000-0000-4000-8000-000000000001",
+    "selection_start_sec": 12,
+    "selection_end_sec": 42,
+    "duration_sec": 30,
+    "file_name": "night-drive-hook.wav",
+    "transcription_status": "pending"
+  }
+}

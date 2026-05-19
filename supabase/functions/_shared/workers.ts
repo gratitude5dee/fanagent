@@ -4,6 +4,17 @@ import { createClient } from "npm:@supabase/supabase-js@2.105.4";
 import { optionalEnv, requireEnv } from "./env.ts";
 import { getSupabaseAdmin } from "./supabase.ts";
 
+type WorkerRunRow = {
+  id: string;
+  detail: Record<string, unknown> | null;
+};
+
+function record(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
 export async function isAuthorizedCronCall(request: Request): Promise<boolean> {
   const expected = optionalEnv("CRON_SECRET");
   if (expected && request.headers.get("x-cron-secret") === expected) {
@@ -30,8 +41,49 @@ export async function isAuthorizedCronCall(request: Request): Promise<boolean> {
   }
 }
 
+export async function recoverStaleWorkerRuns(
+  functionName: string,
+  staleMinutes = 10,
+): Promise<number> {
+  const supabase = getSupabaseAdmin();
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - Math.max(1, staleMinutes) * 60_000).toISOString();
+  const staleRuns = await supabase
+    .from("worker_runs")
+    .select("id,detail")
+    .eq("function_name", functionName)
+    .is("ended_at", null)
+    .lt("started_at", staleBefore)
+    .limit(25);
+  if (staleRuns.error) throw staleRuns.error;
+
+  const rows = (staleRuns.data ?? []) as WorkerRunRow[];
+  const updates = await Promise.all(
+    rows.map((row) =>
+      supabase
+        .from("worker_runs")
+        .update({
+          ended_at: now.toISOString(),
+          detail: {
+            ...record(row.detail),
+            recovered_stale_open_run: true,
+            recovered_at: now.toISOString(),
+            recovered_by: functionName,
+          },
+        })
+        .eq("id", row.id)
+        .is("ended_at", null),
+    ),
+  );
+  const failed = updates.find((update) => update.error);
+  if (failed?.error) throw failed.error;
+
+  return rows.length;
+}
+
 export async function startWorkerRun(functionName: string): Promise<string> {
   const supabase = getSupabaseAdmin();
+  await recoverStaleWorkerRuns(functionName);
   const inserted = await supabase
     .from("worker_runs")
     .insert({ function_name: functionName })

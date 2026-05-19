@@ -13,15 +13,15 @@ export const libraryAdapter: SourceAdapter = {
       .limit(input.perAdapterLimit ?? 20);
     if (rows.error) throw rows.error;
 
-    return (rows.data ?? []).map((row) => {
+    return ((rows.data ?? []) as Record<string, unknown>[]).map((row) => {
       const metadata = (row.metadata ?? {}) as Record<string, unknown>;
       const width = Number(metadata.width ?? 1080);
       const height = Number(metadata.height ?? 1920);
       return {
         source_type: "library",
         provider: "library",
-        external_id: row.id,
-        origin_url: row.public_url,
+        external_id: String(row.id),
+        origin_url: String(row.public_url),
         width,
         height,
         duration_seconds: Number(row.duration_seconds ?? input.targetDurationSec),

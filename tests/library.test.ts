@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
+  buildLibrarySegmentReplacement,
+  buildLibraryFailureUpdate,
   buildLibraryFinalizeUpdate,
   buildLibrarySlotRows,
+  buildLibraryUnfitUpdate,
   buildLyricBlocksFromTranscript,
+  deriveBatchLibraryStatus,
   normalizeAudioClipRequest,
+  segmentTargetDurationSeconds,
 } from "../supabase/functions/_shared/library.ts";
 
 describe("audio clip registration helpers", () => {
@@ -127,7 +133,18 @@ describe("video library item helpers", () => {
         final_asset_id: "asset-1",
         duration_seconds: 30,
         segments: [
-          { source: "stock", provider: "pexels", externalId: "123", url: "https://cdn/a.mp4" },
+          {
+            source: "stock",
+            sourceType: "stock",
+            provider: "pexels",
+            externalId: "123",
+            url: "https://cdn/a.mp4",
+            license: "pexels",
+            rightsHolder: "Pexels",
+            attribution: "Pexels - https://pexels.example/video/123",
+            storagePath: "stock-cache/pexels/123.mp4",
+            reused: true,
+          },
           { source: "seedance", prompt: "neon stage" },
         ],
         perceptual_hash: null,
@@ -154,7 +171,18 @@ describe("video library item helpers", () => {
       thumbnail_url: "https://cdn/thumb.jpg",
       duration_sec: 30,
       segments: [
-        { source: "stock", provider: "pexels", externalId: "123", url: "https://cdn/a.mp4" },
+        {
+          source: "stock",
+          sourceType: "stock",
+          provider: "pexels",
+          externalId: "123",
+          url: "https://cdn/a.mp4",
+          license: "pexels",
+          rightsHolder: "Pexels",
+          attribution: "Pexels - https://pexels.example/video/123",
+          storagePath: "stock-cache/pexels/123.mp4",
+          reused: true,
+        },
         { source: "seedance", prompt: "neon stage" },
       ],
       provenance: [
@@ -163,17 +191,181 @@ describe("video library item helpers", () => {
           provider: "pexels",
           external_id: "123",
           origin_url: "https://cdn/a.mp4",
+          candidate_id: null,
+          license: "pexels",
+          rights_holder: "Pexels",
+          attribution: "Pexels - https://pexels.example/video/123",
+          storage_path: "stock-cache/pexels/123.mp4",
+          reused: true,
         },
         {
           source_type: "seedance",
           provider: "seedance",
           external_id: null,
           origin_url: null,
+          candidate_id: null,
+          license: null,
+          rights_holder: null,
+          attribution: null,
+          storage_path: null,
+          reused: false,
         },
       ],
       perceptual_hash: "ff00aa",
+      reused_flags: { "0": true },
       default_caption: "sound on. neon stage",
       default_hashtags: ["#music", "#edit"],
+      metadata: {},
     });
+  });
+
+  it("clears stale failure metadata when a library item becomes ready", () => {
+    const update = buildLibraryFinalizeUpdate({
+      item: {
+        id: "item-1",
+        final_asset_id: "asset-1",
+        duration_seconds: 15,
+        segments: [],
+        input_payload: {},
+      },
+      asset: {
+        id: "asset-1",
+        public_url: "https://cdn/final.mp4",
+        metadata: {},
+      },
+      libraryMetadata: {
+        failed: true,
+        failure_error: "old timeout",
+        failed_at: "2026-05-19T14:02:08.819Z",
+        backfilled_missing_library_slot: true,
+      },
+    });
+
+    expect(update).toMatchObject({
+      status: "ready",
+      metadata: { backfilled_missing_library_slot: true },
+    });
+
+    const migration = readFileSync(
+      "supabase/migrations/20260519143100_fanagent_clear_ready_library_failure_metadata.sql",
+      "utf8",
+    );
+    expect(migration).toContain("status in ('ready', 'scheduled', 'posted')");
+    expect(migration).toContain("- 'failed' - 'failure_error' - 'failed_at'");
+  });
+
+  it("builds a segment replacement with provenance for re-rendering", () => {
+    const replacement = buildLibrarySegmentReplacement({
+      segments: [
+        {
+          source: "stock",
+          sourceType: "stock",
+          url: "https://cdn/old.mp4",
+          provider: "pexels",
+          externalId: "old",
+          durationSec: 15,
+        },
+      ],
+      segmentIndex: 0,
+      cachedUrl: "https://cdn/new.mp4",
+      storagePath: "stock-cache/pexels/new.mp4",
+      libraryDurationSec: 15,
+      toleranceSecondsUsed: 5,
+      candidate: {
+        id: "candidate-1",
+        source_type: "stock",
+        provider: "pexels",
+        external_id: "new",
+        origin_url: "https://origin/new.mp4",
+        duration_seconds: 14,
+        is_portrait: true,
+        license: "pexels",
+        rights_holder: "Pexels",
+        attribution: "Pexels - https://origin/new.mp4",
+      },
+    });
+
+    expect(replacement.segments[0]).toMatchObject({
+      source: "stock",
+      sourceType: "stock",
+      url: "https://cdn/new.mp4",
+      provider: "pexels",
+      externalId: "new",
+      candidateId: "candidate-1",
+      toleranceSec: 5,
+      license: "pexels",
+    });
+    expect(replacement.provenance[0]).toMatchObject({
+      source_type: "stock",
+      provider: "pexels",
+      external_id: "new",
+      candidate_id: "candidate-1",
+      attribution: "Pexels - https://origin/new.mp4",
+    });
+  });
+
+  it("uses segment duration before whole-library duration for replacement tolerance", () => {
+    expect(
+      segmentTargetDurationSeconds({
+        segment: { durationSec: 12 },
+        segmentCount: 3,
+        libraryDurationSec: 45,
+      }),
+    ).toBe(12);
+    expect(
+      segmentTargetDurationSeconds({
+        segment: {},
+        segmentCount: 3,
+        libraryDurationSec: 45,
+      }),
+    ).toBe(15);
+  });
+
+  it("builds a blocked library update when a tile is marked unfit", () => {
+    const update = buildLibraryUnfitUpdate({
+      metadata: { existing: true },
+      reason: "Bad crop",
+      now: new Date("2026-05-18T12:00:00.000Z"),
+    });
+
+    expect(update).toEqual({
+      status: "blocked",
+      metadata: {
+        existing: true,
+        unfit: true,
+        unfit_reason: "Bad crop",
+        marked_unfit_at: "2026-05-18T12:00:00.000Z",
+      },
+      updated_at: "2026-05-18T12:00:00.000Z",
+    });
+  });
+
+  it("builds a failed library update when generation exhausts retries", () => {
+    const update = buildLibraryFailureUpdate({
+      metadata: { existing: true },
+      error: "TOLERANCE_EXCEEDED",
+      now: new Date("2026-05-18T12:00:00.000Z"),
+    });
+
+    expect(update).toEqual({
+      status: "failed",
+      metadata: {
+        existing: true,
+        failed: true,
+        failure_error: "TOLERANCE_EXCEEDED",
+        failed_at: "2026-05-18T12:00:00.000Z",
+      },
+      updated_at: "2026-05-18T12:00:00.000Z",
+    });
+  });
+
+  it("derives batch library status from ready and failed slot states", () => {
+    expect(deriveBatchLibraryStatus([])).toBe("building");
+    expect(deriveBatchLibraryStatus(["not_ready", "ready"])).toBe("building");
+    expect(deriveBatchLibraryStatus(["ready", "scheduled", "posted"])).toBe("ready");
+    expect(deriveBatchLibraryStatus(["failed", "blocked"])).toBe("failed");
+    expect(deriveBatchLibraryStatus(["ready", "failed"])).toBe("exhausted");
+    expect(deriveBatchLibraryStatus(["ready", "scheduled"], 3)).toBe("building");
+    expect(deriveBatchLibraryStatus(["ready", "scheduled", "posted"], 3)).toBe("ready");
   });
 });

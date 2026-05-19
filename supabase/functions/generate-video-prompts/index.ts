@@ -3,8 +3,10 @@
 // `prompt` and writes prompt metadata to `input_payload.prompt_meta` for each
 // generation_item in the batch.
 
-import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import { handleOptions } from "../_shared/cors.ts";
+import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
 import { optionalEnv } from "../_shared/env.ts";
+import { isAuthorizedInternalCall } from "../_shared/internal.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
 const SYSTEM = `You are a short-form video creative director. Given an audio
@@ -16,7 +18,12 @@ mood and camera angle so the resulting feed feels diverse.`;
 Deno.serve(async (request) => {
   const opt = handleOptions(request);
   if (opt) return opt;
-  if (request.method !== "POST") return errorResponse("Method not allowed", 405);
+  if (request.method !== "POST") {
+    return errorEnvelope("Method not allowed", "METHOD_NOT_ALLOWED", 405);
+  }
+  if (!isAuthorizedInternalCall(request)) {
+    return errorEnvelope("Unauthorized internal call.", "UNAUTHORIZED_INTERNAL", 401);
+  }
 
   try {
     const body = (await request.json()) as { batchId?: string };
@@ -52,8 +59,7 @@ Deno.serve(async (request) => {
 
     const apiKey = optionalEnv("LOVABLE_API_KEY");
     if (!apiKey) {
-      return jsonResponse({
-        ok: true,
+      return okEnvelope({
         skipped: true,
         reason: "LOVABLE_API_KEY missing; deterministic prompts remain active.",
         count,
@@ -147,8 +153,8 @@ Deno.serve(async (request) => {
         .eq("id", item.id);
     }
 
-    return jsonResponse({ ok: true, count: prompts.length, prompts });
+    return okEnvelope({ count: prompts.length, prompts });
   } catch (error) {
-    return errorResponse(error);
+    return errorEnvelope(error, "GENERATE_VIDEO_PROMPTS_FAILED", 500);
   }
 });

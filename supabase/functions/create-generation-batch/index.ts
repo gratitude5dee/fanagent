@@ -1,5 +1,6 @@
 import { createMediaAssetFromBytes, decodeBase64 } from "../_shared/assets.ts";
-import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import { handleOptions } from "../_shared/cors.ts";
+import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
 import { optionalEnv } from "../_shared/env.ts";
 import {
   buildBatchSettings,
@@ -12,6 +13,7 @@ import {
 } from "../_shared/generation.ts";
 import { buildLibrarySlotRows } from "../_shared/library.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
+import { isAuthorizedInternalCall } from "../_shared/internal.ts";
 
 type CreateBatchRequest = {
   accountId?: string;
@@ -47,6 +49,8 @@ const supportedAudio = new Set([
   "audio/x-wav",
   "audio/mp4",
   "audio/aac",
+  "audio/flac",
+  "audio/x-flac",
 ]);
 
 function normalizeAudioBase64(value: string): string {
@@ -138,7 +142,10 @@ Deno.serve(async (request) => {
   const options = handleOptions(request);
   if (options) return options;
   if (request.method !== "POST") {
-    return errorResponse("Method not allowed.", 405);
+    return errorEnvelope("Method not allowed.", "METHOD_NOT_ALLOWED", 405);
+  }
+  if (!isAuthorizedInternalCall(request)) {
+    return errorEnvelope("Unauthorized internal call.", "UNAUTHORIZED_INTERNAL", 401);
   }
 
   try {
@@ -297,8 +304,10 @@ Deno.serve(async (request) => {
     const insertedItems = await supabase.from("generation_items").insert(items).select("*");
     if (insertedItems.error) throw insertedItems.error;
 
-    return jsonResponse({
+    return okEnvelope({
       batch: batch.data,
+      audio_clip: audioClip,
+      audio_asset: audioAsset,
       audioClip,
       audioAsset,
       video_library_items: insertedLibraryItems.data,
@@ -306,6 +315,6 @@ Deno.serve(async (request) => {
       items_total: insertedItems.data?.length ?? 0,
     });
   } catch (error) {
-    return errorResponse(error);
+    return errorEnvelope(error, "CREATE_GENERATION_BATCH_FAILED", 500);
   }
 });

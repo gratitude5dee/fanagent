@@ -4,7 +4,6 @@
 // into the private `stock-cache` bucket so repeat picks skip the network.
 
 import { optionalEnv } from "../env.ts";
-import { getSupabaseAdmin } from "../supabase.ts";
 import type { AdapterSearchInput, SourceAdapter, SourceCandidate } from "./types.ts";
 
 export type StockClip = {
@@ -15,6 +14,13 @@ export type StockClip = {
   height: number;
   durationSec: number;
   score: number;
+};
+
+export type CachedStockClip = {
+  url: string;
+  storage_bucket: string | null;
+  storage_path: string | null;
+  expires_at: string | null;
 };
 
 export type StockSettings = {
@@ -32,6 +38,11 @@ export type StockSettings = {
 };
 
 const DEFAULT_TARGET_DURATION = 15;
+
+async function getSupabase() {
+  const { getSupabaseAdmin } = await import("../supabase.ts");
+  return getSupabaseAdmin();
+}
 
 function normalizeSettings(settings?: StockSettings): Required<StockSettings> {
   const providers: Array<"library" | "pexels" | "pixabay"> = settings?.providers?.length
@@ -196,7 +207,7 @@ async function searchLibrary(
   accountId: string,
   settings: Required<StockSettings>,
 ): Promise<StockClip[]> {
-  const supabase = getSupabaseAdmin();
+  const supabase = await getSupabase();
   const res = await supabase
     .from("media_assets")
     .select("id,public_url,duration_seconds,metadata")
@@ -204,12 +215,12 @@ async function searchLibrary(
     .eq("account_id", accountId)
     .limit(settings.perProviderLimit);
   if (res.error || !res.data) return [];
-  return res.data.map((row) => {
+  return (res.data as Record<string, unknown>[]).map((row) => {
     const meta = (row.metadata ?? {}) as Record<string, number>;
     return {
       provider: "library" as const,
-      externalId: row.id as string,
-      url: row.public_url as string,
+      externalId: String(row.id),
+      url: String(row.public_url),
       width: Number(meta.width ?? 1080),
       height: Number(meta.height ?? 1920),
       durationSec: Number(row.duration_seconds ?? DEFAULT_TARGET_DURATION),
@@ -237,15 +248,31 @@ export async function searchStock(input: {
 // Cache a picked stock clip into the private `stock-cache` bucket so we
 // don't refetch a 50MB MP4 every render. Returns the public-ish signed URL.
 export async function cacheStockClip(clip: StockClip): Promise<string> {
-  if (clip.provider === "library") return clip.url;
-  const supabase = getSupabaseAdmin();
+  return (await cacheStockClipWithMetadata(clip)).url;
+}
+
+export async function cacheStockClipWithMetadata(clip: StockClip): Promise<CachedStockClip> {
+  if (clip.provider === "library") {
+    return {
+      url: clip.url,
+      storage_bucket: null,
+      storage_path: null,
+      expires_at: null,
+    };
+  }
+  const supabase = await getSupabase();
   const path = `${clip.provider}/${clip.externalId}.mp4`;
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   const existing = await supabase.storage
     .from("stock-cache")
     .createSignedUrl(path, 60 * 60 * 24 * 7);
   if (!existing.error && existing.data?.signedUrl) {
-    // HEAD check would be ideal; we trust the signed URL.
-    return existing.data.signedUrl;
+    return {
+      url: existing.data.signedUrl,
+      storage_bucket: "stock-cache",
+      storage_path: path,
+      expires_at: expiresAt,
+    };
   }
   try {
     const dl = await fetch(clip.url);
@@ -254,7 +281,12 @@ export async function cacheStockClip(clip: StockClip): Promise<string> {
     // Skip caching files larger than 45 MB — Supabase storage rejects them.
     if (bytes.byteLength > 45 * 1024 * 1024) {
       console.warn(`stock cache skip (too large: ${bytes.byteLength}B) ${clip.url}`);
-      return clip.url;
+      return {
+        url: clip.url,
+        storage_bucket: null,
+        storage_path: null,
+        expires_at: null,
+      };
     }
     const upload = await supabase.storage
       .from("stock-cache")
@@ -264,13 +296,45 @@ export async function cacheStockClip(clip: StockClip): Promise<string> {
       .from("stock-cache")
       .createSignedUrl(path, 60 * 60 * 24 * 7);
     if (signed.error || !signed.data) throw signed.error;
-    return signed.data.signedUrl;
+    return {
+      url: signed.data.signedUrl,
+      storage_bucket: "stock-cache",
+      storage_path: path,
+      expires_at: expiresAt,
+    };
   } catch (err) {
     console.warn(
       `stock cache fallback (${err instanceof Error ? err.message : String(err)}) → using origin url`,
     );
-    return clip.url;
+    return {
+      url: clip.url,
+      storage_bucket: null,
+      storage_path: null,
+      expires_at: null,
+    };
   }
+}
+
+async function persistStockCandidateCache(
+  candidate: SourceCandidate,
+  cached: CachedStockClip,
+): Promise<void> {
+  if (!candidate.id || !cached.storage_path) return;
+  const supabase = await getSupabase();
+  const updated = await supabase
+    .from("source_candidates")
+    .update({
+      cached_url: cached.url,
+      storage_bucket: cached.storage_bucket,
+      storage_path: cached.storage_path,
+      expires_at: cached.expires_at,
+      metadata: {
+        ...(candidate.metadata ?? {}),
+        cached_at: new Date().toISOString(),
+      },
+    })
+    .eq("id", candidate.id);
+  if (updated.error) throw updated.error;
 }
 
 function clipToCandidate(clip: StockClip): SourceCandidate {
@@ -328,8 +392,12 @@ export const stockAdapter: SourceAdapter = {
     return candidates.map(clipToCandidate);
   },
   async cache(candidate: SourceCandidate) {
-    const url = await cacheStockClip(candidateToClip(candidate));
-    return { url, storage_path: candidate.storage_path };
+    const cached = await cacheStockClipWithMetadata(candidateToClip(candidate));
+    await persistStockCandidateCache(candidate, cached);
+    return {
+      url: cached.url,
+      storage_path: cached.storage_path ?? candidate.storage_path,
+    };
   },
   describeLicense(candidate: SourceCandidate) {
     return {

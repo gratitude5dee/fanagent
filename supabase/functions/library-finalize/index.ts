@@ -1,6 +1,7 @@
 import { handleOptions } from "../_shared/cors.ts";
 import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
-import { buildLibraryFinalizeUpdate } from "../_shared/library.ts";
+import { isAuthorizedInternalCall } from "../_shared/internal.ts";
+import { buildLibraryFinalizeUpdate, deriveBatchLibraryStatus } from "../_shared/library.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
 type RequestBody = {
@@ -11,20 +12,19 @@ async function refreshLibraryStatus(batchId: string): Promise<void> {
   const supabase = getSupabaseAdmin();
   const rows = await supabase.from("video_library_items").select("status").eq("batch_id", batchId);
   if (rows.error) throw rows.error;
+  const batch = await supabase
+    .from("generation_batches")
+    .select("quantity,post_count")
+    .eq("id", batchId)
+    .maybeSingle();
+  if (batch.error) throw batch.error;
 
-  const statuses = (rows.data ?? []).map((row) => row.status);
-  if (statuses.length === 0) return;
-
-  const readyCount = statuses.filter((status) =>
-    ["ready", "scheduled", "posted"].includes(status),
-  ).length;
-  const failedCount = statuses.filter((status) => ["failed", "blocked"].includes(status)).length;
-  const libraryStatus =
-    readyCount === statuses.length
-      ? "ready"
-      : readyCount + failedCount === statuses.length
-        ? "exhausted"
-        : "building";
+  const requestedQuantity = Number(batch.data?.quantity ?? batch.data?.post_count ?? 0);
+  const libraryStatus = deriveBatchLibraryStatus(
+    (rows.data ?? []).map((row) => row.status),
+    requestedQuantity,
+  );
+  if (libraryStatus === "building" && (rows.data ?? []).length === 0) return;
 
   const update = await supabase
     .from("generation_batches")
@@ -38,6 +38,9 @@ Deno.serve(async (request) => {
   if (options) return options;
   if (request.method !== "POST")
     return errorEnvelope("Method not allowed.", "METHOD_NOT_ALLOWED", 405);
+  if (!isAuthorizedInternalCall(request)) {
+    return errorEnvelope("Unauthorized internal call.", "UNAUTHORIZED_INTERNAL", 401);
+  }
 
   try {
     const body = (await request.json()) as RequestBody;
@@ -93,9 +96,17 @@ Deno.serve(async (request) => {
       libraryItemId = inserted.data.id;
     }
 
+    const currentLibrary = await supabase
+      .from("video_library_items")
+      .select("metadata")
+      .eq("id", libraryItemId)
+      .maybeSingle();
+    if (currentLibrary.error) throw currentLibrary.error;
+
     const libraryUpdate = buildLibraryFinalizeUpdate({
       item: item.data,
       asset: asset.data,
+      libraryMetadata: currentLibrary.data?.metadata,
     });
 
     const updatedLibrary = await supabase

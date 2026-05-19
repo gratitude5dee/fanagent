@@ -152,10 +152,7 @@ export default function LyricsWizard() {
   );
   const clipDur = (state.template?.selection_duration_ms ?? 15000) / 1000;
   const canSave =
-    !!state.template &&
-    !!state.template.trimmed_audio_asset_id &&
-    wordCount > 0 &&
-    !state.saving;
+    !!state.template && !!state.template.trimmed_audio_asset_id && wordCount > 0 && !state.saving;
 
   return (
     <div className="lyrics-root">
@@ -175,7 +172,10 @@ export default function LyricsWizard() {
 
       <div className="lyr-wizard-grid">
         <section className={`lyr-wpanel ${step === 1 ? "active" : ""}`}>
-          <header><span className="lyr-step">1</span><h2>Audio</h2></header>
+          <header>
+            <span className="lyr-step">1</span>
+            <h2>Audio</h2>
+          </header>
           <AudioPanel
             existing={state.template}
             existingAudioUrl={state.trimmedAudioUrl}
@@ -185,7 +185,10 @@ export default function LyricsWizard() {
         </section>
 
         <section className={`lyr-wpanel ${step === 2 ? "active" : ""}`}>
-          <header><span className="lyr-step">2</span><h2>Lyrics</h2></header>
+          <header>
+            <span className="lyr-step">2</span>
+            <h2>Lyrics</h2>
+          </header>
           <LyricsPanel
             template={state.template}
             audioUrl={state.trimmedAudioUrl}
@@ -204,7 +207,10 @@ export default function LyricsWizard() {
         </section>
 
         <section className={`lyr-wpanel ${step === 3 ? "active" : ""}`}>
-          <header><span className="lyr-step">3</span><h2>Cut Markers</h2></header>
+          <header>
+            <span className="lyr-step">3</span>
+            <h2>Cut Markers</h2>
+          </header>
           <MarkersPanel
             active={step === 3}
             template={state.template}
@@ -217,7 +223,9 @@ export default function LyricsWizard() {
       <footer className="lyr-footer">
         <div className="lyr-stepper">
           {[1, 2, 3].map((n) => (
-            <span key={n} className={`lyr-dot ${step >= n ? "on" : ""}`}>{n}</span>
+            <span key={n} className={`lyr-dot ${step >= n ? "on" : ""}`}>
+              {n}
+            </span>
           ))}
         </div>
         <div className="lyr-footer__meta">
@@ -229,7 +237,9 @@ export default function LyricsWizard() {
         </button>
       </footer>
 
-      <button className="lyr-help" aria-label="Help"><HelpCircle size={20} /></button>
+      <button className="lyr-help" aria-label="Help">
+        <HelpCircle size={20} />
+      </button>
 
       {state.saving ? (
         <div className="lyr-overlay">

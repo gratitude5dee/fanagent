@@ -1,7 +1,12 @@
 import { handleOptions } from "../_shared/cors.ts";
 import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
+import { isAuthorizedInternalCall } from "../_shared/internal.ts";
 import { normalizeSourceType, searchSourceCandidates } from "../_shared/sources/registry.ts";
-import type { SourceCandidate, SourceSegmentRequest } from "../_shared/sources/types.ts";
+import {
+  isAllowedSourceLicense,
+  type SourceCandidate,
+  type SourceSegmentRequest,
+} from "../_shared/sources/types.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
 type RequestBody = {
@@ -17,6 +22,7 @@ function candidateRow(input: {
   candidate: SourceCandidate;
   accountId: string;
 }): Record<string, unknown> {
+  assertCandidateRights(input.candidate);
   return {
     account_id: input.accountId,
     source_type: input.candidate.source_type,
@@ -37,6 +43,18 @@ function candidateRow(input: {
     expires_at: input.candidate.expires_at ?? null,
     metadata: input.candidate.metadata ?? {},
   };
+}
+
+function assertCandidateRights(candidate: SourceCandidate): void {
+  if (!isAllowedSourceLicense(candidate.license)) {
+    throw new Error(`Unsupported source candidate license: ${candidate.license}`);
+  }
+  if (
+    (candidate.source_type === "sports_edit" || candidate.source_type === "streamer_clip") &&
+    !candidate.attribution
+  ) {
+    throw new Error(`${candidate.source_type} candidates require attribution.`);
+  }
 }
 
 async function upsertCandidates(
@@ -63,6 +81,9 @@ Deno.serve(async (request) => {
   if (options) return options;
   if (request.method !== "POST")
     return errorEnvelope("Method not allowed.", "METHOD_NOT_ALLOWED", 405);
+  if (!isAuthorizedInternalCall(request)) {
+    return errorEnvelope("Unauthorized internal call.", "UNAUTHORIZED_INTERNAL", 401);
+  }
 
   try {
     const body = (await request.json()) as RequestBody;

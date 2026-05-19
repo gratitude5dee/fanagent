@@ -1,0 +1,34 @@
+{
+  "complete": {
+    "data": {
+      "status": "PUBLISH_COMPLETE",
+      "publicaly_available_post_id": ["7440000000000000001"]
+    },
+    "error": {
+      "code": "ok",
+      "message": "",
+      "log_id": "fixture-complete"
+    }
+  },
+  "processing": {
+    "data": {
+      "status": "PROCESSING_UPLOAD"
+    },
+    "error": {
+      "code": "ok",
+      "message": "",
+      "log_id": "fixture-processing"
+    }
+  },
+  "failed": {
+    "data": {
+      "status": "FAILED",
+      "fail_reason": "Video violates creator privacy settings"
+    },
+    "error": {
+      "code": "ok",
+      "message": "",
+      "log_id": "fixture-failed"
+    }
+  }
+}

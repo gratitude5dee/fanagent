@@ -36,7 +36,9 @@ function statusPill(s: TemplateStatus): { label: string; tone: string } {
 }
 
 function MiniWaveform({ peaks }: { peaks: number[] }) {
-  const data = peaks.length ? peaks : Array.from({ length: 40 }, (_, i) => Math.abs(Math.sin(i * 0.7)) * 0.7 + 0.2);
+  const data = peaks.length
+    ? peaks
+    : Array.from({ length: 40 }, (_, i) => Math.abs(Math.sin(i * 0.7)) * 0.7 + 0.2);
   return (
     <div className="lyr-card__wave" aria-hidden>
       {data.slice(0, 64).map((v, i) => (
@@ -96,13 +98,17 @@ export default function LyricsLanding() {
           <Link className="lyr-pill active" to="/lyrics">
             <Music4 size={14} /> Lyrics
           </Link>
-          <Link className="lyr-pill" to="/">Home</Link>
+          <Link className="lyr-pill" to="/">
+            Home
+          </Link>
         </nav>
       </header>
 
       <section className="lyr-hero">
         <span className="lyr-badge">Lyric Templates</span>
-        <h1 className="lyr-h1" aria-label="Your templates">LYRIC VISUAL PLATES</h1>
+        <h1 className="lyr-h1" aria-label="Your templates">
+          LYRIC VISUAL PLATES
+        </h1>
         <p className="lyr-sub">Reusable music-video templates · Audio · Lyrics · Markers</p>
       </section>
 
@@ -159,7 +165,9 @@ export default function LyricsLanding() {
               </div>
             ))}
           </div>
-          <Link to="/lyrics/new" className="lyr-btn primary">Create template</Link>
+          <Link to="/lyrics/new" className="lyr-btn primary">
+            Create template
+          </Link>
         </section>
       ) : (
         <section className="lyr-grid">
@@ -198,7 +206,9 @@ export default function LyricsLanding() {
                       {isSaved ? "Open" : "Continue"}
                     </Link>
                     {isSaved ? (
-                      <Link className="lyr-btn" to={`/lyrics/templates/${t.id}`}>Remix</Link>
+                      <Link className="lyr-btn" to={`/lyrics/templates/${t.id}`}>
+                        Remix
+                      </Link>
                     ) : null}
                   </div>
                 </div>
@@ -211,9 +221,15 @@ export default function LyricsLanding() {
       <section className="lyr-how">
         <h2>How it works</h2>
         <ol>
-          <li><strong>1.</strong> Upload audio &amp; trim a 15/30/45/60s clip.</li>
-          <li><strong>2.</strong> Sync lyrics with AI transcription or manual entry.</li>
-          <li><strong>3.</strong> Place cut markers on every beat that matters.</li>
+          <li>
+            <strong>1.</strong> Upload audio &amp; trim a 15/30/45/60s clip.
+          </li>
+          <li>
+            <strong>2.</strong> Sync lyrics with AI transcription or manual entry.
+          </li>
+          <li>
+            <strong>3.</strong> Place cut markers on every beat that matters.
+          </li>
         </ol>
       </section>
     </div>

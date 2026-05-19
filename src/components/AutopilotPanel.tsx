@@ -2,7 +2,7 @@
 // Wraps the fanpage-campaign edge function. No router required; rendered as a
 // top-level mode in App.tsx.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarClock,
   FileMusic,
@@ -14,10 +14,27 @@ import {
   Sparkles,
 } from "lucide-react";
 import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
-import { CampaignStep, type SourceMode } from "@/components/autopilot/CampaignStep";
+import { CampaignStep } from "@/components/autopilot/CampaignStep";
 import { ConnectStep } from "@/components/autopilot/ConnectStep";
 import { LyricsStep } from "@/components/autopilot/LyricsStep";
-import { UploadStep, type Duration } from "@/components/autopilot/UploadStep";
+import { UploadStep, type AudioClipStatus, type Duration } from "@/components/autopilot/UploadStep";
+import { clipSelectionMatchesDuration } from "@/lib/audio/selection";
+import {
+  isFanAgentSchemaReady,
+  schemaDiagnosticsSummary,
+  type FanAgentSchemaDiagnostics,
+} from "@/lib/fanagent/diagnostics";
+import {
+  registerAudioClip,
+  transcribeAudioClip,
+  type RegisteredAudioClipSummary,
+} from "@/lib/fanagent/audioClip";
+import {
+  buildSourceOptions,
+  coerceSelectableSourceMode,
+  type SourceMode,
+} from "@/lib/fanagent/sourceMode";
+import { lyricsApi } from "@/lib/lyrics/api";
 import type { LyricTemplateSummary } from "@/lib/lyrics/types";
 
 type Account = {
@@ -90,12 +107,7 @@ type Diagnostics = {
     schedule: string;
     detectable: boolean;
   };
-  schema: {
-    generationBatchesSettings: boolean;
-    generationItemsQueueColumns: boolean;
-    workerRuns: boolean;
-    errors: string[];
-  };
+  schema: FanAgentSchemaDiagnostics;
   recentWorkerRuns: Array<{
     function_name: string;
     started_at: string;
@@ -138,14 +150,6 @@ function unwrapFunctionData<T>(value: unknown): T {
   throw new Error(envelope.error || envelope.message || envelope.code || "Function failed");
 }
 
-async function blobToBase64(blob: Blob): Promise<string> {
-  const buf = await blob.arrayBuffer();
-  let bin = "";
-  const bytes = new Uint8Array(buf);
-  for (let i = 0; i < bytes.byteLength; i += 1) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin);
-}
-
 async function callCampaign<T>(action: string, body?: Record<string, unknown>): Promise<T> {
   const { data, error } = await supabase.functions.invoke<T>("fanpage-campaign", {
     body: { action, ...(body ?? {}) },
@@ -164,6 +168,34 @@ function tiktokConnectUrl(accountId: string): string {
 function toLocalInputValue(date: Date): string {
   const offset = date.getTimezoneOffset() * 60_000;
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function splitCsv(value: string): string[] {
+  return value
+    .split(/[,;\n]/g)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function parseKeyValueLines(value: string): Record<string, string> {
+  return Object.fromEntries(
+    value
+      .split(/[\n,;]/g)
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map((entry) => {
+        const separator = entry.includes("=") ? "=" : ":";
+        const [key, ...rest] = entry.split(separator);
+        return [key?.trim(), rest.join(separator).trim()];
+      })
+      .filter(
+        (entry): entry is [string, string] =>
+          typeof entry[0] === "string" &&
+          entry[0].length > 0 &&
+          typeof entry[1] === "string" &&
+          /^https?:\/\//i.test(entry[1]),
+      ),
+  );
 }
 
 function statusTone(status: string): string {
@@ -218,6 +250,12 @@ export default function AutopilotPanel() {
   const [stockPortraitOnly, setStockPortraitOnly] = useState(true);
   const [stockAvoidReuse, setStockAvoidReuse] = useState(true);
   const [stockAllowReuse, setStockAllowReuse] = useState(true);
+  const [sportsLeague, setSportsLeague] = useState("");
+  const [sportsTeam, setSportsTeam] = useState("");
+  const [sportsAllowedChannels, setSportsAllowedChannels] = useState("");
+  const [sportsOwnerAssetUrls, setSportsOwnerAssetUrls] = useState("");
+  const [streamerName, setStreamerName] = useState("");
+  const [streamerAllowedChannels, setStreamerAllowedChannels] = useState("");
   const [seedanceResolution, setSeedanceResolution] = useState<"480p" | "720p" | "1080p">("720p");
   const [publishPrivacy, setPublishPrivacy] = useState("SELF_ONLY");
   const [busy, setBusy] = useState(false);
@@ -225,6 +263,11 @@ export default function AutopilotPanel() {
   const [tab, setTab] = useState<"campaign" | "lyrics">("campaign");
   const [lyricTemplateId, setLyricTemplateId] = useState<string | "">("");
   const [lyricsDrawerOpen, setLyricsDrawerOpen] = useState(false);
+  const [registeredAudioClip, setRegisteredAudioClip] = useState<RegisteredAudioClipSummary | null>(
+    null,
+  );
+  const [audioClipStatus, setAudioClipStatus] = useState<AudioClipStatus>("idle");
+  const [audioClipError, setAudioClipError] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
 
   const lyricTemplates = useMemo(() => data?.lyricTemplates ?? [], [data?.lyricTemplates]);
@@ -232,61 +275,29 @@ export default function AutopilotPanel() {
     () => new Map(lyricTemplates.map((t) => [t.id, t])),
     [lyricTemplates],
   );
+  const lyricTemplateIdRef = useRef(lyricTemplateId);
 
   const account = data?.account ?? null;
+  const accountId = account?.id ?? "";
   const isConnected = !!account?.tiktok_connected_at;
   const activeBatches = useMemo(
     () => (data?.batches ?? []).filter((b) => !b.paused_at && b.status !== "complete"),
     [data],
   );
-  const schemaReady = diagnostics
-    ? diagnostics.schema.generationBatchesSettings &&
-      diagnostics.schema.generationItemsQueueColumns &&
-      diagnostics.schema.workerRuns
-    : false;
-  const sourceOptions = useMemo(
-    () => [
-      { value: "stock" as const, label: "Stock footage" },
-      {
-        value: "mixed" as const,
-        label: "Mixed: stock + Seedance 2",
-        disabled: diagnostics ? !diagnostics.env.fal : false,
-        reason: "FAL key missing",
-      },
-      {
-        value: "seedance" as const,
-        label: "Seedance 2 only",
-        disabled: diagnostics ? !diagnostics.env.fal : false,
-        reason: "FAL key missing",
-      },
-      {
-        value: "gmi_seedance" as const,
-        label: "GMI Seedance 2",
-        disabled: diagnostics ? !diagnostics.env.gmi : false,
-        reason: "GMI key missing",
-      },
-      {
-        value: "sports_edit" as const,
-        label: "Sports edit",
-        disabled: diagnostics
-          ? !(diagnostics.env.youtubeApiKey && diagnostics.env.sportsAllowed)
-          : false,
-        reason: "YouTube key or allowlist missing",
-      },
-      {
-        value: "streamer_clip" as const,
-        label: "Streamer clips",
-        disabled: diagnostics
-          ? !(
-              diagnostics.env.twitchClientId &&
-              diagnostics.env.twitchClientSecret &&
-              diagnostics.env.streamerAllowed
-            )
-          : false,
-        reason: "Twitch credentials or allowlist missing",
-      },
-    ],
-    [diagnostics],
+  const schemaReady = isFanAgentSchemaReady(diagnostics?.schema);
+  const sourceOptions = useMemo(() => buildSourceOptions(diagnostics?.env), [diagnostics?.env]);
+  const trimmedAudioKey = useMemo(
+    () =>
+      trimmedAudio
+        ? [
+            trimmedAudio.name,
+            trimmedAudio.startSec,
+            trimmedAudio.endSec,
+            trimmedAudio.durationSec,
+            trimmedAudio.blob.size,
+          ].join(":")
+        : "",
+    [trimmedAudio],
   );
 
   async function refresh() {
@@ -318,6 +329,87 @@ export default function AutopilotPanel() {
     if (trimmedAudio && !lyricTemplateId) setLyricsDrawerOpen(true);
   }, [trimmedAudio, lyricTemplateId]);
 
+  useEffect(() => {
+    lyricTemplateIdRef.current = lyricTemplateId;
+  }, [lyricTemplateId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRegisteredAudioClip(null);
+    setAudioClipError(null);
+
+    if (!trimmedAudio) {
+      setAudioClipStatus("idle");
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (!accountId || !schemaReady) {
+      setAudioClipStatus("idle");
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function registerAndTranscribeClip() {
+      try {
+        setAudioClipStatus("registering");
+        const registered = await registerAudioClip({
+          accountId,
+          trimmedAudio: trimmedAudio!,
+        });
+        if (cancelled) return;
+        setRegisteredAudioClip(registered.audio_clip);
+        setAudioClipStatus("transcribing");
+        setLyricsDrawerOpen(true);
+
+        try {
+          const transcribed = await transcribeAudioClip(registered.audio_clip.id);
+          if (cancelled) return;
+          setRegisteredAudioClip(transcribed.audio_clip);
+          if (!lyricTemplateIdRef.current) {
+            try {
+              const template = await lyricsApi.createFromAudioClip({
+                audioClipId: transcribed.audio_clip.id,
+                title: `${trimmedAudio!.originalFileName} lyrics`,
+              });
+              if (cancelled) return;
+              setLyricTemplateId(template.template.id);
+              await refresh();
+            } catch (templateError) {
+              if (cancelled) return;
+              setAudioClipError(
+                `Template creation failed: ${
+                  templateError instanceof Error ? templateError.message : String(templateError)
+                }`,
+              );
+            }
+          }
+          setAudioClipStatus("ready");
+        } catch (error) {
+          if (cancelled) return;
+          setRegisteredAudioClip(registered.audio_clip);
+          setAudioClipStatus("failed");
+          setAudioClipError(error instanceof Error ? error.message : String(error));
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setRegisteredAudioClip(null);
+        setAudioClipStatus("failed");
+        setAudioClipError(error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    registerAndTranscribeClip();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, schemaReady, trimmedAudio, trimmedAudioKey]);
+
+  useEffect(() => {
+    setSourceMode((current) => coerceSelectableSourceMode(current, diagnostics?.env));
+  }, [diagnostics?.env]);
+
   async function run<T>(label: string, fn: () => Promise<T>) {
     setBusy(true);
     setMessage(null);
@@ -336,13 +428,39 @@ export default function AutopilotPanel() {
     if (!trimmedAudio) throw new Error("Trim your audio clip first.");
     if (!account) throw new Error("No account.");
     if (!schemaReady) throw new Error("Database queue schema is not ready.");
+    if (!registeredAudioClip) {
+      throw new Error("Wait for the audio clip to finish registering before launching.");
+    }
+    if (!lyricTemplateId) {
+      throw new Error("Review and save a lyric template before launching.");
+    }
+    if (
+      !clipSelectionMatchesDuration(
+        { startSec: trimmedAudio.startSec, endSec: trimmedAudio.endSec },
+        duration,
+      )
+    ) {
+      throw new Error(`Trimmed audio must be exactly ${duration}s before launching.`);
+    }
     const scheduledStart = new Date(startAt);
     if (!Number.isFinite(scheduledStart.getTime())) throw new Error("Choose a valid start time.");
+    const commonSourceSettings = {
+      providers: Object.entries(stockProviders)
+        .filter(([, enabled]) => enabled)
+        .map(([provider]) => provider),
+      keywords: splitCsv(stockKeywords),
+      negativeKeywords: splitCsv(stockNegativeKeywords),
+      category: stockCategory || null,
+      mood: stockMood || null,
+      portraitOnly: stockPortraitOnly,
+      minDurationSec: Math.min(15, duration),
+      maxDurationSec: Math.max(15, duration * 3),
+      avoidReuseWithinBatch: stockAvoidReuse,
+      allowReuseWhenExhausted: stockAllowReuse,
+    };
     await callCampaign("create", {
       accountId: account.id,
-      audioBase64: await blobToBase64(trimmedAudio.blob),
-      audioMimeType: trimmedAudio.blob.type || "audio/wav",
-      audioFileName: trimmedAudio.name.replace(/\.[^.]+$/, "") + ".wav",
+      audioClipId: registeredAudioClip.id,
       clipSelection: {
         startSec: trimmedAudio.startSec,
         endSec: trimmedAudio.endSec,
@@ -354,25 +472,24 @@ export default function AutopilotPanel() {
       postCount,
       cadenceMinutes,
       prompt,
-      stockSettings: {
-        providers: Object.entries(stockProviders)
-          .filter(([, enabled]) => enabled)
-          .map(([provider]) => provider),
-        keywords: stockKeywords
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean),
-        negativeKeywords: stockNegativeKeywords
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean),
-        category: stockCategory || null,
-        mood: stockMood || null,
-        portraitOnly: stockPortraitOnly,
-        minDurationSec: Math.min(15, duration),
-        maxDurationSec: Math.max(15, duration * 3),
-        avoidReuseWithinBatch: stockAvoidReuse,
-        allowReuseWhenExhausted: stockAllowReuse,
+      sourceSettings: {
+        stock: commonSourceSettings,
+        seedance: {
+          resolution: seedanceResolution,
+        },
+        gmi_seedance: {
+          resolution: seedanceResolution,
+        },
+        sports_edit: {
+          league: sportsLeague || null,
+          team: sportsTeam || null,
+          allowedChannels: splitCsv(sportsAllowedChannels),
+          ownerAssetUrls: parseKeyValueLines(sportsOwnerAssetUrls),
+        },
+        streamer_clip: {
+          streamer: streamerName || null,
+          allowedChannels: splitCsv(streamerAllowedChannels),
+        },
       },
       seedanceSettings: {
         resolution: seedanceResolution,
@@ -393,6 +510,15 @@ export default function AutopilotPanel() {
     await run("Update template", () =>
       callCampaign("setLyricTemplate", { itemId, lyricTemplateId: templateId }),
     );
+  }
+
+  async function recoverRecentFailures() {
+    await callCampaign("recoverRecentFailures", {
+      limit: 50,
+      includeFailed: true,
+      includeStaleActive: true,
+    });
+    await refreshDiagnostics();
   }
 
   return (
@@ -436,11 +562,7 @@ export default function AutopilotPanel() {
               <span className={`dot ${schemaReady ? "good" : "bad"}`} />
               <div>
                 <strong>Database queue schema</strong>
-                <span>
-                  {diagnostics.schema.errors.length
-                    ? diagnostics.schema.errors.join(" · ")
-                    : "ready"}
-                </span>
+                <span>{schemaDiagnosticsSummary(diagnostics.schema)}</span>
               </div>
             </div>
             <div className="batch-row">
@@ -536,6 +658,29 @@ export default function AutopilotPanel() {
                 </div>
               </div>
             ) : null}
+            {diagnostics.recentFailedItems.length > 0 ? (
+              <div className="batch-row">
+                <span className="dot bad" />
+                <div style={{ flex: 1 }}>
+                  <strong>Recent failed generation items</strong>
+                  <span>
+                    {diagnostics.recentFailedItems.length} failed item
+                    {diagnostics.recentFailedItems.length === 1 ? "" : "s"} visible in diagnostics ·
+                    latest{" "}
+                    {diagnostics.recentFailedItems[0]?.error_message?.slice(0, 140) ??
+                      "no error message"}
+                  </span>
+                </div>
+                <button
+                  className="button"
+                  disabled={busy}
+                  type="button"
+                  onClick={() => run("Recovery", recoverRecentFailures)}
+                >
+                  <RefreshCcw size={14} /> Recover
+                </button>
+              </div>
+            ) : null}
           </div>
           <div className="action-row">
             <button className="button ghost" type="button" onClick={refreshDiagnostics}>
@@ -577,6 +722,9 @@ export default function AutopilotPanel() {
                   isConnected={isConnected}
                   schemaReady={schemaReady}
                   trimmedAudio={trimmedAudio}
+                  audioClipStatus={audioClipStatus}
+                  audioClipError={audioClipError}
+                  registeredAudioClipId={registeredAudioClip?.id ?? null}
                   onAudioFile={setAudioFile}
                   onDuration={setDuration}
                   onTrimmedAudio={setTrimmedAudio}
@@ -592,6 +740,7 @@ export default function AutopilotPanel() {
                   busy={busy}
                   cadenceMinutes={cadenceMinutes}
                   duration={duration}
+                  lyricTemplateReady={!!lyricTemplateId}
                   postCount={postCount}
                   prompt={prompt}
                   publishPrivacy={publishPrivacy}
@@ -599,6 +748,10 @@ export default function AutopilotPanel() {
                   seedanceResolution={seedanceResolution}
                   sourceMode={sourceMode}
                   sourceOptions={sourceOptions}
+                  sportsAllowedChannels={sportsAllowedChannels}
+                  sportsLeague={sportsLeague}
+                  sportsOwnerAssetUrls={sportsOwnerAssetUrls}
+                  sportsTeam={sportsTeam}
                   startAt={startAt}
                   stockAllowReuse={stockAllowReuse}
                   stockAvoidReuse={stockAvoidReuse}
@@ -608,13 +761,19 @@ export default function AutopilotPanel() {
                   stockNegativeKeywords={stockNegativeKeywords}
                   stockPortraitOnly={stockPortraitOnly}
                   stockProviders={stockProviders}
-                  trimmedAudioReady={!!trimmedAudio}
+                  streamerAllowedChannels={streamerAllowedChannels}
+                  streamerName={streamerName}
+                  trimmedAudioReady={!!trimmedAudio && !!registeredAudioClip}
                   onCadenceMinutes={setCadenceMinutes}
                   onPostCount={setPostCount}
                   onPrompt={setPrompt}
                   onPublishPrivacy={setPublishPrivacy}
                   onSeedanceResolution={setSeedanceResolution}
                   onSourceMode={setSourceMode}
+                  onSportsAllowedChannels={setSportsAllowedChannels}
+                  onSportsLeague={setSportsLeague}
+                  onSportsOwnerAssetUrls={setSportsOwnerAssetUrls}
+                  onSportsTeam={setSportsTeam}
                   onStartAt={setStartAt}
                   onStockAllowReuse={setStockAllowReuse}
                   onStockAvoidReuse={setStockAvoidReuse}
@@ -624,6 +783,8 @@ export default function AutopilotPanel() {
                   onStockNegativeKeywords={setStockNegativeKeywords}
                   onStockPortraitOnly={setStockPortraitOnly}
                   onStockProviders={setStockProviders}
+                  onStreamerAllowedChannels={setStreamerAllowedChannels}
+                  onStreamerName={setStreamerName}
                 />
               </form>
             </>

@@ -1,23 +1,40 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { EventDropArg, EventInput } from "@fullcalendar/core";
 import { Link } from "react-router-dom";
-import { CalendarDays, Home, Images, RefreshCcw } from "lucide-react";
+import { CalendarDays, ExternalLink, Home, Images, PlugZap, RefreshCcw, Send } from "lucide-react";
 import BulkScheduleDialog from "@/components/calendar/BulkScheduleDialog";
 import FanAgentCalendar from "@/components/FanAgentCalendar";
 import { listReadyLibraryItems, scheduleLibraryItems } from "@/lib/library/api";
 import { displayError } from "@/lib/errors";
 import type { LibraryItem } from "@/lib/library/types";
-import { supabase } from "@/integrations/supabase/client";
-
-type CalendarPost = {
-  id: string;
-  caption: string;
-  scheduled_at: string;
-  status: string;
-  publish_status: string | null;
-  video_url: string | null;
-  library_item_id?: string | null;
-};
+import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
+import { buildTikTokConnectUrl } from "@/lib/fanagent/accounts";
+import {
+  CALENDAR_STATUS_FILTERS,
+  CALENDAR_VIEWS,
+  calendarEventForPost,
+  creatorPrivacyOptions,
+  filterCalendarLibraryItems,
+  filterCalendarPosts,
+  isCreatorCommentDisabled,
+  isPostReadOnly,
+  isPastScheduleDrop,
+  isPrivacyLevelAvailable,
+  needsTikTokConnection,
+  provenanceSummary,
+  publishStatusLabel,
+  statusTone,
+  TIKTOK_PRIVACY_LEVELS,
+  tiktokPostUrl,
+  toLocalInputValue,
+  type CalendarAccount,
+  type CalendarFilters,
+  type CalendarLibraryPreview,
+  type CalendarPost,
+  type CalendarStatusFilter,
+  type CalendarView,
+  buildTikTokPrivacySettings,
+} from "@/lib/calendar/posts";
 
 type FunctionEnvelope<T> = {
   success: boolean;
@@ -34,17 +51,38 @@ function unwrapFunctionData<T>(value: unknown): T {
   throw new Error(envelope.error || envelope.message || envelope.code || "Function failed");
 }
 
-function eventClass(post: CalendarPost): string {
-  if (post.publish_status?.startsWith("blocked_")) return "event-blocked";
-  if (post.status === "posted" || post.publish_status === "publish_complete") return "event-good";
-  if (post.status === "failed" || post.publish_status === "failed") return "event-bad";
-  if (post.status === "posting" || post.publish_status === "processing") return "event-warn";
-  if (post.status === "skipped") return "event-muted";
-  return "event-idle";
-}
-
 function titleForItem(item: LibraryItem): string {
   return item.default_caption || `Library clip ${item.library_index + 1}`;
+}
+
+function arrayValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function coerceLibraryPreview(row: Record<string, unknown>): CalendarLibraryPreview {
+  return {
+    id: String(row.id),
+    audio_clip_id: String(row.audio_clip_id),
+    library_index: Number(row.library_index ?? 0),
+    duration_sec: Number(row.duration_sec ?? 0),
+    status: String(row.status ?? "not_ready"),
+    segments: arrayValue(row.segments),
+    provenance: arrayValue(row.provenance),
+  };
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function coerceCalendarAccount(row: Record<string, unknown>): CalendarAccount {
+  return {
+    id: String(row.id),
+    handle: typeof row.handle === "string" ? row.handle : null,
+    tiktok_creator_info: objectValue(row.tiktok_creator_info),
+  };
 }
 
 export default function CalendarPage() {
@@ -52,7 +90,16 @@ export default function CalendarPage() {
   const [posts, setPosts] = useState<CalendarPost[]>([]);
   const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
   const [selectedLibraryIds, setSelectedLibraryIds] = useState<Set<string>>(() => new Set());
+  const [libraryPreviews, setLibraryPreviews] = useState<CalendarLibraryPreview[]>([]);
+  const [accounts, setAccounts] = useState<CalendarAccount[]>([]);
+  const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [calendarView, setCalendarView] = useState<CalendarView>("week");
+  const [filters, setFilters] = useState<CalendarFilters>({
+    accountId: "",
+    audioClipId: "",
+    status: "all",
+  });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -63,14 +110,59 @@ export default function CalendarPage() {
       const [postRows, readyItems] = await Promise.all([
         supabase
           .from("posts")
-          .select("id,caption,scheduled_at,status,publish_status,video_url,library_item_id")
+          .select(
+            "id,account_id,caption,hashtags,scheduled_at,status,publish_status,video_url,library_item_id,tiktok_privacy_level,tiktok_disable_duet,tiktok_disable_stitch,tiktok_disable_comment,tiktok_is_aigc,tiktok_brand_content,tiktok_brand_organic,tiktok_post_id,posted_at",
+          )
           .order("scheduled_at", { ascending: true })
           .limit(250),
         listReadyLibraryItems(80),
       ]);
       if (postRows.error) throw postRows.error;
-      setPosts((postRows.data ?? []) as CalendarPost[]);
+      const nextPosts = (postRows.data ?? []) as CalendarPost[];
+      setPosts(nextPosts);
       setLibraryItems(readyItems);
+      const accountIds = Array.from(
+        new Set(
+          [
+            ...nextPosts.map((post) => post.account_id),
+            ...readyItems.map((item) => item.account_id),
+          ].filter((id) => id.length > 0),
+        ),
+      );
+      if (accountIds.length > 0) {
+        const accountRows = await supabase
+          .from("accounts")
+          .select("id,handle,tiktok_creator_info")
+          .in("id", accountIds);
+        if (accountRows.error) throw accountRows.error;
+        setAccounts(
+          ((accountRows.data ?? []) as Record<string, unknown>[]).map(coerceCalendarAccount),
+        );
+      } else {
+        setAccounts([]);
+      }
+      const libraryIds = Array.from(
+        new Set(
+          nextPosts
+            .map((post) => post.library_item_id)
+            .filter((id): id is string => typeof id === "string" && id.length > 0),
+        ),
+      );
+      if (libraryIds.length > 0) {
+        const previews = await supabase
+          .from("video_library_items")
+          .select("id,audio_clip_id,library_index,duration_sec,status,segments,provenance")
+          .in("id", libraryIds);
+        if (previews.error) throw previews.error;
+        setLibraryPreviews(
+          ((previews.data ?? []) as Record<string, unknown>[]).map(coerceLibraryPreview),
+        );
+      } else {
+        setLibraryPreviews([]);
+      }
+      setSelectedPostId((current) =>
+        current && nextPosts.some((post) => post.id === current) ? current : null,
+      );
     } catch (error) {
       setMessage(displayError(error));
     } finally {
@@ -82,20 +174,71 @@ export default function CalendarPage() {
     refresh();
   }, []);
 
+  const filteredPosts = useMemo(
+    () => filterCalendarPosts(posts, libraryPreviews, filters),
+    [filters, libraryPreviews, posts],
+  );
+  const filteredLibraryItems = useMemo(
+    () => filterCalendarLibraryItems(libraryItems, filters),
+    [filters, libraryItems],
+  );
   const events = useMemo<EventInput[]>(
+    () => filteredPosts.map((post) => calendarEventForPost(post)),
+    [filteredPosts],
+  );
+  const previewById = useMemo(
+    () => new Map(libraryPreviews.map((preview) => [preview.id, preview])),
+    [libraryPreviews],
+  );
+  const accountById = useMemo(
+    () => new Map(accounts.map((account) => [account.id, account])),
+    [accounts],
+  );
+  const selectedPost = posts.find((post) => post.id === selectedPostId) ?? null;
+  const selectedAccount = selectedPost ? accountById.get(selectedPost.account_id) : null;
+  const selectedPreview = selectedPost?.library_item_id
+    ? previewById.get(selectedPost.library_item_id)
+    : null;
+  const selectedCreatorInfo = selectedPost ? (selectedAccount?.tiktok_creator_info ?? null) : null;
+  const creatorPrivacyLevelCount = creatorPrivacyOptions(selectedCreatorInfo).length;
+  const commentLocked = isCreatorCommentDisabled(selectedCreatorInfo);
+  const readOnlyPost = selectedPost ? isPostReadOnly(selectedPost) : false;
+  const liveTikTokUrl = selectedPost ? tiktokPostUrl(selectedPost, selectedAccount) : null;
+  const blockedPosts = posts.filter((post) => post.publish_status?.startsWith("blocked_"));
+  const audioClipIds = useMemo(
     () =>
-      posts.map((post) => ({
-        id: post.id,
-        title: post.caption || "Scheduled post",
-        start: post.scheduled_at,
-        classNames: [eventClass(post)],
-      })),
-    [posts],
+      Array.from(
+        new Set([
+          ...libraryPreviews.map((preview) => preview.audio_clip_id),
+          ...libraryItems.map((item) => item.audio_clip_id),
+        ]),
+      ).sort(),
+    [libraryItems, libraryPreviews],
   );
 
+  useEffect(() => {
+    if (selectedPostId && !filteredPosts.some((post) => post.id === selectedPostId)) {
+      setSelectedPostId(null);
+    }
+  }, [filteredPosts, selectedPostId]);
+
+  useEffect(() => {
+    const visibleIds = new Set(filteredLibraryItems.map((item) => item.id));
+    setSelectedLibraryIds((current) => {
+      const next = new Set(Array.from(current).filter((itemId) => visibleIds.has(itemId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [filteredLibraryItems]);
+
   async function updatePostSchedule(arg: EventDropArg) {
-    const scheduledAt = arg.event.start?.toISOString();
-    if (!scheduledAt) return;
+    const droppedAt = arg.event.start;
+    if (!droppedAt) return;
+    if (isPastScheduleDrop(droppedAt)) {
+      arg.revert();
+      setMessage("Cannot reschedule into the past.");
+      return;
+    }
+    const scheduledAt = droppedAt.toISOString();
     setBusy(true);
     setMessage(null);
     try {
@@ -117,6 +260,10 @@ export default function CalendarPage() {
   }
 
   async function scheduleDrop(libraryItemId: string, scheduledAt: Date) {
+    if (isPastScheduleDrop(scheduledAt)) {
+      setMessage("Cannot reschedule into the past.");
+      return;
+    }
     setBusy(true);
     setMessage(null);
     try {
@@ -141,6 +288,62 @@ export default function CalendarPage() {
     });
   }
 
+  async function saveSelectedPost(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedPost || readOnlyPost) return;
+    const formData = new FormData(event.currentTarget);
+    const hashtags = String(formData.get("hashtags") || "")
+      .split(/\s+/)
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+    const privacyLevel = String(formData.get("privacyLevel") || "") || null;
+    const disableDuet = formData.get("disableDuet") === "on";
+    const disableStitch = formData.get("disableStitch") === "on";
+    const disableComment = commentLocked || formData.get("disableComment") === "on";
+    const isAigc = formData.get("isAigc") === "on";
+    const brandContentToggle = formData.get("brandContentToggle") === "on";
+    const brandOrganicToggle = formData.get("brandOrganicToggle") === "on";
+    setBusy(true);
+    setMessage(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("update-post-schedule", {
+        body: {
+          postId: selectedPost.id,
+          scheduledAt: new Date(String(formData.get("scheduledAt"))).toISOString(),
+          caption: String(formData.get("caption") || ""),
+          hashtags,
+          privacyLevel,
+          disableDuet,
+          disableStitch,
+          disableComment,
+          isAigc,
+          brandContentToggle,
+          brandOrganicToggle,
+          privacySettings: buildTikTokPrivacySettings({
+            privacyLevel,
+            disableDuet,
+            disableStitch,
+            disableComment,
+            isAigc,
+            brandContentToggle,
+            brandOrganicToggle,
+          }),
+        },
+      });
+      if (error) {
+        if (data) unwrapFunctionData(data);
+        throw new Error(error.message);
+      }
+      unwrapFunctionData(data);
+      await refresh();
+      setMessage("Post review saved.");
+    } catch (error) {
+      setMessage(displayError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className="app-shell calendar-page">
       <header className="topbar">
@@ -155,6 +358,9 @@ export default function CalendarPage() {
           <Link className="button ghost" to="/library">
             <Images size={14} /> Library
           </Link>
+          <Link className="button ghost" to="/settings/accounts">
+            <PlugZap size={14} /> Accounts
+          </Link>
           <button className="button ghost" type="button" disabled={busy} onClick={refresh}>
             <RefreshCcw className={busy ? "spin" : undefined} size={14} /> Refresh
           </button>
@@ -162,8 +368,108 @@ export default function CalendarPage() {
       </header>
 
       {message ? <div className="banner">{message}</div> : null}
+      {blockedPosts.length > 0 ? (
+        <div className="banner warn">
+          {blockedPosts.length} scheduled post{blockedPosts.length === 1 ? "" : "s"} need publishing
+          attention.
+        </div>
+      ) : null}
 
-      <div className="calendar-workspace">
+      <section className="panel calendar-controls" aria-label="Calendar controls">
+        <div className="calendar-view-toggle" aria-label="Calendar view">
+          {CALENDAR_VIEWS.map((view) => (
+            <button
+              key={view}
+              type="button"
+              className={`button ${calendarView === view ? "primary" : "ghost"}`}
+              onClick={() => setCalendarView(view)}
+            >
+              {view === "month"
+                ? "Month"
+                : view === "week"
+                  ? "Week"
+                  : view === "day"
+                    ? "Day"
+                    : "Agenda"}
+            </button>
+          ))}
+        </div>
+        <div className="calendar-filter-row">
+          <label>
+            Account
+            <select
+              value={filters.accountId}
+              onChange={(event) =>
+                setFilters((current) => ({ ...current, accountId: event.target.value }))
+              }
+            >
+              <option value="">All accounts</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.handle ?? account.id.slice(0, 8)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Audio clip
+            <select
+              value={filters.audioClipId}
+              onChange={(event) =>
+                setFilters((current) => ({ ...current, audioClipId: event.target.value }))
+              }
+            >
+              <option value="">All audio clips</option>
+              {audioClipIds.map((audioClipId) => (
+                <option key={audioClipId} value={audioClipId}>
+                  {audioClipId.slice(0, 8)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Status
+            <select
+              value={filters.status}
+              onChange={(event) =>
+                setFilters((current) => ({
+                  ...current,
+                  status: event.target.value as CalendarStatusFilter,
+                }))
+              }
+            >
+              {CALENDAR_STATUS_FILTERS.map((status) => (
+                <option key={status} value={status}>
+                  {status === "all" ? "All statuses" : status.replace("_", " ")}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="calendar-legend" aria-label="Calendar color legend">
+          <span>
+            <i className="event-idle" /> Pending
+          </span>
+          <span>
+            <i className="event-warn" /> Posting
+          </span>
+          <span>
+            <i className="event-good" /> Posted
+          </span>
+          <span>
+            <i className="event-bad" /> Failed
+          </span>
+          <span>
+            <i className="event-muted" /> Skipped
+          </span>
+          <span>
+            <i className="event-blocked" /> Blocked
+          </span>
+          <strong>{filteredPosts.length} visible</strong>
+        </div>
+      </section>
+
+      <div className={`calendar-workspace ${selectedPost ? "has-review" : ""}`}>
         <aside className="panel calendar-library-panel" ref={libraryPanelRef}>
           <div className="panel-title">
             <CalendarDays size={16} />
@@ -181,10 +487,10 @@ export default function CalendarPage() {
             </button>
           </div>
           <div className="calendar-library-list">
-            {libraryItems.length === 0 ? (
+            {filteredLibraryItems.length === 0 ? (
               <div className="empty-state">No ready library items yet.</div>
             ) : (
-              libraryItems.map((item) => (
+              filteredLibraryItems.map((item) => (
                 <button
                   key={item.id}
                   type="button"
@@ -204,14 +510,220 @@ export default function CalendarPage() {
         </aside>
 
         <section className="panel calendar-panel">
-          <FanAgentCalendar
-            events={events}
-            onEventDrop={updatePostSchedule}
-            onEventClick={(postId) => setMessage(`Selected post ${postId.slice(0, 8)}.`)}
-            externalLibraryContainerRef={libraryPanelRef}
-            onExternalLibraryDrop={scheduleDrop}
-          />
+          {calendarView === "agenda" ? (
+            <div className="calendar-agenda">
+              {filteredPosts.length === 0 ? (
+                <div className="empty-state">No scheduled posts match these filters.</div>
+              ) : (
+                filteredPosts.map((post) => {
+                  const account = accountById.get(post.account_id);
+                  return (
+                    <button
+                      key={post.id}
+                      type="button"
+                      className="calendar-agenda-row"
+                      onClick={() => {
+                        setSelectedPostId(post.id);
+                        setMessage(null);
+                      }}
+                    >
+                      <span className={`dot ${statusTone(post)}`} />
+                      <div>
+                        <strong>{new Date(post.scheduled_at).toLocaleString()}</strong>
+                        <span>{post.caption || "Scheduled post"}</span>
+                        <small>
+                          {account?.handle ?? post.account_id.slice(0, 8)} · {post.status} ·{" "}
+                          {publishStatusLabel(post.publish_status)}
+                        </small>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          ) : (
+            <FanAgentCalendar
+              view={calendarView}
+              events={events}
+              onEventDrop={updatePostSchedule}
+              onEventClick={(postId) => {
+                setSelectedPostId(postId);
+                setMessage(null);
+              }}
+              externalLibraryContainerRef={libraryPanelRef}
+              onExternalLibraryDrop={scheduleDrop}
+            />
+          )}
         </section>
+
+        {selectedPost ? (
+          <aside className="panel calendar-review-panel">
+            <div className="panel-title">
+              <Send size={16} />
+              <h2>Post Review</h2>
+            </div>
+            <form
+              className="stack calendar-post-form"
+              key={selectedPost.id}
+              onSubmit={saveSelectedPost}
+            >
+              <div className={`status-pill ${statusTone(selectedPost)}`}>
+                {selectedPost.status} · {publishStatusLabel(selectedPost.publish_status)}
+              </div>
+              {needsTikTokConnection(selectedPost) ? (
+                <a
+                  className="button primary"
+                  href={buildTikTokConnectUrl(SUPABASE_URL, selectedPost.account_id)}
+                >
+                  <PlugZap size={14} /> Connect TikTok
+                </a>
+              ) : null}
+              {readOnlyPost ? (
+                <div className="calendar-creator-note">
+                  Posted TikToks are read-only in FanAgent.
+                </div>
+              ) : null}
+              {liveTikTokUrl ? (
+                <a className="button primary" href={liveTikTokUrl} rel="noreferrer" target="_blank">
+                  <ExternalLink size={14} /> Open TikTok
+                </a>
+              ) : selectedPost.tiktok_post_id ? (
+                <div className="calendar-provenance">
+                  <span>TikTok post</span>
+                  <strong>{selectedPost.tiktok_post_id}</strong>
+                </div>
+              ) : null}
+              <fieldset className="calendar-review-fields" disabled={readOnlyPost}>
+                <label>
+                  Caption
+                  <textarea name="caption" rows={5} defaultValue={selectedPost.caption} />
+                </label>
+                <label>
+                  Hashtags
+                  <input name="hashtags" defaultValue={(selectedPost.hashtags ?? []).join(" ")} />
+                </label>
+                <label>
+                  Scheduled
+                  <input
+                    name="scheduledAt"
+                    type="datetime-local"
+                    defaultValue={toLocalInputValue(new Date(selectedPost.scheduled_at))}
+                  />
+                </label>
+                <label>
+                  TikTok privacy
+                  <select
+                    name="privacyLevel"
+                    defaultValue={selectedPost.tiktok_privacy_level ?? ""}
+                  >
+                    <option value="">Choose before publish</option>
+                    {TIKTOK_PRIVACY_LEVELS.map((level) => (
+                      <option
+                        key={level}
+                        value={level}
+                        disabled={!isPrivacyLevelAvailable(level, selectedCreatorInfo)}
+                      >
+                        {level}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {creatorPrivacyLevelCount > 0 ? (
+                  <div className="calendar-creator-note">
+                    {creatorPrivacyLevelCount} TikTok privacy option
+                    {creatorPrivacyLevelCount === 1 ? "" : "s"} available for this account.
+                  </div>
+                ) : null}
+                <label className="check">
+                  <input
+                    name="disableDuet"
+                    type="checkbox"
+                    defaultChecked={selectedPost.tiktok_disable_duet ?? true}
+                  />{" "}
+                  Disable duet
+                </label>
+                <label className="check">
+                  <input
+                    name="disableStitch"
+                    type="checkbox"
+                    defaultChecked={selectedPost.tiktok_disable_stitch ?? true}
+                  />{" "}
+                  Disable stitch
+                </label>
+                <label className="check">
+                  <input
+                    name="disableComment"
+                    type="checkbox"
+                    defaultChecked={commentLocked || (selectedPost.tiktok_disable_comment ?? false)}
+                    disabled={commentLocked}
+                  />{" "}
+                  Disable comments
+                </label>
+                {commentLocked ? (
+                  <div className="calendar-creator-note">
+                    TikTok creator settings require comments disabled.
+                  </div>
+                ) : null}
+                <label className="check">
+                  <input
+                    name="isAigc"
+                    type="checkbox"
+                    defaultChecked={selectedPost.tiktok_is_aigc ?? true}
+                  />{" "}
+                  AIGC label
+                </label>
+                <label className="check">
+                  <input
+                    name="brandContentToggle"
+                    type="checkbox"
+                    defaultChecked={selectedPost.tiktok_brand_content ?? false}
+                  />{" "}
+                  Brand content
+                </label>
+                <label className="check">
+                  <input
+                    name="brandOrganicToggle"
+                    type="checkbox"
+                    defaultChecked={selectedPost.tiktok_brand_organic ?? false}
+                  />{" "}
+                  Organic brand
+                </label>
+              </fieldset>
+              {selectedPost.video_url ? (
+                <video
+                  className="calendar-post-video"
+                  src={selectedPost.video_url}
+                  controls
+                  muted
+                  playsInline
+                />
+              ) : null}
+              <div className="calendar-provenance">
+                <span>Provenance</span>
+                <strong>{provenanceSummary(selectedPreview)}</strong>
+              </div>
+              {selectedPreview ? (
+                <Link className="button ghost" to={`/library/${selectedPreview.audio_clip_id}`}>
+                  <ExternalLink size={14} /> View library item
+                </Link>
+              ) : null}
+              <div className="action-row">
+                {readOnlyPost ? null : (
+                  <button className="button primary" type="submit" disabled={busy}>
+                    Save post
+                  </button>
+                )}
+                <button
+                  className="button ghost"
+                  type="button"
+                  onClick={() => setSelectedPostId(null)}
+                >
+                  Close
+                </button>
+              </div>
+            </form>
+          </aside>
+        ) : null}
       </div>
 
       {dialogOpen ? (

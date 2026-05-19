@@ -32,6 +32,7 @@ function pickUrl(out: any): string | undefined {
     out?.video?.url ??
     out?.audio_url ??
     out?.audio?.url ??
+    out?.images?.[0]?.url ??
     out?.image?.url ??
     out?.image_url ??
     out?.url ??
@@ -84,8 +85,7 @@ export async function extractFrame(
 ): Promise<{ url: string; raw: any }> {
   const out = await falRun<any>("fal-ai/ffmpeg-api/extract-frame", {
     video_url: videoUrl,
-    position,
-    output_format: "png",
+    frame_type: position,
   });
   const url = pickUrl(out);
   if (!url) throw new Error(`extract-frame returned no URL: ${JSON.stringify(out).slice(0, 300)}`);
@@ -191,6 +191,44 @@ export async function stitchClipsWithAudio(input: {
       id: "audio",
       type: "audio",
       keyframes: [{ url: audioUrl, timestamp: 0, duration: totalSeconds }],
+    },
+  ];
+  const out = await compose(tracks);
+  return out.url;
+}
+
+export async function composeClipsWithAudio(input: {
+  clipUrls: string[];
+  audioUrl: string;
+  segmentDurations: number[];
+  totalSeconds: number;
+}): Promise<string> {
+  if (input.clipUrls.length !== input.segmentDurations.length) {
+    throw new Error("clipUrls and segmentDurations must have the same length");
+  }
+
+  let timestamp = 0;
+  const videoKeyframes = input.clipUrls.map((url, index) => {
+    const duration = Math.max(0.1, input.segmentDurations[index]);
+    const keyframe = {
+      url,
+      timestamp,
+      duration,
+    };
+    timestamp += duration;
+    return keyframe;
+  });
+
+  const tracks = [
+    {
+      id: "video",
+      type: "video",
+      keyframes: videoKeyframes,
+    },
+    {
+      id: "audio",
+      type: "audio",
+      keyframes: [{ url: input.audioUrl, timestamp: 0, duration: input.totalSeconds }],
     },
   ];
   const out = await compose(tracks);

@@ -11,8 +11,8 @@ type Props = {
 };
 
 export default function MarkersPanel({ active, template, audioUrl, onChange }: Props) {
-  const [markers, setMarkers] = useState<number[]>(
-    () => (template?.cut_markers ?? []).map((m) => m / 1000),
+  const [markers, setMarkers] = useState<number[]>(() =>
+    (template?.cut_markers ?? []).map((m) => m / 1000),
   );
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -42,10 +42,13 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
     return () => a.removeEventListener("timeupdate", t);
   }, [audioUrl]);
 
-  const update = useCallback((next: number[]) => {
-    undoRef.current.push(markers);
-    setMarkers(next);
-  }, [markers]);
+  const update = useCallback(
+    (next: number[]) => {
+      undoRef.current.push(markers);
+      setMarkers(next);
+    },
+    [markers],
+  );
 
   const togglePlay = useCallback(() => {
     const a = audioRef.current;
@@ -120,10 +123,7 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
     return null;
   }, [blocks, time]);
 
-  const allWords = useMemo<LyricWord[]>(
-    () => blocks.flatMap((b) => b.words),
-    [blocks],
-  );
+  const allWords = useMemo<LyricWord[]>(() => blocks.flatMap((b) => b.words), [blocks]);
   const idx = activeWord ? allWords.findIndex((w) => w.id === activeWord.id) : -1;
   const prevWord = idx > 0 ? allWords[idx - 1] : null;
   const nextWord = idx >= 0 && idx < allWords.length - 1 ? allWords[idx + 1] : null;
@@ -152,7 +152,9 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
 
       <div className="lyr-stage">
         {flashCut ? <span className="lyr-cut-flash">CUT</span> : null}
-        {activeWord ? <span className="lyr-stage-word">{activeWord.text.toUpperCase()}</span> : null}
+        {activeWord ? (
+          <span className="lyr-stage-word">{activeWord.text.toUpperCase()}</span>
+        ) : null}
       </div>
 
       <div className="lyr-caption-ribbon">
@@ -165,26 +167,33 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
         <button className="lyr-btn" onClick={togglePlay}>
           {playing ? <Pause size={14} /> : <Play size={14} />}
         </button>
-        <button className="lyr-btn" onClick={restart}><RotateCcw size={14} /></button>
-        <span className="lyr-tag">{time.toFixed(2)}s / {duration.toFixed(0)}s</span>
+        <button className="lyr-btn" onClick={restart}>
+          <RotateCcw size={14} />
+        </button>
+        <span className="lyr-tag">
+          {time.toFixed(2)}s / {duration.toFixed(0)}s
+        </span>
         <div className="lyr-progress">
           <span style={{ width: `${(time / duration) * 100}%` }} />
         </div>
       </div>
 
-      <div className="lyr-marker-track" style={{ transform: `scaleX(${zoom})`, transformOrigin: "left" }}>
+      <div
+        className="lyr-marker-track"
+        style={{ transform: `scaleX(${zoom})`, transformOrigin: "left" }}
+      >
         <div className="lyr-marker-track__inner" ref={trackRef}>
           <div className="lyr-wave thin">
-            {(peaks.length ? peaks : Array.from({ length: 80 }, (_, i) => Math.abs(Math.sin(i * 0.4)) * 0.6 + 0.2))
+            {(peaks.length
+              ? peaks
+              : Array.from({ length: 80 }, (_, i) => Math.abs(Math.sin(i * 0.4)) * 0.6 + 0.2)
+            )
               .slice(0, 200)
               .map((v, i) => (
                 <span key={i} style={{ height: `${Math.max(8, v * 100)}%` }} />
               ))}
           </div>
-          <div
-            className="lyr-playhead"
-            style={{ left: `${(time / duration) * 100}%` }}
-          />
+          <div className="lyr-playhead" style={{ left: `${(time / duration) * 100}%` }} />
           {markers.map((m, i) => (
             <button
               key={i}
@@ -217,21 +226,31 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
       </div>
 
       <div className="lyr-row">
-        <button className="lyr-btn" onClick={addAtCurrent}><Scissors size={14} /> Add (M)</button>
+        <button className="lyr-btn" onClick={addAtCurrent}>
+          <Scissors size={14} /> Add (M)
+        </button>
         <button className="lyr-btn" onClick={undo} disabled={!undoRef.current.canUndo}>
           <Undo2 size={14} />
         </button>
         <button className="lyr-btn" onClick={redo} disabled={!undoRef.current.canRedo}>
           <Redo2 size={14} />
         </button>
-        <button className="lyr-btn" onClick={deleteNearest}><Trash2 size={14} /></button>
+        <button className="lyr-btn" onClick={deleteNearest}>
+          <Trash2 size={14} />
+        </button>
         <span className="lyr-tag">{markers.length} cuts</span>
-        <button className="lyr-btn ghost" onClick={() => update([])}>Clear</button>
+        <button className="lyr-btn ghost" onClick={() => update([])}>
+          Clear
+        </button>
         <label className="lyr-label inline">
           <span>Zoom {zoom.toFixed(1)}x</span>
           <input
-            type="range" min={1} max={4} step={0.1}
-            value={zoom} onChange={(e) => setZoom(Number(e.target.value))}
+            type="range"
+            min={1}
+            max={4}
+            step={0.1}
+            value={zoom}
+            onChange={(e) => setZoom(Number(e.target.value))}
           />
         </label>
       </div>

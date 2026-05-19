@@ -11,6 +11,9 @@ type UpdatePostRequest = {
   disableDuet?: boolean;
   disableStitch?: boolean;
   disableComment?: boolean;
+  isAigc?: boolean;
+  brandContentToggle?: boolean;
+  brandOrganicToggle?: boolean;
   privacySettings?: Record<string, unknown>;
 };
 
@@ -37,7 +40,12 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 function assertWithinScheduleWindow(scheduledAt: Date): void {
-  const maxFuture = Date.now() + 90 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const minPast = now - 60 * 1000;
+  const maxFuture = now + 90 * 24 * 60 * 60 * 1000;
+  if (scheduledAt.getTime() < minPast) {
+    throw new Error("scheduledAt cannot be more than 1 minute in the past.");
+  }
   if (scheduledAt.getTime() > maxFuture) {
     throw new Error("scheduledAt cannot be more than 90 days in the future.");
   }
@@ -98,6 +106,15 @@ Deno.serve(async (request) => {
     }
     if (typeof body.disableComment === "boolean") {
       update.tiktok_disable_comment = body.disableComment;
+    }
+    if (typeof body.isAigc === "boolean") {
+      update.tiktok_is_aigc = body.isAigc;
+    }
+    if (typeof body.brandContentToggle === "boolean") {
+      update.tiktok_brand_content = body.brandContentToggle;
+    }
+    if (typeof body.brandOrganicToggle === "boolean") {
+      update.tiktok_brand_organic = body.brandOrganicToggle;
     }
     if (body.privacySettings && typeof body.privacySettings === "object") {
       update.privacy_settings = {

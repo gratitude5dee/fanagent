@@ -8,6 +8,31 @@ export type SourceType =
 
 export type DedupeStrategy = "strict" | "allow_reuse_after_exhaustion" | "allow_reuse_freely";
 
+export type SourceLicense =
+  | "pexels"
+  | "pixabay"
+  | "user_library"
+  | "generated_seedance"
+  | "generated_gmi_seedance"
+  | "youtube_owner_provided"
+  | "twitch_creator_rights"
+  | "unknown";
+
+export const allowedSourceLicenses: SourceLicense[] = [
+  "pexels",
+  "pixabay",
+  "user_library",
+  "generated_seedance",
+  "generated_gmi_seedance",
+  "youtube_owner_provided",
+  "twitch_creator_rights",
+  "unknown",
+];
+
+export function isAllowedSourceLicense(value: unknown): value is SourceLicense {
+  return allowedSourceLicenses.includes(value as SourceLicense);
+}
+
 export type AdapterSearchInput = {
   accountId: string;
   audioClipId: string;
@@ -39,7 +64,7 @@ export type SourceCandidate = {
   duration_seconds: number;
   is_portrait: boolean;
   perceptual_hash?: string | null;
-  license: string;
+  license: SourceLicense;
   rights_holder?: string | null;
   attribution?: string | null;
   expires_at?: string | null;
@@ -53,7 +78,7 @@ export interface SourceAdapter {
   search(input: AdapterSearchInput): Promise<SourceCandidate[]>;
   cache(candidate: SourceCandidate): Promise<{ url: string; storage_path?: string | null }>;
   describeLicense(candidate: SourceCandidate): {
-    license: string;
+    license: SourceLicense;
     rights_holder?: string | null;
     attribution?: string | null;
   };

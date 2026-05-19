@@ -2,14 +2,21 @@
 // persists { language, text, words[] } onto media_assets.transcript.
 // Idempotent: re-running re-transcribes (caller decides when).
 
-import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import { handleOptions } from "../_shared/cors.ts";
+import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
+import { isAuthorizedInternalCall } from "../_shared/internal.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 import { transcribeAudioUrl } from "../_shared/transcribe.ts";
 
 Deno.serve(async (request) => {
   const opt = handleOptions(request);
   if (opt) return opt;
-  if (request.method !== "POST") return errorResponse("Method not allowed", 405);
+  if (request.method !== "POST") {
+    return errorEnvelope("Method not allowed", "METHOD_NOT_ALLOWED", 405);
+  }
+  if (!isAuthorizedInternalCall(request)) {
+    return errorEnvelope("Unauthorized internal call.", "UNAUTHORIZED_INTERNAL", 401);
+  }
 
   try {
     const body = await request.json() as { audioAssetId?: string };
@@ -34,12 +41,12 @@ Deno.serve(async (request) => {
       .eq("id", body.audioAssetId);
     if (updated.error) throw updated.error;
 
-    return jsonResponse({
+    return okEnvelope({
       audioAssetId: body.audioAssetId,
       language: transcript.language,
       wordCount: transcript.words.length,
     });
   } catch (error) {
-    return errorResponse(error);
+    return errorEnvelope(error, "TRANSCRIBE_AUDIO_FAILED", 500);
   }
 });

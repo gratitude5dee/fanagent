@@ -189,8 +189,11 @@ export default function AudioPanel({ existing, existingAudioUrl, onConfirmed, on
 
       {audioUrl ? <audio ref={audioRef} src={audioUrl} preload="metadata" /> : null}
 
-      {(file || audioUrl) ? (
-        <div className="lyr-wave-card" style={{ transform: `scaleX(${zoom})`, transformOrigin: "left" }}>
+      {file || audioUrl ? (
+        <div
+          className="lyr-wave-card"
+          style={{ transform: `scaleX(${zoom})`, transformOrigin: "left" }}
+        >
           <div className="lyr-wave-card__inner" ref={trackRef}>
             <div className="lyr-wave">
               {display.slice(0, 200).map((v, i) => (
@@ -242,7 +245,9 @@ export default function AudioPanel({ existing, existingAudioUrl, onConfirmed, on
                 onChange={(e) => setZoom(Number(e.target.value))}
               />
             </label>
-            <span className="lyr-tag"><Music size={12} /> {file?.name ?? existing?.title}</span>
+            <span className="lyr-tag">
+              <Music size={12} /> {file?.name ?? existing?.title}
+            </span>
           </div>
           <button
             type="button"

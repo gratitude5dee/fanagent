@@ -2,7 +2,8 @@
 // must contain `token` (matching generation_items.render_callback_token) and
 // `itemId`. The body is expected to contain { url } pointing at the final MP4.
 
-import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import { handleOptions } from "../_shared/cors.ts";
+import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
 import { downloadBytes } from "../_shared/assets.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
@@ -24,7 +25,7 @@ Deno.serve(async (request) => {
       .single();
     if (item.error) throw item.error;
     if (item.data.render_callback_token !== token) {
-      return errorResponse("Invalid callback token", 401);
+      return errorEnvelope("Invalid callback token", "INVALID_CALLBACK_TOKEN", 401);
     }
 
     const body = await request.json() as {
@@ -38,7 +39,7 @@ Deno.serve(async (request) => {
         .from("generation_items")
         .update({ status: "failed", error_message: body.error })
         .eq("id", itemId);
-      return jsonResponse({ ok: true, status: "failed" });
+      return okEnvelope({ status: "failed" });
     }
     const finalUrl = body.url ?? body.videoUrl ?? body.output;
     if (!finalUrl) throw new Error("Callback missing video url");
@@ -87,8 +88,8 @@ Deno.serve(async (request) => {
       })
       .eq("generation_item_id", itemId);
 
-    return jsonResponse({ ok: true, status: "ready" });
+    return okEnvelope({ status: "ready" });
   } catch (error) {
-    return errorResponse(error);
+    return errorEnvelope(error, "RENDER_CALLBACK_FAILED", 500);
   }
 });

@@ -2,15 +2,21 @@
 // Claims due rows atomically with claim_generation_items(), then routes each
 // item through stock/fal segment rendering or the optional GMI async adapter.
 
-import { createMediaAssetFromBytes, downloadBytes } from "../_shared/assets.ts";
-import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import {
+  createMediaAssetFromBytes,
+  downloadBytes,
+  renderedVideoSignedUrlSeconds,
+  renderedVideoStoragePath,
+} from "../_shared/assets.ts";
+import { handleOptions } from "../_shared/cors.ts";
+import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
 import { errorMessage, serializeError } from "../_shared/errors.ts";
 import { optionalEnv } from "../_shared/env.ts";
 import { findGmiVideoUrl, normalizeSourceMode } from "../_shared/generation.ts";
+import { buildLibraryFailureUpdate, deriveBatchLibraryStatus } from "../_shared/library.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 import { endWorkerRun, isAuthorizedCronCall, startWorkerRun } from "../_shared/workers.ts";
 
-const MAX_PER_RUN = 1;
 const FUNCTION_NAME = "fanpage-generate-due";
 const GMI_BASE =
   optionalEnv("GMI_API_BASE") ?? "https://console.gmicloud.ai/api/v1/ie/requestqueue/apikey";
@@ -31,6 +37,8 @@ type GenerationItem = {
   scheduled_at: string;
   duration_seconds: number;
   final_asset_id: string | null;
+  library_item_id: string | null;
+  stock_clip_url: string | null;
   post_id: string | null;
   attempt_count: number;
   max_attempts: number;
@@ -55,14 +63,33 @@ function fnUrl(name: string): string {
   return `${optionalEnv("SUPABASE_URL")}/functions/v1/${name}`;
 }
 
-async function invokeChild(name: string, body: unknown): Promise<Response> {
-  return fetch(fnUrl(name), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+function childTimeoutMs(): number {
+  const configured = Number(optionalEnv("FANAGENT_CHILD_TIMEOUT_MS") ?? 105_000);
+  if (!Number.isFinite(configured)) return 105_000;
+  return Math.max(15_000, Math.min(Math.floor(configured), 120_000));
+}
+
+async function invokeChild(name: string, body: unknown, timeoutMs = childTimeoutMs()): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(fnUrl(name), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-cron-secret": optionalEnv("CRON_SECRET") ?? "",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`${name} timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function ok(res: Response, label: string) {
@@ -74,12 +101,20 @@ async function ok(res: Response, label: string) {
 
 function isRetryable(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /\b(408|409|429|500|502|503|504|timeout|rate_limit|temporar|network)\b/i.test(message);
+  return /\b(408|409|429|500|502|503|504|520|522|524|timeout|timed\s+out|connection_timeout|cloudflare_error|rate_limit|temporar|network|connection reset)\b/i.test(
+    message,
+  );
 }
 
 function isIdleTimeout(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /\b(IDLE_TIMEOUT|idle timeout|timeout limit|504)\b/i.test(message);
+  return /\b(IDLE_TIMEOUT|idle timeout|timeout limit|timed\s+out|504)\b/i.test(message);
+}
+
+function maxPerRun(): number {
+  const configured = Number(optionalEnv("FANAGENT_GENERATE_MAX_PER_RUN") ?? 1);
+  if (!Number.isFinite(configured)) return 1;
+  return Math.max(1, Math.min(Math.floor(configured), 3));
 }
 
 function gmiKey(): string {
@@ -126,6 +161,21 @@ async function addStageEvent(
       updated_at: new Date().toISOString(),
     })
     .eq("id", itemId);
+}
+
+async function releaseItemForNextStage(itemId: string): Promise<void> {
+  const supabase = getSupabaseAdmin();
+  const updated = await supabase
+    .from("generation_items")
+    .update({
+      attempt_count: 0,
+      error_message: null,
+      locked_at: null,
+      locked_by: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", itemId);
+  if (updated.error) throw updated.error;
 }
 
 async function transcribeBestEffort(audioAssetId: string, itemId: string) {
@@ -235,11 +285,18 @@ async function processGmiItem(item: GenerationItem, audioAsset: MediaAsset) {
     bytes: downloaded.bytes,
     mimeType:
       downloaded.mimeType === "application/octet-stream" ? "video/mp4" : downloaded.mimeType,
-    fileName: `${item.id}.mp4`,
+    fileName: `${item.library_item_id ?? item.id}.mp4`,
+    storageBucket: "renders",
+    storagePath: renderedVideoStoragePath(item.account_id, item.library_item_id ?? item.id),
+    publicUrlMode: "signed",
+    signedUrlExpiresIn: renderedVideoSignedUrlSeconds,
+    upsert: true,
     metadata: {
       original_url: videoUrl,
       generation_item_id: item.id,
+      library_item_id: item.library_item_id,
       provider_request_id: requestId,
+      signed_url_expires_in_seconds: renderedVideoSignedUrlSeconds,
     },
   });
   const updated = await supabase
@@ -291,21 +348,22 @@ async function processItem(itemId: string): Promise<void> {
     return;
   }
 
+  if (item.status === "stitched" && item.stock_clip_url) {
+    await addStageEvent(item.id, "render_start");
+    await ok(await invokeChild("render-karaoke", { itemId }), "render-karaoke");
+    return;
+  }
+
   if (!audioAsset.transcript) {
     await transcribeBestEffort(audioAsset.id, item.id);
   }
 
-  let segments = (item.segments ?? []) as Segment[];
+  const segments = (item.segments ?? []) as Segment[];
   if (segments.length === 0) {
     await addStageEvent(item.id, "planning_segments");
     await ok(await invokeChild("pick-stock-clip", { itemId }), "pick-stock-clip");
-    const reload = await supabase
-      .from("generation_items")
-      .select("segments")
-      .eq("id", itemId)
-      .single();
-    if (reload.error) throw reload.error;
-    segments = (reload.data?.segments ?? []) as Segment[];
+    await releaseItemForNextStage(item.id);
+    return;
   }
 
   for (let i = 0; i < segments.length; i += 1) {
@@ -317,14 +375,14 @@ async function processItem(itemId: string): Promise<void> {
         `generate-seedance-clip[${i}]`,
       );
       await addStageEvent(item.id, "seedance_segment_complete", { segmentIndex: i });
+      await releaseItemForNextStage(item.id);
+      return;
     }
   }
 
   await addStageEvent(item.id, "stitch_start");
   await ok(await invokeChild("stitch-segments", { itemId }), "stitch-segments");
-
-  await addStageEvent(item.id, "render_start");
-  await ok(await invokeChild("render-karaoke", { itemId }), "render-karaoke");
+  await releaseItemForNextStage(item.id);
 }
 
 async function refreshBatchStatus(batchId: string) {
@@ -355,10 +413,66 @@ async function refreshBatchStatus(batchId: string) {
     update.completed_at = new Date().toISOString();
   } else {
     update.started_at = new Date().toISOString();
+    update.completed_at = null;
+    update.error_message = null;
   }
 
   const updated = await supabase.from("generation_batches").update(update).eq("id", batchId);
   if (updated.error) throw updated.error;
+}
+
+async function refreshBatchLibraryStatus(batchId: string): Promise<void> {
+  const supabase = getSupabaseAdmin();
+  const rows = await supabase.from("video_library_items").select("status").eq("batch_id", batchId);
+  if (rows.error) throw rows.error;
+  const batch = await supabase
+    .from("generation_batches")
+    .select("quantity,post_count")
+    .eq("id", batchId)
+    .maybeSingle();
+  if (batch.error) throw batch.error;
+
+  const requestedQuantity = Number(batch.data?.quantity ?? batch.data?.post_count ?? 0);
+  const libraryStatus = deriveBatchLibraryStatus(
+    (rows.data ?? []).map((row) => row.status),
+    requestedQuantity,
+  );
+  if (libraryStatus === "building" && (rows.data ?? []).length === 0) return;
+
+  const updated = await supabase
+    .from("generation_batches")
+    .update({ library_status: libraryStatus, updated_at: new Date().toISOString() })
+    .eq("id", batchId);
+  if (updated.error) throw updated.error;
+}
+
+async function failLinkedLibraryItem(item: GenerationItem, error: unknown): Promise<void> {
+  const supabase = getSupabaseAdmin();
+  let libraryItemId = item.library_item_id;
+  if (!libraryItemId) {
+    const linked = await supabase
+      .from("video_library_items")
+      .select("id")
+      .eq("generation_item_id", item.id)
+      .maybeSingle();
+    if (linked.error) throw linked.error;
+    libraryItemId = linked.data?.id ?? null;
+  }
+  if (!libraryItemId) return;
+
+  const current = await supabase
+    .from("video_library_items")
+    .select("metadata,status")
+    .eq("id", libraryItemId)
+    .maybeSingle();
+  if (current.error) throw current.error;
+  if (["ready", "scheduled", "posted"].includes(String(current.data?.status ?? ""))) return;
+
+  const failed = await supabase
+    .from("video_library_items")
+    .update(buildLibraryFailureUpdate({ metadata: current.data?.metadata, error }))
+    .eq("id", libraryItemId);
+  if (failed.error) throw failed.error;
 }
 
 async function claimDueItems(limit: number) {
@@ -375,7 +489,9 @@ async function claimDueItems(limit: number) {
 Deno.serve(async (request) => {
   const opt = handleOptions(request);
   if (opt) return opt;
-  if (!(await isAuthorizedCronCall(request))) return errorResponse("Unauthorized cron call", 401);
+  if (!(await isAuthorizedCronCall(request))) {
+    return errorEnvelope("Unauthorized cron call", "UNAUTHORIZED_CRON", 401);
+  }
 
   const runId = await startWorkerRun(FUNCTION_NAME);
   let processed = 0;
@@ -384,17 +500,26 @@ Deno.serve(async (request) => {
 
   try {
     const supabase = getSupabaseAdmin();
-    const due = await claimDueItems(MAX_PER_RUN);
+    const maxItems = maxPerRun();
+    const due = await claimDueItems(maxItems);
 
     for (const row of due) {
       try {
         await processItem(row.id);
+        const clearError = await supabase
+          .from("generation_items")
+          .update({ error_message: null, locked_at: null, locked_by: null })
+          .eq("id", row.id);
+        if (clearError.error) throw clearError.error;
+        await refreshBatchStatus(row.batch_id);
+        await refreshBatchLibraryStatus(row.batch_id);
         processed += 1;
       } catch (err) {
         errors += 1;
         const serialized = serializeError(err);
         const msg = errorMessage(err);
-        const maxAttempts = isIdleTimeout(err)
+        const idleTimeout = isIdleTimeout(err);
+        const maxAttempts = idleTimeout
           ? Math.max(row.max_attempts ?? 3, 5)
           : (row.max_attempts ?? 3);
         const retry = isRetryable(err) && (row.attempt_count ?? 0) < maxAttempts;
@@ -403,7 +528,9 @@ Deno.serve(async (request) => {
           .from("generation_items")
           .update({
             status: retry ? "pending" : "failed",
+            max_attempts: maxAttempts,
             locked_at: null,
+            locked_by: null,
             error_message: msg,
             updated_at: new Date().toISOString(),
           })
@@ -411,18 +538,23 @@ Deno.serve(async (request) => {
         await addStageEvent(row.id, retry ? "retry_scheduled" : "failed", {
           error: msg,
           errorDetail: serialized,
+          ...(idleTimeout ? { maxAttempts } : {}),
         });
-        if (!retry) await refreshBatchStatus(row.batch_id);
+        if (!retry) {
+          await failLinkedLibraryItem(row, err);
+          await refreshBatchLibraryStatus(row.batch_id);
+        }
+        await refreshBatchStatus(row.batch_id);
       }
     }
 
-    await endWorkerRun(runId, processed, errors, { errors: errorList });
-    return jsonResponse({ processed, errors, errorList });
+    await endWorkerRun(runId, processed, errors, { errors: errorList, maxPerRun: maxItems });
+    return okEnvelope({ processed, errors, errorList, maxPerRun: maxItems });
   } catch (error) {
     await endWorkerRun(runId, processed, errors + 1, {
       fatal: errorMessage(error),
       fatalDetail: serializeError(error),
     });
-    return errorResponse(error);
+    return errorEnvelope(error, "GENERATION_WORKER_FAILED", 500);
   }
 });

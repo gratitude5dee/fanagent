@@ -14,6 +14,7 @@ import {
 import { Link } from "react-router-dom";
 import AutopilotPanel from "@/components/AutopilotPanel";
 import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
+import { buildTikTokConnectUrl } from "@/lib/fanagent/accounts";
 import type { Account, DashboardPost, GenerationBatch, SourceMode } from "@/lib/fanagent/types";
 
 const FanAgentCalendar = lazy(() => import("@/components/FanAgentCalendar"));
@@ -73,10 +74,6 @@ async function invokeFunction<T>(name: string, body?: Record<string, unknown>): 
   }
 
   return unwrapFunctionData<T>(data);
-}
-
-function tiktokConnectUrl(accountId: string): string {
-  return `${SUPABASE_URL}/functions/v1/tiktok-oauth-callback?action=connect&accountId=${encodeURIComponent(accountId)}`;
 }
 
 export default function App() {
@@ -171,7 +168,8 @@ export default function App() {
     if (audio.size > 12 * 1024 * 1024)
       throw new Error("Audio uploads are limited to 12MB in hosted v1.");
 
-    await invokeFunction("create-generation-batch", {
+    await invokeFunction("fanpage-campaign", {
+      action: "create",
       accountId,
       audioBase64: await fileToBase64(audio),
       audioMimeType: audio.type || "audio/mpeg",
@@ -250,6 +248,9 @@ export default function App() {
             <Link className="button ghost" to="/calendar">
               <CalendarDays size={14} /> Calendar
             </Link>
+            <Link className="button ghost" to="/settings/accounts">
+              <PlugZap size={14} /> Accounts
+            </Link>
           </div>
           {mode === "studio" ? (
             <>
@@ -266,7 +267,7 @@ export default function App() {
                 ))}
               </select>
               {accountId ? (
-                <a className="button ghost" href={tiktokConnectUrl(accountId)}>
+                <a className="button ghost" href={buildTikTokConnectUrl(SUPABASE_URL, accountId)}>
                   <PlugZap size={16} />{" "}
                   {selectedAccount?.tiktok_connected_at ? "Reconnect" : "Connect TikTok"}
                 </a>
@@ -403,6 +404,7 @@ export default function App() {
             </div>
             <Suspense fallback={<div className="calendar-loading">Loading schedule...</div>}>
               <FanAgentCalendar
+                view="week"
                 events={calendarEvents}
                 onEventDrop={handleEventDrop}
                 onEventClick={setSelectedPostId}

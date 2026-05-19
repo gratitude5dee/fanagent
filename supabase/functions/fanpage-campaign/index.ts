@@ -9,7 +9,10 @@
 //   resume   { batchId }                → clears paused_at
 //   skip     { itemId }                 → marks item skipped
 //   regenerate { itemId }              → resets item to pending so the worker reruns it
-//   recoverRecentFailures { since, limit } → bulk-reset recent failed unposted items
+//   markLibraryItemUnfit { libraryItemId, reason? }
+//                                       → blocks a library item and skips not-posted linked posts
+//   recoverRecentFailures { since, limit, includeFailed, includeStaleActive }
+//                                       → bulk-reset recent failed/stale unposted items
 
 import { handleOptions } from "../_shared/cors.ts";
 import {
@@ -19,6 +22,7 @@ import {
 import { okEnvelope, errorEnvelope, unwrapEnvelopeData } from "../_shared/envelope.ts";
 import { optionalEnv } from "../_shared/env.ts";
 import { createRegenerationReset } from "../_shared/generation.ts";
+import { buildLibraryUnfitUpdate } from "../_shared/library.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
 function record(value: unknown): Record<string, unknown> {
@@ -48,12 +52,189 @@ function maybeId(value: unknown): string | null {
   return typeof id === "string" && id ? id : null;
 }
 
+type SchemaCheck = {
+  ok: boolean;
+  error: string | null;
+  transient?: boolean;
+};
+
+type BucketNameResult = {
+  names: Set<string>;
+  error: string | null;
+};
+
+type TimedResult<T> = { ok: true; value: T } | { ok: false; error: string };
+type SupabaseResult<T> = { data: T | null; error: unknown };
+
+const DIAGNOSTIC_SCHEMA_TIMEOUT_MS = 10_000;
+const DIAGNOSTIC_DATA_TIMEOUT_MS = 10_000;
+const DIAGNOSTIC_STORAGE_TIMEOUT_MS = 10_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function clipDiagnosticString(value: string, maxLength = 1200): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+}
+
+function sanitizeDiagnosticValue(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return clipDiagnosticString(value);
+  if (depth >= 4) return "[truncated]";
+  if (Array.isArray(value)) return value.map((item) => sanitizeDiagnosticValue(item, depth + 1));
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
+      key,
+      sanitizeDiagnosticValue(nested, depth + 1),
+    ]),
+  );
+}
+
+function schemaErrorMessage(error: unknown): string | null {
+  const data = record(error);
+  const message = data.message ?? data.error_description ?? data.error;
+  return typeof message === "string" && message.trim() ? message : error ? String(error) : null;
+}
+
+function isTransientSchemaError(message: string): boolean {
+  return /\b(408|409|429|500|502|503|504|520|522|524|525|timeout|temporar|network|ssl handshake|cloudflare|connection reset|fetch failed)\b/i.test(
+    message,
+  );
+}
+
+async function withTimeout<T>(
+  label: string,
+  promise: PromiseLike<T>,
+  timeoutMs = 5000,
+): Promise<TimedResult<T>> {
+  let timeoutId: number | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve(promise)
+        .then((value) => ({ ok: true as const, value }))
+        .catch((error) => ({
+          ok: false as const,
+          error: schemaErrorMessage(error) ?? String(error),
+        })),
+      new Promise<TimedResult<T>>((resolve) => {
+        timeoutId = setTimeout(() => {
+          resolve({ ok: false, error: `${label} timed out after ${timeoutMs}ms` });
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
+async function queryWithTimeout<T>(
+  label: string,
+  query: PromiseLike<SupabaseResult<T>>,
+  fallbackData: T | null,
+  timeoutMs = DIAGNOSTIC_DATA_TIMEOUT_MS,
+): Promise<SupabaseResult<T>> {
+  const result = await withTimeout(label, query, timeoutMs);
+  if (result.ok) return result.value;
+  return { data: fallbackData, error: { message: result.error } };
+}
+
+async function checkSchema(
+  label: string,
+  query: () => PromiseLike<{ error: unknown }>,
+  attempts = 2,
+  timeoutMs = DIAGNOSTIC_SCHEMA_TIMEOUT_MS,
+): Promise<SchemaCheck> {
+  let lastError: string | null = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const result = await withTimeout(label, query(), timeoutMs);
+    const message = result.ok ? schemaErrorMessage(result.value.error) : result.error;
+    if (!message) return { ok: true, error: null };
+    lastError = message;
+    if (!isTransientSchemaError(message) || attempt === attempts - 1) break;
+    await sleep(150 * (attempt + 1));
+  }
+  if (lastError && isTransientSchemaError(lastError)) {
+    return { ok: true, error: lastError, transient: true };
+  }
+  return { ok: false, error: lastError, transient: false };
+}
+
+async function loadStorageBucketNames(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  expectedBuckets: string[],
+): Promise<BucketNameResult> {
+  const listed = await queryWithTimeout(
+    "storage.listBuckets",
+    supabase.storage.listBuckets(),
+    [],
+    DIAGNOSTIC_STORAGE_TIMEOUT_MS,
+  );
+  if (!listed.error && (listed.data ?? []).length > 0) {
+    return {
+      names: new Set((listed.data ?? []).map((bucket) => bucket.name)),
+      error: null,
+    };
+  }
+
+  const listError =
+    schemaErrorMessage(listed.error) ??
+    (listed.data?.length === 0 ? "storage.listBuckets returned no buckets" : null);
+  const bucketChecks = await Promise.all(
+    expectedBuckets.map(async (name) => {
+      const bucket = await queryWithTimeout(
+        `storage.getBucket(${name})`,
+        supabase.storage.getBucket(name),
+        null,
+        DIAGNOSTIC_STORAGE_TIMEOUT_MS,
+      );
+      return {
+        name,
+        ok: !bucket.error,
+        error: schemaErrorMessage(bucket.error),
+      };
+    }),
+  );
+  const checkedNames = new Set(bucketChecks.filter((bucket) => bucket.ok).map((bucket) => bucket.name));
+  if (checkedNames.size > 0) {
+    const checkErrors = bucketChecks
+      .filter((bucket) => !bucket.ok && bucket.error)
+      .map((bucket) => `${bucket.name}: ${bucket.error}`);
+    return {
+      names: checkedNames,
+      error: [listError, ...checkErrors].filter(Boolean).join("; ") || null,
+    };
+  }
+
+  const queried = await queryWithTimeout(
+    "storage.buckets",
+    supabase.schema("storage").from("buckets").select("id,name").in("id", expectedBuckets),
+    [],
+    DIAGNOSTIC_STORAGE_TIMEOUT_MS,
+  );
+  if (!queried.error) {
+    const rows = (queried.data ?? []) as Array<{ id?: string; name?: string }>;
+    return {
+      names: new Set(rows.map((bucket) => bucket.name ?? bucket.id).filter(Boolean) as string[]),
+      error: listError,
+    };
+  }
+
+  const queryError = schemaErrorMessage(queried.error);
+  return {
+    names: new Set(),
+    error: [listError, queryError].filter(Boolean).join("; ") || "Unable to check storage buckets",
+  };
+}
+
 async function callChild(name: string, body: unknown): Promise<Response> {
   const url = `${optionalEnv("SUPABASE_URL")}/functions/v1/${name}`;
+  const cronSecret = optionalEnv("CRON_SECRET") ?? "";
   return fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "x-cron-secret": cronSecret,
     },
     body: JSON.stringify(body),
   });
@@ -86,39 +267,75 @@ Deno.serve(async (request) => {
 
     switch (action) {
       case "list": {
-        const account = await supabase
-          .from("accounts")
-          .select("*")
-          .eq("platform", "tiktok")
-          .eq("is_primary", true)
-          .maybeSingle();
-        const batches = await supabase
-          .from("generation_batches")
-          .select("*")
-          .order("created_at", { ascending: false })
-          .limit(25);
-        const items = await supabase
-          .from("generation_items")
-          .select("*")
-          .order("scheduled_at", { ascending: true })
-          .limit(200);
-        const posts = await supabase
-          .from("posts")
-          .select("*")
-          .order("scheduled_at", { ascending: true })
-          .limit(200);
-        const lyricTemplates = await supabase
-          .from("kanvas_lyric_templates")
-          .select("id,title,status,total_duration_ms,selection_duration_ms,updated_at")
-          .is("archived_at", null)
-          .order("updated_at", { ascending: false })
-          .limit(100);
+        const [account, batches, items, posts, lyricTemplates] = await Promise.all([
+          queryWithTimeout(
+            "list primary TikTok account",
+            supabase
+              .from("accounts")
+              .select(
+                "id,platform,handle,status,is_primary,tiktok_connected_at,tiktok_display_name",
+              )
+              .eq("platform", "tiktok")
+              .eq("is_primary", true)
+              .maybeSingle(),
+            null,
+          ),
+          queryWithTimeout(
+            "list generation_batches",
+            supabase
+              .from("generation_batches")
+              .select(
+                "id,source_mode,status,post_count,cadence_minutes,paused_at,created_at,lyric_template_id",
+              )
+              .order("created_at", { ascending: false })
+              .limit(25),
+            [],
+          ),
+          queryWithTimeout(
+            "list generation_items",
+            supabase
+              .from("generation_items")
+              .select(
+                "id,batch_id,status,scheduled_at,provider,prompt,segments,stock_clip_url,render_provider,error_message,lyric_template_id,stage_events",
+              )
+              .order("scheduled_at", { ascending: true })
+              .limit(200),
+            [],
+          ),
+          queryWithTimeout(
+            "list posts",
+            supabase
+              .from("posts")
+              .select("id,generation_item_id,caption,status,publish_status,scheduled_at,video_url")
+              .order("scheduled_at", { ascending: true })
+              .limit(200),
+            [],
+          ),
+          queryWithTimeout(
+            "list lyric templates",
+            supabase
+              .from("kanvas_lyric_templates")
+              .select("id,title,status,total_duration_ms,selection_duration_ms,updated_at")
+              .is("archived_at", null)
+              .order("updated_at", { ascending: false })
+              .limit(100),
+            [],
+          ),
+        ]);
+        const warnings = [
+          account.error ? `account: ${schemaErrorMessage(account.error)}` : null,
+          batches.error ? `batches: ${schemaErrorMessage(batches.error)}` : null,
+          items.error ? `items: ${schemaErrorMessage(items.error)}` : null,
+          posts.error ? `posts: ${schemaErrorMessage(posts.error)}` : null,
+          lyricTemplates.error ? `lyricTemplates: ${schemaErrorMessage(lyricTemplates.error)}` : null,
+        ].filter(Boolean);
         return okEnvelope({
           account: account.data ?? null,
           batches: batches.data ?? [],
           items: items.data ?? [],
           posts: posts.data ?? [],
           lyricTemplates: lyricTemplates.data ?? [],
+          warnings,
         });
       }
 
@@ -144,7 +361,6 @@ Deno.serve(async (request) => {
           streamerAllowed: !!optionalEnv("STREAMER_CLIP_ALLOWED_CHANNELS"),
         };
 
-        const buckets = await supabase.storage.listBuckets();
         const expectedBuckets = [
           "post-assets",
           "stock-cache",
@@ -152,37 +368,106 @@ Deno.serve(async (request) => {
           "renders",
           "thumbnails",
         ];
-        const bucketNames = new Set((buckets.data ?? []).map((bucket) => bucket.name));
-        const schemaChecks = await Promise.all([
-          supabase.from("generation_batches").select("settings,publish_defaults").limit(1),
-          supabase.from("generation_items").select("attempt_count,locked_at,stage_events").limit(1),
-          supabase.from("worker_runs").select("id").limit(1),
-          supabase.from("video_library_items").select("id,status,final_asset_id").limit(1),
-          supabase.from("source_candidates").select("id,source_type,provider").limit(1),
-          supabase.from("render_attempts").select("id,stage,status").limit(1),
+        const storageBucketsPromise = loadStorageBucketNames(supabase, expectedBuckets);
+        const schemaChecksPromise = Promise.all([
+          checkSchema("generation_batches", () =>
+            supabase.from("generation_batches").select("settings,publish_defaults").limit(0),
+          ),
+          checkSchema("generation_items", () =>
+            supabase
+              .from("generation_items")
+              .select("attempt_count,locked_at,stage_events")
+              .limit(0),
+          ),
+          checkSchema("worker_runs", () => supabase.from("worker_runs").select("id").limit(0)),
+          checkSchema("audio_clips", () =>
+            supabase.from("audio_clips").select("id,transcription_status,duration_sec").limit(0),
+          ),
+          checkSchema("video_library_items", () =>
+            supabase.from("video_library_items").select("id,status,final_asset_id").limit(0),
+          ),
+          checkSchema("source_candidates", () =>
+            supabase.from("source_candidates").select("id,source_type,provider").limit(0),
+          ),
+          checkSchema("source_candidate_uses", () =>
+            supabase
+              .from("source_candidate_uses")
+              .select("id,candidate_id,generation_item_id")
+              .limit(0),
+          ),
+          checkSchema("render_attempts", () =>
+            supabase.from("render_attempts").select("id,stage,status").limit(0),
+          ),
+          checkSchema("post_schedule_slots", () =>
+            supabase.from("post_schedule_slots").select("id,account_id,rule").limit(0),
+          ),
         ]);
-        const recentWorkerRuns = await supabase
-          .from("worker_runs")
-          .select("function_name,started_at,ended_at,items_processed,errors_count,detail")
-          .order("started_at", { ascending: false })
-          .limit(10);
-        const recentFailedItems = await supabase
-          .from("generation_items")
-          .select("id,status,provider,error_message,updated_at")
-          .eq("status", "failed")
-          .order("updated_at", { ascending: false })
-          .limit(50);
-        const queueRows = await supabase.from("generation_items").select("status").limit(5000);
+        const recentWorkerRunsPromise = queryWithTimeout(
+          "recent worker_runs",
+          supabase
+            .from("worker_runs")
+            .select("function_name,started_at,ended_at,items_processed,errors_count,detail")
+            .order("started_at", { ascending: false })
+            .limit(10),
+          [],
+        );
+        const recentFailedItemsPromise = queryWithTimeout(
+          "recent failed generation_items",
+          supabase
+            .from("generation_items")
+            .select("id,status,provider,error_message,updated_at")
+            .eq("status", "failed")
+            .order("updated_at", { ascending: false })
+            .limit(50),
+          [],
+        );
+        const queueRowsPromise = queryWithTimeout(
+          "generation item queue counts",
+          supabase.from("generation_items").select("status").limit(5000),
+          [],
+        );
+        const blockedPublishRowsPromise = queryWithTimeout(
+          "blocked publish counts",
+          supabase
+            .from("posts")
+            .select("publish_status")
+            .like("publish_status", "blocked_%")
+            .limit(5000),
+          [],
+        );
+        const accountRowPromise = queryWithTimeout(
+          "primary TikTok account",
+          supabase
+            .from("accounts")
+            .select("id,platform,handle,tiktok_connected_at,tiktok_creator_info,is_primary")
+            .eq("platform", "tiktok")
+            .eq("is_primary", true)
+            .maybeSingle(),
+          null,
+        );
+        const [
+          storageBuckets,
+          schemaChecks,
+          recentWorkerRuns,
+          recentFailedItems,
+          queueRows,
+          blockedPublishRows,
+          accountRow,
+        ] = await Promise.all([
+          storageBucketsPromise,
+          schemaChecksPromise,
+          recentWorkerRunsPromise,
+          recentFailedItemsPromise,
+          queueRowsPromise,
+          blockedPublishRowsPromise,
+          accountRowPromise,
+        ]);
+        const bucketNames = storageBuckets.names;
         const queueCounts = (queueRows.data ?? []).reduce<Record<string, number>>((acc, row) => {
           const status = String((row as { status?: string }).status ?? "unknown");
           acc[status] = (acc[status] ?? 0) + 1;
           return acc;
         }, {});
-        const blockedPublishRows = await supabase
-          .from("posts")
-          .select("publish_status")
-          .like("publish_status", "blocked_%")
-          .limit(5000);
         const blockedPublishCounts = (blockedPublishRows.data ?? []).reduce<Record<string, number>>(
           (acc, row) => {
             const status = String((row as { publish_status?: string }).publish_status ?? "");
@@ -191,15 +476,35 @@ Deno.serve(async (request) => {
           },
           {},
         );
-        const accountRow = await supabase
-          .from("accounts")
-          .select("id,platform,handle,tiktok_connected_at,tiktok_creator_info,is_primary")
-          .eq("platform", "tiktok")
-          .eq("is_primary", true)
-          .maybeSingle();
-        const workerRuns = recentWorkerRuns.data ?? [];
+        const workerRuns = (recentWorkerRuns.data ?? []).map((run) => ({
+          ...run,
+          detail: sanitizeDiagnosticValue(run.detail),
+        }));
+        const failedItems = recentFailedItems.data ?? [];
+        const schemaErrors = schemaChecks
+          .filter((check) => check.error && !check.transient)
+          .map((check) => check.error);
+        const schemaWarnings = schemaChecks
+          .filter((check) => check.error && check.transient)
+          .map((check) => check.error);
+        const dataErrors = [
+          recentWorkerRuns.error ? `recent worker_runs: ${schemaErrorMessage(recentWorkerRuns.error)}` : null,
+          recentFailedItems.error
+            ? `recent failed generation_items: ${schemaErrorMessage(recentFailedItems.error)}`
+            : null,
+          queueRows.error ? `generation item queue counts: ${schemaErrorMessage(queueRows.error)}` : null,
+          blockedPublishRows.error
+            ? `blocked publish counts: ${schemaErrorMessage(blockedPublishRows.error)}`
+            : null,
+          accountRow.error ? `primary TikTok account: ${schemaErrorMessage(accountRow.error)}` : null,
+        ].filter(Boolean);
+        const latestWorkerRun = workerRuns[0] ?? null;
+        const hasCurrentWorkerProblem =
+          failedItems.length > 0 || Number(latestWorkerRun?.errors_count ?? 0) > 0;
         const lastWorkerError =
-          workerRuns.find((run) => Number(run.errors_count ?? 0) > 0)?.detail ?? null;
+          hasCurrentWorkerProblem
+            ? (workerRuns.find((run) => Number(run.errors_count ?? 0) > 0)?.detail ?? null)
+            : null;
 
         return okEnvelope({
           env: envStatus,
@@ -207,14 +512,19 @@ Deno.serve(async (request) => {
             name,
             ok: bucketNames.has(name),
           })),
+          bucketError: storageBuckets.error,
           schema: {
-            generationBatchesSettings: !schemaChecks[0].error,
-            generationItemsQueueColumns: !schemaChecks[1].error,
-            workerRuns: !schemaChecks[2].error,
-            videoLibrary: !schemaChecks[3].error,
-            sourceCandidates: !schemaChecks[4].error,
-            renderAttempts: !schemaChecks[5].error,
-            errors: schemaChecks.map((check) => check.error?.message).filter(Boolean),
+            generationBatchesSettings: schemaChecks[0].ok,
+            generationItemsQueueColumns: schemaChecks[1].ok,
+            workerRuns: schemaChecks[2].ok,
+            audioClips: schemaChecks[3].ok,
+            videoLibrary: schemaChecks[4].ok,
+            sourceCandidates: schemaChecks[5].ok,
+            sourceCandidateUses: schemaChecks[6].ok,
+            renderAttempts: schemaChecks[7].ok,
+            postScheduleSlots: schemaChecks[8].ok,
+            errors: schemaErrors,
+            warnings: schemaWarnings,
           },
           account: accountRow.data
             ? {
@@ -227,6 +537,7 @@ Deno.serve(async (request) => {
             : null,
           queueCounts,
           blockedPublishCounts,
+          dataErrors,
           lastWorkerError,
           cron: {
             configured: envStatus.cronSecret,
@@ -234,7 +545,7 @@ Deno.serve(async (request) => {
             detectable: false,
           },
           recentWorkerRuns: workerRuns,
-          recentFailedItems: recentFailedItems.data ?? [],
+          recentFailedItems: failedItems,
         });
       }
 
@@ -322,11 +633,17 @@ Deno.serve(async (request) => {
       case "skip": {
         const itemId = body.itemId as string | undefined;
         if (!itemId) throw new Error("itemId required");
-        await supabase
+        const skippedItem = await supabase
           .from("generation_items")
-          .update({ status: "failed", error_message: "skipped by user" })
+          .update({ status: "skipped", error_message: "skipped by user" })
           .eq("id", itemId);
-        await supabase.from("posts").update({ status: "skipped" }).eq("generation_item_id", itemId);
+        if (skippedItem.error) throw skippedItem.error;
+
+        const skippedPosts = await supabase
+          .from("posts")
+          .update({ status: "skipped" })
+          .eq("generation_item_id", itemId);
+        if (skippedPosts.error) throw skippedPosts.error;
         return okEnvelope({ ok: true });
       }
 
@@ -340,31 +657,62 @@ Deno.serve(async (request) => {
           .maybeSingle();
         if (item.error) throw item.error;
         if (item.data?.post_id) {
-          await supabase
+          const skippedPost = await supabase
             .from("posts")
             .update({
               status: "skipped",
-              publish_status: null,
+              publish_status: "regenerated",
               generation_item_id: null,
             })
             .eq("id", item.data.post_id)
             .neq("status", "posted");
+          if (skippedPost.error) throw skippedPost.error;
         }
-        await supabase.from("source_candidate_uses").delete().eq("generation_item_id", itemId);
+        const skippedGenerationPosts = await supabase
+          .from("posts")
+          .update({
+            status: "skipped",
+            publish_status: "regenerated",
+            generation_item_id: null,
+          })
+          .eq("generation_item_id", itemId)
+          .neq("status", "posted");
+        if (skippedGenerationPosts.error) throw skippedGenerationPosts.error;
         if (item.data?.library_item_id) {
-          await supabase
+          const skippedLibraryPosts = await supabase
+            .from("posts")
+            .update({
+              status: "skipped",
+              publish_status: "regenerated",
+              generation_item_id: null,
+            })
+            .eq("library_item_id", item.data.library_item_id)
+            .neq("status", "posted");
+          if (skippedLibraryPosts.error) throw skippedLibraryPosts.error;
+        }
+        const clearedUses = await supabase
+          .from("source_candidate_uses")
+          .delete()
+          .eq("generation_item_id", itemId);
+        if (clearedUses.error) throw clearedUses.error;
+        if (item.data?.library_item_id) {
+          const resetLibrary = await supabase
             .from("video_library_items")
             .update({
               status: "not_ready",
               final_asset_id: null,
               thumbnail_url: null,
-              duration_sec: null,
-              segments: null,
-              provenance: null,
+              segments: [],
+              provenance: [],
               perceptual_hash: null,
-              error_message: null,
+              reused_flags: {},
+              default_caption: null,
+              default_hashtags: [],
+              metadata: {},
+              updated_at: new Date().toISOString(),
             })
             .eq("id", item.data.library_item_id);
+          if (resetLibrary.error) throw resetLibrary.error;
         }
         const r = await supabase
           .from("generation_items")
@@ -374,48 +722,83 @@ Deno.serve(async (request) => {
         return okEnvelope({ ok: true });
       }
 
+      case "markLibraryItemUnfit": {
+        const libraryItemId = body.libraryItemId as string | undefined;
+        if (!libraryItemId) throw new Error("libraryItemId required");
+        const libraryItem = await supabase
+          .from("video_library_items")
+          .select("id,generation_item_id,metadata")
+          .eq("id", libraryItemId)
+          .maybeSingle();
+        if (libraryItem.error) throw libraryItem.error;
+        if (!libraryItem.data) throw new Error("Library item not found.");
+
+        const now = new Date();
+        const blockedLibrary = await supabase
+          .from("video_library_items")
+          .update(
+            buildLibraryUnfitUpdate({
+              metadata: libraryItem.data.metadata,
+              reason: body.reason,
+              now,
+            }),
+          )
+          .eq("id", libraryItemId);
+        if (blockedLibrary.error) throw blockedLibrary.error;
+
+        if (libraryItem.data.generation_item_id) {
+          const skippedItem = await supabase
+            .from("generation_items")
+            .update({
+              status: "skipped",
+              error_message: "library item marked unfit by user",
+              updated_at: now.toISOString(),
+            })
+            .eq("id", libraryItem.data.generation_item_id);
+          if (skippedItem.error) throw skippedItem.error;
+        }
+
+        const skippedPosts = await supabase
+          .from("posts")
+          .update({
+            status: "skipped",
+            publish_status: null,
+          })
+          .eq("library_item_id", libraryItemId)
+          .neq("status", "posted");
+        if (skippedPosts.error) throw skippedPosts.error;
+
+        return okEnvelope({ ok: true, libraryItemId });
+      }
+
       case "recoverRecentFailures": {
         const since = String(body.since ?? "2026-05-12T00:00:00.000Z");
         const limit = Math.max(1, Math.min(Number(body.limit ?? 250), 250));
-        const failed = await supabase
-          .from("generation_items")
-          .select("id,stage_events")
-          .eq("status", "failed")
-          .is("post_id", null)
-          .gte("updated_at", since)
-          .order("updated_at", { ascending: false })
-          .limit(limit);
-        if (failed.error) throw failed.error;
-
-        const recoveredIds: string[] = [];
-        for (const row of failed.data ?? []) {
-          const events = Array.isArray(row.stage_events) ? row.stage_events : [];
-          const update = await supabase
-            .from("generation_items")
-            .update({
-              status: "pending",
-              segments: null,
-              stock_clip_url: null,
-              render_job_id: null,
-              final_asset_id: null,
-              provider_request_id: null,
-              error_message: null,
-              attempt_count: 0,
-              locked_at: null,
-              locked_by: null,
-              last_attempt_at: null,
-              stage_events: [
-                ...events.slice(-40),
-                { stage: "recovered", at: new Date().toISOString(), reason: "live repair" },
-              ],
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", row.id);
-          if (update.error) throw update.error;
-          recoveredIds.push(row.id as string);
+        const includeFailed = body.includeFailed !== false;
+        const includeStaleActive = body.includeStaleActive !== false;
+        if (!includeFailed && !includeStaleActive) {
+          return okEnvelope({ ok: true, recovered: 0, recoveredIds: [] });
         }
 
-        return okEnvelope({ ok: true, recovered: recoveredIds.length, recoveredIds });
+        const recovered = await supabase.rpc("recover_generation_items", {
+          p_since: since,
+          p_limit: limit,
+          p_include_failed: includeFailed,
+          p_include_stale_active: includeStaleActive,
+        });
+        if (recovered.error) throw recovered.error;
+
+        const rows = (recovered.data ?? []) as Array<{
+          id: string;
+          recovered_from: string;
+          library_item_id: string | null;
+        }>;
+        return okEnvelope({
+          ok: true,
+          recovered: rows.length,
+          recoveredIds: rows.map((row) => row.id),
+          recoveredRows: rows,
+        });
       }
 
       case "setLyricTemplate": {

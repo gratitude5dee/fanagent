@@ -7,6 +7,7 @@ import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin, { type Region } from "wavesurfer.js/dist/plugins/regions.js";
 import { ChevronsLeft, ChevronsRight, Loader2, Music, Pause, Play, Scissors } from "lucide-react";
 import { trimAudio } from "@/lib/audio/ffmpeg";
+import { clampFixedDurationRegion, clipSelectionMatchesDuration } from "@/lib/audio/selection";
 
 type Props = {
   file: File;
@@ -69,26 +70,31 @@ export default function AudioTrimmer({ file, maxDurationSec, onTrimmed }: Props)
     ws.on("ready", () => {
       const d = ws.getDuration();
       setDuration(d);
-      const end = Math.min(d, maxDurationSec);
+      const fixedRegion = clampFixedDurationRegion({
+        audioDurationSec: d,
+        startSec: 0,
+        targetDurationSec: maxDurationSec,
+      });
       const r = regions.addRegion({
-        start: 0,
-        end,
+        start: fixedRegion.startSec,
+        end: fixedRegion.endSec,
         color: "rgba(56,189,248,0.18)",
         drag: true,
         resize: true,
       });
       regionRef.current = r;
-      setRegion({ start: 0, end });
+      setRegion({ start: fixedRegion.startSec, end: fixedRegion.endSec });
 
       r.on("update", () => {
-        const { start } = r;
-        let { end: e } = r;
-        if (e - start > maxDurationSec) {
-          // Clamp by adjusting the handle that moved last; simplest: cap end.
-          e = start + maxDurationSec;
-          r.setOptions({ start, end: e });
+        const next = clampFixedDurationRegion({
+          audioDurationSec: d,
+          startSec: r.start,
+          targetDurationSec: maxDurationSec,
+        });
+        if (Math.abs(next.startSec - r.start) > 0.01 || Math.abs(next.endSec - r.end) > 0.01) {
+          r.setOptions({ start: next.startSec, end: next.endSec });
         }
-        setRegion({ start, end: e });
+        setRegion({ start: next.startSec, end: next.endSec });
       });
     });
 
@@ -141,6 +147,14 @@ export default function AudioTrimmer({ file, maxDurationSec, onTrimmed }: Props)
     setBusy(true);
     setError(null);
     try {
+      if (
+        !clipSelectionMatchesDuration(
+          { startSec: region.start, endSec: region.end },
+          maxDurationSec,
+        )
+      ) {
+        throw new Error(`Select exactly ${maxDurationSec}s of audio before confirming.`);
+      }
       const blob = await trimAudio(file, region.start, region.end);
       onTrimmed(blob, {
         startSec: region.start,
@@ -156,7 +170,10 @@ export default function AudioTrimmer({ file, maxDurationSec, onTrimmed }: Props)
   }
 
   const selLen = region.end - region.start;
-  const tooShort = duration > 0 && duration < maxDurationSec;
+  const tooShort = duration > 0 && duration + 0.05 < maxDurationSec;
+  const selectionReady =
+    !tooShort &&
+    clipSelectionMatchesDuration({ startSec: region.start, endSec: region.end }, maxDurationSec);
 
   return (
     <div className="audio-trimmer">
@@ -208,7 +225,7 @@ export default function AudioTrimmer({ file, maxDurationSec, onTrimmed }: Props)
         <button
           type="button"
           className="button primary"
-          disabled={busy || tooShort || selLen < 1}
+          disabled={busy || tooShort || !selectionReady}
           onClick={useClip}
         >
           {busy ? <Loader2 size={16} className="spin" /> : <Scissors size={16} />} Use this clip

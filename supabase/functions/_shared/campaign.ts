@@ -37,15 +37,23 @@ export function buildCampaignCreateBatchPayload(body: UnknownRecord): UnknownRec
   const schedule = record(body.schedule);
   const sourceSettings = record(body.sourceSettings);
   const sourceSettingsHasBuckets = hasAdapterBuckets(sourceSettings);
+  const sourceMode = String(body.sourceMode ?? "stock");
   const quantity = normalizedQuantity(body);
 
-  const stockSettings = isRecord(body.stockSettings)
+  const baseStockSettings = isRecord(body.stockSettings)
     ? body.stockSettings
     : isRecord(sourceSettings.stock)
       ? sourceSettings.stock
       : sourceSettingsHasBuckets
         ? {}
         : sourceSettings;
+  const activeAdapterSettings = isRecord(sourceSettings[sourceMode])
+    ? sourceSettings[sourceMode]
+    : {};
+  const stockSettings =
+    sourceMode === "sports_edit" || sourceMode === "streamer_clip"
+      ? { ...baseStockSettings, ...activeAdapterSettings }
+      : baseStockSettings;
   const seedanceSettings = isRecord(body.seedanceSettings)
     ? body.seedanceSettings
     : isRecord(sourceSettings.seedance)
@@ -59,7 +67,7 @@ export function buildCampaignCreateBatchPayload(body: UnknownRecord): UnknownRec
 
   return {
     ...body,
-    sourceMode: body.sourceMode ?? "stock",
+    sourceMode,
     quantity,
     count: quantity,
     cadenceMinutes,

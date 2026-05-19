@@ -1,14 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CalendarClock, Loader2, X } from "lucide-react";
 import { bulkScheduleLibraryItems } from "@/lib/library/api";
 import { displayError } from "@/lib/errors";
+import {
+  buildDefaultManualSlotValues,
+  buildManualSlotsRule,
+  localDateFromInputValue,
+  toLocalInputValue,
+} from "@/lib/calendar/posts";
 
 type Mode = "cadence" | "daily_windows" | "manual_slots";
-
-function toLocalInputValue(date: Date): string {
-  const offset = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
-}
 
 export default function BulkScheduleDialog({
   libraryItemIds,
@@ -24,6 +25,14 @@ export default function BulkScheduleDialog({
     toLocalInputValue(new Date(Date.now() + 30 * 60_000)),
   );
   const [everyMinutes, setEveryMinutes] = useState(240);
+  const [jitterMinutes, setJitterMinutes] = useState(0);
+  const [manualSlots, setManualSlots] = useState(() =>
+    buildDefaultManualSlotValues(
+      libraryItemIds.length,
+      toLocalInputValue(new Date(Date.now() + 30 * 60_000)),
+      240,
+    ),
+  );
   const [maxPerDay, setMaxPerDay] = useState(4);
   const [windowStart, setWindowStart] = useState("09:00");
   const [windowEnd, setWindowEnd] = useState("11:00");
@@ -33,6 +42,27 @@ export default function BulkScheduleDialog({
   const [hashtags, setHashtags] = useState("#fyp #music");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    setManualSlots((current) =>
+      current.length === libraryItemIds.length
+        ? current
+        : buildDefaultManualSlotValues(libraryItemIds.length, startAt, everyMinutes),
+    );
+  }, [everyMinutes, libraryItemIds.length, startAt]);
+
+  function selectMode(nextMode: Mode) {
+    setMode(nextMode);
+    if (nextMode === "manual_slots") {
+      setManualSlots(buildDefaultManualSlotValues(libraryItemIds.length, startAt, everyMinutes));
+    }
+  }
+
+  function setManualSlot(index: number, value: string) {
+    setManualSlots((current) =>
+      current.map((slot, slotIndex) => (slotIndex === index ? value : slot)),
+    );
+  }
 
   async function submit() {
     setBusy(true);
@@ -45,26 +75,21 @@ export default function BulkScheduleDialog({
               type: "cadence",
               startAt: startDate.toISOString(),
               everyMinutes,
+              jitterMinutes,
             }
           : mode === "daily_windows"
             ? {
                 type: "daily_windows",
-                startDate: startDate.toISOString().slice(0, 10),
+                startDate: localDateFromInputValue(startAt),
                 timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
                 maxPerDay,
+                jitterMinutes,
                 windows: [
                   { start: windowStart, end: windowEnd },
                   { start: secondWindowStart, end: secondWindowEnd },
                 ],
               }
-            : {
-                type: "manual_slots",
-                slots: libraryItemIds.map((_id, index) => ({
-                  scheduledAt: new Date(
-                    startDate.getTime() + index * everyMinutes * 60_000,
-                  ).toISOString(),
-                })),
-              };
+            : buildManualSlotsRule(manualSlots.slice(0, libraryItemIds.length));
       await bulkScheduleLibraryItems({
         libraryItemIds,
         rule,
@@ -78,7 +103,6 @@ export default function BulkScheduleDialog({
           disableDuet: true,
           disableStitch: true,
           disableComment: false,
-          isAigc: true,
         },
       });
       onScheduled();
@@ -120,32 +144,46 @@ export default function BulkScheduleDialog({
               key={nextMode}
               type="button"
               className={`button ${mode === nextMode ? "primary" : "ghost"}`}
-              onClick={() => setMode(nextMode)}
+              onClick={() => selectMode(nextMode)}
             >
               {nextMode.replace("_", " ")}
             </button>
           ))}
         </div>
 
-        <div className="split">
-          <label>
-            Start
-            <input
-              type="datetime-local"
-              value={startAt}
-              onChange={(event) => setStartAt(event.target.value)}
-            />
-          </label>
-          <label>
-            Every min
-            <input
-              type="number"
-              min={5}
-              value={everyMinutes}
-              onChange={(event) => setEveryMinutes(Number(event.target.value))}
-            />
-          </label>
-        </div>
+        {mode !== "manual_slots" ? (
+          <div className="split">
+            <label>
+              Start
+              <input
+                type="datetime-local"
+                value={startAt}
+                onChange={(event) => setStartAt(event.target.value)}
+              />
+            </label>
+            {mode === "cadence" ? (
+              <label>
+                Every min
+                <input
+                  type="number"
+                  min={5}
+                  value={everyMinutes}
+                  onChange={(event) => setEveryMinutes(Number(event.target.value))}
+                />
+              </label>
+            ) : null}
+            <label>
+              Jitter min
+              <input
+                type="number"
+                min={0}
+                max={240}
+                value={jitterMinutes}
+                onChange={(event) => setJitterMinutes(Number(event.target.value))}
+              />
+            </label>
+          </div>
+        ) : null}
 
         {mode === "daily_windows" ? (
           <div className="split">
@@ -174,6 +212,21 @@ export default function BulkScheduleDialog({
                 onChange={(event) => setMaxPerDay(Number(event.target.value))}
               />
             </label>
+          </div>
+        ) : null}
+
+        {mode === "manual_slots" ? (
+          <div className="stack" aria-label="Manual schedule slots">
+            {libraryItemIds.map((itemId, index) => (
+              <label key={itemId}>
+                Clip {index + 1}
+                <input
+                  type="datetime-local"
+                  value={manualSlots[index] ?? ""}
+                  onChange={(event) => setManualSlot(index, event.target.value)}
+                />
+              </label>
+            ))}
           </div>
         ) : null}
 

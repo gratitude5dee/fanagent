@@ -1,0 +1,64 @@
+{
+  "page": 1,
+  "per_page": 3,
+  "total_results": 3,
+  "url": "https://api.pexels.com/v1/videos/search?query=night%20drive",
+  "videos": [
+    {
+      "id": 1234567,
+      "duration": 29,
+      "width": 1080,
+      "height": 1920,
+      "video_files": [
+        {
+          "id": 1,
+          "quality": "hd",
+          "file_type": "video/mp4",
+          "width": 1080,
+          "height": 1920,
+          "link": "https://videos.pexels.com/video-files/1234567/portrait.mp4"
+        },
+        {
+          "id": 2,
+          "quality": "sd",
+          "file_type": "video/mp4",
+          "width": 540,
+          "height": 960,
+          "link": "https://videos.pexels.com/video-files/1234567/portrait-small.mp4"
+        }
+      ]
+    },
+    {
+      "id": 7654321,
+      "duration": 30,
+      "width": 1920,
+      "height": 1080,
+      "video_files": [
+        {
+          "id": 3,
+          "quality": "hd",
+          "file_type": "video/mp4",
+          "width": 1920,
+          "height": 1080,
+          "link": "https://videos.pexels.com/video-files/7654321/landscape.mp4"
+        }
+      ]
+    },
+    {
+      "id": 2468135,
+      "duration": 55,
+      "width": 1080,
+      "height": 1920,
+      "video_files": [
+        {
+          "id": 4,
+          "quality": "hd",
+          "file_type": "video/mp4",
+          "width": 1080,
+          "height": 1920,
+          "link": "https://videos.pexels.com/video-files/2468135/too-long.mp4"
+        }
+      ]
+    }
+  ]
+}

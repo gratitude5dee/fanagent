@@ -91,7 +91,11 @@ function coerceMediaAsset(row: Record<string, unknown>): MediaAsset {
   };
 }
 
-function coerceLibraryItem(row: Record<string, unknown>, media?: MediaAsset | null): LibraryItem {
+function coerceLibraryItem(
+  row: Record<string, unknown>,
+  media?: MediaAsset | null,
+  nextScheduledAt?: string | null,
+): LibraryItem {
   return {
     id: String(row.id),
     account_id: String(row.account_id),
@@ -112,6 +116,8 @@ function coerceLibraryItem(row: Record<string, unknown>, media?: MediaAsset | nu
     metadata: metadata(row.metadata),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
+    next_scheduled_at:
+      nextScheduledAt ?? (typeof row.next_scheduled_at === "string" ? row.next_scheduled_at : null),
     media,
   };
 }
@@ -143,7 +149,12 @@ export async function listAudioClips(): Promise<AudioClipSummary[]> {
   return clipRows.map((row) => {
     const clip = coerceAudioClip(row);
     const rows = byClip.get(clip.id) ?? [];
-    const counts = rows.reduce(
+    const counts = rows.reduce<{
+      ready: number;
+      failed: number;
+      scheduled: number;
+      blocked: number;
+    }>(
       (acc, item) => {
         const status = String(item.status ?? "not_ready");
         if (status === "ready") acc.ready += 1;
@@ -183,6 +194,7 @@ export async function getLibraryDetail(audioClipId: string): Promise<LibraryDeta
   if (items.error) throw items.error;
 
   const itemRows = (items.data ?? []) as Record<string, unknown>[];
+  const itemIds = itemRows.map((row) => String(row.id));
   const assetIds = Array.from(
     new Set(
       itemRows
@@ -202,6 +214,22 @@ export async function getLibraryDetail(audioClipId: string): Promise<LibraryDeta
       mediaById.set(asset.id, asset);
     }
   }
+  const nextScheduledByItemId = new Map<string, string>();
+  if (itemIds.length > 0) {
+    const postRows = await supabase
+      .from("posts")
+      .select("library_item_id,scheduled_at,status")
+      .in("library_item_id", itemIds)
+      .neq("status", "skipped")
+      .order("scheduled_at", { ascending: true });
+    if (postRows.error) throw postRows.error;
+    for (const post of (postRows.data ?? []) as Record<string, unknown>[]) {
+      const libraryItemId = String(post.library_item_id ?? "");
+      if (!libraryItemId || nextScheduledByItemId.has(libraryItemId)) continue;
+      const scheduledAt = typeof post.scheduled_at === "string" ? post.scheduled_at : null;
+      if (scheduledAt) nextScheduledByItemId.set(libraryItemId, scheduledAt);
+    }
+  }
 
   return {
     clip: coerceAudioClip(clip.data as Record<string, unknown>),
@@ -209,6 +237,7 @@ export async function getLibraryDetail(audioClipId: string): Promise<LibraryDeta
       coerceLibraryItem(
         row,
         typeof row.final_asset_id === "string" ? mediaById.get(row.final_asset_id) : null,
+        nextScheduledByItemId.get(String(row.id)) ?? null,
       ),
     ),
   };
@@ -265,6 +294,21 @@ export async function regenerateGenerationItems(generationItemIds: string[]): Pr
   }
 }
 
+export async function markLibraryItemUnfit(libraryItemId: string, reason?: string): Promise<void> {
+  const { data, error } = await supabase.functions.invoke("fanpage-campaign", {
+    body: {
+      action: "markLibraryItemUnfit",
+      libraryItemId,
+      reason,
+    },
+  });
+  if (error) {
+    if (data) unwrapFunctionData(data);
+    throw new Error(error.message);
+  }
+  unwrapFunctionData(data);
+}
+
 export async function scheduleLibraryItems(items: ScheduleRequestItem[]): Promise<void> {
   const { data, error } = await supabase.functions.invoke("library-schedule", {
     body: { items },
@@ -288,6 +332,7 @@ export async function bulkScheduleLibraryItems(input: BulkScheduleRequest): Prom
 }
 
 export async function searchReplacementCandidates(input: {
+  libraryItemId: string;
   audioClipId: string;
   accountId: string;
   segmentIndex: number;
@@ -295,28 +340,26 @@ export async function searchReplacementCandidates(input: {
   query: string;
   targetDurationSec: number;
 }): Promise<SourceCandidate[]> {
-  const { data, error } = await supabase.functions.invoke("source-candidate-search", {
+  const { data, error } = await supabase.functions.invoke("source-candidate-replace", {
     body: {
+      action: "searchCandidates",
+      libraryItemId: input.libraryItemId,
       audioClipId: input.audioClipId,
       accountId: input.accountId,
       portraitOnly: true,
-      segments: [
-        {
-          segmentIndex: input.segmentIndex,
-          sourceType: input.sourceType,
-          query: input.query,
-          targetDurationSec: input.targetDurationSec,
-          settings: { perAdapterLimit: 12 },
-        },
-      ],
+      segmentIndex: input.segmentIndex,
+      sourceType: input.sourceType,
+      query: input.query,
+      targetDurationSec: input.targetDurationSec,
+      settings: { perAdapterLimit: 12 },
     },
   });
   if (error) {
     if (data) return unwrapFunctionData(data);
     throw new Error(error.message);
   }
-  const result = unwrapFunctionData<{ candidates: Record<string, SourceCandidate[]> }>(data);
-  return result.candidates[String(input.segmentIndex)] ?? [];
+  const result = unwrapFunctionData<{ candidates: SourceCandidate[] }>(data);
+  return result.candidates ?? [];
 }
 
 export async function replaceLibrarySegment(input: {

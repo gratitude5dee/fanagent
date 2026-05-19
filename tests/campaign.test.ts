@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   buildCampaignCreateBatchPayload,
@@ -67,9 +68,64 @@ describe("campaign create payload normalization", () => {
     expect(payload.stockSettings).toEqual({
       providers: ["library", "pexels"],
       portraitOnly: true,
+      channel: "creator",
     });
     expect(payload.seedanceSettings).toEqual({
       resolution: "1080p",
+    });
+  });
+
+  it("preserves adapter-specific settings for gated source modes", () => {
+    const streamerPayload = buildCampaignCreateBatchPayload({
+      accountId: "account-1",
+      audioClipId: "clip-1",
+      sourceMode: "streamer_clip",
+      sourceSettings: {
+        stock: {
+          portraitOnly: true,
+          negativeKeywords: ["logo"],
+        },
+        streamer_clip: {
+          streamer: "creator",
+          allowedChannels: ["creator", "teammate"],
+        },
+      },
+    });
+
+    expect(streamerPayload.stockSettings).toEqual({
+      portraitOnly: true,
+      negativeKeywords: ["logo"],
+      streamer: "creator",
+      allowedChannels: ["creator", "teammate"],
+    });
+
+    const sportsPayload = buildCampaignCreateBatchPayload({
+      accountId: "account-1",
+      audioClipId: "clip-1",
+      sourceMode: "sports_edit",
+      sourceSettings: {
+        stock: {
+          portraitOnly: true,
+        },
+        sports_edit: {
+          league: "WNBA",
+          team: "Liberty",
+          allowedChannels: ["UCofficial"],
+          ownerAssetUrls: {
+            "video-1": "https://assets.example.com/video-1.mp4",
+          },
+        },
+      },
+    });
+
+    expect(sportsPayload.stockSettings).toEqual({
+      portraitOnly: true,
+      league: "WNBA",
+      team: "Liberty",
+      allowedChannels: ["UCofficial"],
+      ownerAssetUrls: {
+        "video-1": "https://assets.example.com/video-1.mp4",
+      },
     });
   });
 
@@ -160,5 +216,78 @@ describe("campaign response envelopes", () => {
       items: [{ id: "item-1" }, { id: "item-2" }],
       items_total: 2,
     });
+  });
+
+  it("returns the spec snake_case audio objects from create-generation-batch", () => {
+    const source = readFileSync("supabase/functions/create-generation-batch/index.ts", "utf8");
+
+    expect(source).toContain("audio_clip: audioClip");
+    expect(source).toContain("audio_asset: audioAsset");
+    expect(source).toContain("audioClip");
+    expect(source).toContain("audioAsset");
+  });
+
+  it("keeps create-generation-batch on the envelope contract", () => {
+    const source = readFileSync("supabase/functions/create-generation-batch/index.ts", "utf8");
+    const campaignSource = readFileSync("supabase/functions/fanpage-campaign/index.ts", "utf8");
+    const appSource = readFileSync("src/App.tsx", "utf8");
+
+    expect(source).toContain("okEnvelope({");
+    expect(source).toContain('errorEnvelope("Method not allowed.", "METHOD_NOT_ALLOWED", 405)');
+    expect(source).toContain('import { isAuthorizedInternalCall } from "../_shared/internal.ts"');
+    expect(source).toContain("if (!isAuthorizedInternalCall(request))");
+    expect(source).toContain(
+      'errorEnvelope("Unauthorized internal call.", "UNAUTHORIZED_INTERNAL", 401)',
+    );
+    expect(source).toContain('"CREATE_GENERATION_BATCH_FAILED"');
+    expect(campaignSource).toContain('"x-cron-secret": cronSecret');
+    expect(appSource).toContain('invokeFunction("fanpage-campaign"');
+    expect(appSource).toContain('action: "create"');
+    expect(appSource).not.toContain('invokeFunction("create-generation-batch"');
+    expect(source).not.toContain("return jsonResponse({");
+    expect(source).not.toContain("return errorResponse(error)");
+  });
+
+  it("accepts the full audio MIME set from the Create upload flow", () => {
+    const source = readFileSync("supabase/functions/create-generation-batch/index.ts", "utf8");
+
+    expect(source).toContain('"audio/flac"');
+    expect(source).toContain('"audio/x-flac"');
+  });
+
+  it("keeps the campaign list response scoped to UI fields", () => {
+    const source = readFileSync("supabase/functions/fanpage-campaign/index.ts", "utf8");
+
+    expect(source).toContain(
+      '"id,batch_id,status,scheduled_at,provider,prompt,segments,stock_clip_url,render_provider,error_message,lyric_template_id,stage_events"',
+    );
+    expect(source).toContain(
+      '"id,generation_item_id,caption,status,publish_status,scheduled_at,video_url"',
+    );
+    expect(source).not.toContain('.from("generation_items")\n          .select("*")');
+    expect(source).not.toContain('.from("posts")\n          .select("*")');
+  });
+});
+
+describe("campaign library item actions", () => {
+  it("documents the markLibraryItemUnfit action contract", () => {
+    const source = readFileSync("supabase/functions/fanpage-campaign/index.ts", "utf8");
+
+    expect(source).toContain('case "markLibraryItemUnfit"');
+    expect(source).toContain("buildLibraryUnfitUpdate");
+    expect(source).toContain('.eq("library_item_id", libraryItemId)');
+    expect(source).toContain('.neq("status", "posted")');
+  });
+
+  it("regenerate skips every non-posted post linked through generation or library item ids", () => {
+    const source = readFileSync("supabase/functions/fanpage-campaign/index.ts", "utf8");
+
+    expect(source).toContain('case "regenerate"');
+    expect(source).toContain("skippedGenerationPosts");
+    expect(source).toContain('.eq("generation_item_id", itemId)');
+    expect(source).toContain("skippedLibraryPosts");
+    expect(source).toContain('.eq("library_item_id", item.data.library_item_id)');
+    expect(source).toContain('.neq("status", "posted")');
+    expect(source).toContain("source_candidate_uses");
   });
 });

@@ -3,6 +3,7 @@ import { Loader2, Replace, Search, X } from "lucide-react";
 import { replaceLibrarySegment, searchReplacementCandidates } from "@/lib/library/api";
 import { displayError } from "@/lib/errors";
 import type { LibraryItem, LibrarySegment, SourceCandidate } from "@/lib/library/types";
+import { librarySegmentTargetDurationSeconds } from "@/lib/library/ui";
 
 const SOURCE_OPTIONS = [
   { key: "stock", label: "Stock" },
@@ -14,7 +15,7 @@ const SOURCE_OPTIONS = [
 ];
 
 function defaultSource(segment: LibrarySegment | null): string {
-  const source = segment?.source || "stock";
+  const source = segment?.sourceType || segment?.source_type || segment?.source || "stock";
   return SOURCE_OPTIONS.some((option) => option.key === source) ? source : "stock";
 }
 
@@ -56,18 +57,23 @@ export default function SegmentReplaceDialog({
   }, [target]);
 
   if (!target) return null;
+  const activeTarget = target;
 
   async function search() {
     setBusy(true);
     setMessage(null);
     try {
       const next = await searchReplacementCandidates({
+        libraryItemId: activeTarget.item.id,
         audioClipId,
         accountId,
-        segmentIndex: target.segmentIndex,
+        segmentIndex: activeTarget.segmentIndex,
         sourceType,
         query,
-        targetDurationSec: target.item.duration_sec,
+        targetDurationSec: librarySegmentTargetDurationSeconds(
+          activeTarget.item,
+          activeTarget.segmentIndex,
+        ),
       });
       setCandidates(next);
       setMessage(next.length ? null : "No candidates returned for this query.");
@@ -83,8 +89,8 @@ export default function SegmentReplaceDialog({
     setMessage(null);
     try {
       await replaceLibrarySegment({
-        libraryItemId: target.item.id,
-        segmentIndex: target.segmentIndex,
+        libraryItemId: activeTarget.item.id,
+        segmentIndex: activeTarget.segmentIndex,
         candidateId,
       });
       onReplaced();

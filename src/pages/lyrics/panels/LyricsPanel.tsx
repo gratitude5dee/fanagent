@@ -103,10 +103,7 @@ export default function LyricsPanel({ template, audioUrl, audioElRef, onDone, on
     }
   }
 
-  const totalWords = useMemo(
-    () => blocks.reduce((s, b) => s + b.words.length, 0),
-    [blocks],
-  );
+  const totalWords = useMemo(() => blocks.reduce((s, b) => s + b.words.length, 0), [blocks]);
   const activeWordId = useMemo(() => {
     for (const b of blocks) {
       for (const w of b.words) {
@@ -159,12 +156,16 @@ export default function LyricsPanel({ template, audioUrl, audioElRef, onDone, on
               {playing ? <Pause size={14} /> : <Play size={14} />}
             </button>
             <span>{time.toFixed(2)}s</span>
-            <span className="lyr-tag">{totalWords} words · {blocks.length} blocks</span>
+            <span className="lyr-tag">
+              {totalWords} words · {blocks.length} blocks
+            </span>
           </div>
           <div className="lyr-blocks">
             {blocks.map((b) => (
               <div key={b.id} className="lyr-block">
-                <header><Wand2 size={12} /> {b.label}</header>
+                <header>
+                  <Wand2 size={12} /> {b.label}
+                </header>
                 <div className="lyr-words">
                   {b.words.map((w) => {
                     const isEditing = editingWord === w.id;
@@ -201,7 +202,8 @@ export default function LyricsPanel({ template, audioUrl, audioElRef, onDone, on
             ))}
           </div>
           <button className="lyr-btn primary lg" onClick={done} disabled={busy || totalWords === 0}>
-            {busy ? <Loader2 className="spin" size={14} /> : <Pencil size={14} />} Done — go to markers
+            {busy ? <Loader2 className="spin" size={14} /> : <Pencil size={14} />} Done — go to
+            markers
           </button>
         </>
       ) : null}

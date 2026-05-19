@@ -83,6 +83,11 @@ export function isRetryableTikTokPublishError(error: unknown): boolean {
   return /\b(429|500|502|503|504|rate_limit|internal_error)\b/i.test(message);
 }
 
+export function nextTikTokRetryDelayMinutes(currentRetryCount: number | null | undefined): number {
+  const retryCount = Number.isFinite(currentRetryCount) ? Number(currentRetryCount) : 0;
+  return Math.min(240, 5 * 2 ** Math.max(0, retryCount));
+}
+
 export function classifyTikTokPublishError(error: unknown): TikTokPublishErrorClassification {
   if (error instanceof TikTokPublishBlockedError) {
     return {
@@ -157,20 +162,15 @@ export function ensureCreatorAllowsPost(
   }
 }
 
-export function encodeOAuthState(
-  state: { accountId: string; createdAt: number },
-): string {
-  return btoa(JSON.stringify(state)).replace(/\+/g, "-").replace(/\//g, "_")
-    .replace(/=+$/, "");
+export function encodeOAuthState(state: { accountId: string; createdAt: number }): string {
+  return btoa(JSON.stringify(state)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-export function decodeOAuthState(
-  value: string,
-): { accountId: string; createdAt: number } {
-  const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(
-    Math.ceil(value.length / 4) * 4,
-    "=",
-  );
+export function decodeOAuthState(value: string): { accountId: string; createdAt: number } {
+  const padded = value
+    .replace(/-/g, "+")
+    .replace(/_/g, "/")
+    .padEnd(Math.ceil(value.length / 4) * 4, "=");
   const state = JSON.parse(atob(padded)) as {
     accountId?: string;
     createdAt?: number;
@@ -187,10 +187,7 @@ export function buildAuthorizeUrl(accountId: string): string {
   url.searchParams.set("scope", "user.info.basic,video.publish,video.upload");
   url.searchParams.set("response_type", "code");
   url.searchParams.set("redirect_uri", requireEnv("TIKTOK_REDIRECT_URI"));
-  url.searchParams.set(
-    "state",
-    encodeOAuthState({ accountId, createdAt: Date.now() }),
-  );
+  url.searchParams.set("state", encodeOAuthState({ accountId, createdAt: Date.now() }));
   return url.toString();
 }
 
@@ -198,15 +195,10 @@ async function readJson<T>(response: Response, label: string): Promise<T> {
   const text = await response.text();
   const json = text ? JSON.parse(text) : {};
   if (!response.ok) {
-    throw new Error(
-      `${label} failed: ${response.status} ${response.statusText} ${text}`
-        .trim(),
-    );
+    throw new Error(`${label} failed: ${response.status} ${response.statusText} ${text}`.trim());
   }
   if (json.error?.code && json.error.code !== "ok") {
-    throw new Error(
-      `${label} failed: ${json.error.code} ${json.error.message ?? ""}`.trim(),
-    );
+    throw new Error(`${label} failed: ${json.error.code} ${json.error.message ?? ""}`.trim());
   }
   return json as T;
 }
@@ -234,13 +226,16 @@ export async function exchangeCode(code: string) {
   );
 }
 
-export async function saveTokens(accountId: string, tokens: {
-  access_token: string;
-  refresh_token?: string;
-  open_id: string;
-  scope?: string;
-  expires_in?: number;
-}) {
+export async function saveTokens(
+  accountId: string,
+  tokens: {
+    access_token: string;
+    refresh_token?: string;
+    open_id: string;
+    scope?: string;
+    expires_in?: number;
+  },
+) {
   const supabase = await getSupabase();
   const values: Record<string, unknown> = {
     tiktok_open_id: tokens.open_id,
@@ -253,15 +248,10 @@ export async function saveTokens(accountId: string, tokens: {
   };
 
   if (tokens.refresh_token) {
-    values.tiktok_refresh_token_encrypted = await encryptSecret(
-      tokens.refresh_token,
-    );
+    values.tiktok_refresh_token_encrypted = await encryptSecret(tokens.refresh_token);
   }
 
-  const updated = await supabase
-    .from("accounts")
-    .update(values)
-    .eq("id", accountId);
+  const updated = await supabase.from("accounts").update(values).eq("id", accountId);
   if (updated.error) throw updated.error;
 }
 
@@ -298,9 +288,7 @@ export async function getAccessToken(accountId: string): Promise<string> {
   const supabase = await getSupabase();
   const account = await supabase
     .from("accounts")
-    .select(
-      "tiktok_access_token_encrypted,tiktok_refresh_token_encrypted,tiktok_token_expires_at",
-    )
+    .select("tiktok_access_token_encrypted,tiktok_refresh_token_encrypted,tiktok_token_expires_at")
     .eq("id", accountId)
     .single();
   if (account.error) throw account.error;
@@ -315,10 +303,7 @@ export async function getAccessToken(accountId: string): Promise<string> {
     if (!account.data.tiktok_refresh_token_encrypted) {
       throw new Error("TikTok token expired and no refresh token is stored.");
     }
-    return refreshAccessToken(
-      accountId,
-      account.data.tiktok_refresh_token_encrypted,
-    );
+    return refreshAccessToken(accountId, account.data.tiktok_refresh_token_encrypted);
   }
   return decryptSecret(account.data.tiktok_access_token_encrypted);
 }
@@ -338,9 +323,7 @@ export async function queryCreatorInfo(accessToken: string) {
   return json.data ?? {};
 }
 
-export function createChunkPlan(
-  videoSize: number,
-): { chunkSize: number; totalChunkCount: number } {
+export function createChunkPlan(videoSize: number): { chunkSize: number; totalChunkCount: number } {
   const chunkSize = Math.min(10 * 1024 * 1024, Math.max(videoSize, 1));
   return {
     chunkSize,
@@ -379,9 +362,7 @@ export async function initDirectPost(
   settings: TikTokPostSettings,
   videoSize: number,
 ) {
-  const json = await readJson<
-    { data?: { publish_id: string; upload_url: string } }
-  >(
+  const json = await readJson<{ data?: { publish_id: string; upload_url: string } }>(
     await fetch(`${apiBase}/v2/post/publish/video/init/`, {
       method: "POST",
       headers: {
@@ -404,6 +385,7 @@ export async function uploadChunks(uploadUrl: string, bytes: Uint8Array) {
     const start = index * plan.chunkSize;
     const end = Math.min(start + plan.chunkSize, bytes.byteLength) - 1;
     const chunk = bytes.subarray(start, end + 1);
+    const body = new Blob([chunk as BlobPart], { type: "video/mp4" });
     const response = await fetch(uploadUrl, {
       method: "PUT",
       headers: {
@@ -411,30 +393,24 @@ export async function uploadChunks(uploadUrl: string, bytes: Uint8Array) {
         "Content-Length": String(chunk.byteLength),
         "Content-Range": `bytes ${start}-${end}/${bytes.byteLength}`,
       },
-      body: chunk,
+      body,
     });
     if (!response.ok) {
       throw new Error(
-        `TikTok upload failed: ${response.status} ${response.statusText} ${await response
-          .text()}`,
+        `TikTok upload failed: ${response.status} ${response.statusText} ${await response.text()}`,
       );
     }
   }
 }
 
-export async function fetchPublishStatus(
-  accessToken: string,
-  publishId: string,
-) {
-  return readJson<
-    {
-      data?: {
-        status: string;
-        fail_reason?: string;
-        publicaly_available_post_id?: string[];
-      };
-    }
-  >(
+export async function fetchPublishStatus(accessToken: string, publishId: string) {
+  return readJson<{
+    data?: {
+      status: string;
+      fail_reason?: string;
+      publicaly_available_post_id?: string[];
+    };
+  }>(
     await fetch(`${apiBase}/v2/post/publish/status/fetch/`, {
       method: "POST",
       headers: {

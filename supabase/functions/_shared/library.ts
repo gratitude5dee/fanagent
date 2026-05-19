@@ -1,4 +1,5 @@
 import { normalizeClipSelection, type ClipSelection } from "./generation.ts";
+import type { SourceCandidate, SourceType } from "./sources/types.ts";
 import type { Transcript } from "./transcribe.ts";
 
 const supportedAudio = new Set([
@@ -57,11 +58,27 @@ export type LibrarySlotInput = {
 
 export type SegmentLike = {
   source?: string | null;
+  sourceType?: string | null;
+  source_type?: string | null;
   provider?: string | null;
   externalId?: string | null;
   external_id?: string | null;
   url?: string | null;
   prompt?: string | null;
+  query?: string | null;
+  durationSec?: number | null;
+  duration_seconds?: number | null;
+  toleranceSec?: number | null;
+  tolerance_seconds_used?: number | null;
+  reused?: boolean | null;
+  candidateId?: string | null;
+  candidate_id?: string | null;
+  license?: string | null;
+  rightsHolder?: string | null;
+  rights_holder?: string | null;
+  attribution?: string | null;
+  storagePath?: string | null;
+  storage_path?: string | null;
 };
 
 export type LibraryFinalizeInput = {
@@ -78,6 +95,37 @@ export type LibraryFinalizeInput = {
     public_url: string;
     metadata?: unknown;
   };
+  libraryMetadata?: unknown;
+};
+
+export type LibrarySegmentReplacementInput = {
+  segments: unknown[];
+  segmentIndex: number;
+  candidate: SourceCandidate;
+  cachedUrl: string;
+  storagePath?: string | null;
+  libraryDurationSec: number;
+  toleranceSecondsUsed: number | null;
+};
+
+export type LibrarySegmentReplacement = {
+  segments: SegmentLike[];
+  provenance: Array<Record<string, unknown>>;
+  replacedSegment: SegmentLike;
+};
+
+export type LibraryUnfitUpdateInput = {
+  metadata?: unknown;
+  reason?: unknown;
+  now?: Date;
+};
+
+export type BatchLibraryStatus = "building" | "ready" | "exhausted" | "failed";
+
+export type LibraryFailureUpdateInput = {
+  metadata?: unknown;
+  error?: unknown;
+  now?: Date;
 };
 
 function normalizeAudioBase64(value: string): string {
@@ -109,6 +157,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isSegmentLike(value: unknown): value is SegmentLike {
   return isRecord(value);
+}
+
+function clearFailureMetadata(value: unknown): Record<string, unknown> {
+  const metadata = isRecord(value) ? { ...value } : {};
+  delete metadata.failed;
+  delete metadata.failure_error;
+  delete metadata.failed_at;
+  return metadata;
 }
 
 export function normalizeAudioClipRequest(body: AudioClipRequest): NormalizedAudioClipRequest {
@@ -207,23 +263,171 @@ export function buildLibraryFinalizeUpdate(input: LibraryFinalizeInput): Record<
     segments,
     provenance: buildProvenance(segments),
     perceptual_hash: input.item.perceptual_hash ?? stringOrNull(assetMetadata.perceptual_hash),
+    reused_flags: buildReusedFlags(segments),
     default_caption: String(promptPlan.caption ?? "sound on"),
     default_hashtags: Array.isArray(promptPlan.hashtags) ? promptPlan.hashtags.map(String) : [],
+    metadata: clearFailureMetadata(input.libraryMetadata),
   };
+}
+
+export function buildLibrarySegmentReplacement(
+  input: LibrarySegmentReplacementInput,
+): LibrarySegmentReplacement {
+  if (!Number.isInteger(input.segmentIndex) || input.segmentIndex < 0) {
+    throw new Error("segmentIndex must be a non-negative integer.");
+  }
+
+  const segments = input.segments.filter(isSegmentLike);
+  if (input.segmentIndex >= segments.length) {
+    throw new Error("segmentIndex is outside the current segment list.");
+  }
+
+  const current = segments[input.segmentIndex];
+  if (!canReplaceSegmentSource(current, input.candidate.source_type)) {
+    throw new Error("Candidate source_type does not match this segment.");
+  }
+
+  const replacedSegment: SegmentLike = {
+    ...current,
+    source: renderSegmentSource(input.candidate.source_type),
+    sourceType: input.candidate.source_type,
+    url: input.cachedUrl,
+    provider: input.candidate.provider,
+    externalId: input.candidate.external_id ?? null,
+    candidateId: input.candidate.id ?? null,
+    durationSec: Number(input.candidate.duration_seconds),
+    toleranceSec: input.toleranceSecondsUsed,
+    reused: false,
+    license: input.candidate.license,
+    rightsHolder: input.candidate.rights_holder ?? null,
+    attribution: input.candidate.attribution ?? null,
+    storagePath: input.storagePath ?? input.candidate.storage_path ?? null,
+  };
+
+  const nextSegments = [...segments];
+  nextSegments[input.segmentIndex] = replacedSegment;
+
+  return {
+    segments: nextSegments,
+    provenance: buildProvenance(nextSegments),
+    replacedSegment,
+  };
+}
+
+export function buildLibraryUnfitUpdate(
+  input: LibraryUnfitUpdateInput = {},
+): Record<string, unknown> {
+  const now = input.now ?? new Date();
+  const reason =
+    typeof input.reason === "string" && input.reason.trim()
+      ? input.reason.trim().slice(0, 240)
+      : "Marked unfit by user";
+  return {
+    status: "blocked",
+    metadata: {
+      ...(isRecord(input.metadata) ? input.metadata : {}),
+      unfit: true,
+      unfit_reason: reason,
+      marked_unfit_at: now.toISOString(),
+    },
+    updated_at: now.toISOString(),
+  };
+}
+
+export function buildLibraryFailureUpdate(
+  input: LibraryFailureUpdateInput = {},
+): Record<string, unknown> {
+  const now = input.now ?? new Date();
+  const error =
+    typeof input.error === "string" && input.error.trim()
+      ? input.error.trim().slice(0, 500)
+      : input.error instanceof Error
+        ? input.error.message.slice(0, 500)
+        : "Generation failed before this library item could be finalized.";
+  return {
+    status: "failed",
+    metadata: {
+      ...(isRecord(input.metadata) ? input.metadata : {}),
+      failed: true,
+      failure_error: error,
+      failed_at: now.toISOString(),
+    },
+    updated_at: now.toISOString(),
+  };
+}
+
+export function deriveBatchLibraryStatus(
+  statuses: unknown[],
+  requestedQuantity?: unknown,
+): BatchLibraryStatus {
+  const normalized = statuses.map(String).filter(Boolean);
+  if (normalized.length === 0) return "building";
+  const requested = Math.max(0, Math.floor(Number(requestedQuantity ?? normalized.length)));
+  if (requested > 0 && normalized.length < requested) return "building";
+
+  const readyStatuses = new Set(["ready", "scheduled", "posted"]);
+  const failedStatuses = new Set(["failed", "blocked"]);
+  const readyCount = normalized.filter((status) => readyStatuses.has(status)).length;
+  const failedCount = normalized.filter((status) => failedStatuses.has(status)).length;
+
+  if (readyCount === normalized.length) return "ready";
+  if (failedCount === normalized.length) return "failed";
+  if (readyCount + failedCount === normalized.length) return "exhausted";
+  return "building";
+}
+
+export function segmentTargetDurationSeconds(input: {
+  segment: unknown;
+  segmentCount: number;
+  libraryDurationSec: number;
+}): number {
+  if (isSegmentLike(input.segment)) {
+    const explicit = Number(input.segment.durationSec ?? input.segment.duration_seconds ?? 0);
+    if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  }
+  return Math.max(1, Math.ceil(input.libraryDurationSec / Math.max(1, input.segmentCount)));
 }
 
 function buildProvenance(segments: unknown[]): Array<Record<string, unknown>> {
   return segments.filter(isSegmentLike).map((segment) => {
-    const sourceType = segment.source ?? "stock";
+    const sourceType = segment.sourceType ?? segment.source_type ?? segment.source ?? "stock";
     return {
       source_type: sourceType,
       provider: segment.provider ?? sourceType,
       external_id: segment.externalId ?? segment.external_id ?? null,
       origin_url: segment.url ?? null,
+      candidate_id: segment.candidateId ?? segment.candidate_id ?? null,
+      license: segment.license ?? null,
+      rights_holder: segment.rightsHolder ?? segment.rights_holder ?? null,
+      attribution: segment.attribution ?? null,
+      storage_path: segment.storagePath ?? segment.storage_path ?? null,
+      reused: segment.reused ?? false,
     };
   });
 }
 
+function buildReusedFlags(segments: unknown[]): Record<string, boolean> {
+  return Object.fromEntries(
+    segments
+      .map((segment, index) => [String(index), isSegmentLike(segment) && segment.reused === true])
+      .filter((entry): entry is [string, boolean] => entry[1] === true),
+  );
+}
+
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function renderSegmentSource(sourceType: SourceType): "stock" | "seedance" {
+  return sourceType === "seedance" || sourceType === "gmi_seedance" ? "seedance" : "stock";
+}
+
+function sourceClass(value: unknown): "stock" | "seedance" {
+  return value === "seedance" || value === "gmi_seedance" ? "seedance" : "stock";
+}
+
+function canReplaceSegmentSource(segment: SegmentLike, candidateSourceType: SourceType): boolean {
+  const explicitSourceType = segment.sourceType ?? segment.source_type;
+  if (explicitSourceType) return explicitSourceType === candidateSourceType;
+  return sourceClass(segment.source) === sourceClass(candidateSourceType);
 }

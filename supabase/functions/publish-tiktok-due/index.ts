@@ -1,7 +1,9 @@
-import { downloadBytes } from "../_shared/assets.ts";
-import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import { downloadBytes, refreshStoredAssetSignedUrl } from "../_shared/assets.ts";
+import { handleOptions } from "../_shared/cors.ts";
+import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
 import { errorMessage, serializeError } from "../_shared/errors.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
+import { isAuthorizedCronCall } from "../_shared/workers.ts";
 import {
   classifyTikTokPublishError,
   ensureCreatorAllowsPost,
@@ -10,6 +12,7 @@ import {
   getTikTokPublishBlock,
   initDirectPost,
   isBlockedPublishStatus,
+  nextTikTokRetryDelayMinutes,
   queryCreatorInfo,
   type TikTokPublishBlockStatus,
   uploadChunks,
@@ -18,6 +21,8 @@ import {
 type Post = {
   id: string;
   account_id: string;
+  library_item_id: string | null;
+  final_asset_id: string | null;
   video_url: string | null;
   caption: string;
   hashtags: string[] | null;
@@ -45,10 +50,26 @@ function titleForPost(post: Post): string {
   return `${post.caption || ""} ${hashtags}`.trim().slice(0, 2200);
 }
 
+async function markLinkedLibraryPosted(post: Post): Promise<void> {
+  if (!post.library_item_id) return;
+  const supabase = getSupabaseAdmin();
+  const updated = await supabase
+    .from("video_library_items")
+    .update({ status: "posted", updated_at: new Date().toISOString() })
+    .eq("id", post.library_item_id);
+  if (updated.error) throw updated.error;
+}
+
 async function applyPublishStatus(post: Post, accessToken: string) {
   const supabase = getSupabaseAdmin();
   if (!post.tiktok_publish_id) {
-    return { id: post.id, status: "missing_publish_id" };
+    return {
+      id: post.id,
+      status: "missing_publish_id",
+      publishId: null,
+      error: "Post is missing a TikTok publish id.",
+      errorDetail: null,
+    };
   }
   const status = await fetchPublishStatus(accessToken, post.tiktok_publish_id);
   const data = status.data;
@@ -70,7 +91,15 @@ async function applyPublishStatus(post: Post, accessToken: string) {
       })
       .eq("id", post.id);
     if (updated.error) throw updated.error;
-    return { id: post.id, status: data.status, publicPostIds: publicIds };
+    await markLinkedLibraryPosted(post);
+    return {
+      id: post.id,
+      status: data.status,
+      publishId: post.tiktok_publish_id,
+      publicPostIds: publicIds,
+      error: null,
+      errorDetail: null,
+    };
   }
 
   if (data.status === "FAILED") {
@@ -84,7 +113,14 @@ async function applyPublishStatus(post: Post, accessToken: string) {
       })
       .eq("id", post.id);
     if (updated.error) throw updated.error;
-    return { id: post.id, status: data.status, reason: data.fail_reason };
+    return {
+      id: post.id,
+      status: data.status,
+      publishId: post.tiktok_publish_id,
+      reason: data.fail_reason,
+      error: data.fail_reason ?? "TikTok publish failed.",
+      errorDetail: null,
+    };
   }
 
   const updated = await supabase
@@ -92,7 +128,13 @@ async function applyPublishStatus(post: Post, accessToken: string) {
     .update({ status: "posting", publish_status: "processing" })
     .eq("id", post.id);
   if (updated.error) throw updated.error;
-  return { id: post.id, status: data.status };
+  return {
+    id: post.id,
+    status: data.status,
+    publishId: post.tiktok_publish_id,
+    error: null,
+    errorDetail: null,
+  };
 }
 
 async function blockPost(
@@ -123,7 +165,7 @@ async function blockPost(
 async function backoffPost(post: Post, error: unknown) {
   const supabase = getSupabaseAdmin();
   const retries = (post.retry_count ?? 0) + 1;
-  const delayMinutes = Math.min(240, 5 * 2 ** Math.min(retries, 5));
+  const delayMinutes = nextTikTokRetryDelayMinutes(post.retry_count ?? 0);
   const message = error instanceof Error ? error.message : String(error);
   const updated = await supabase
     .from("posts")
@@ -173,10 +215,25 @@ async function handlePublishError(post: Post, error: unknown) {
   return failPost(post, error);
 }
 
+async function resolvePublishVideoUrl(post: Post): Promise<string | null> {
+  if (!post.final_asset_id) return post.video_url;
+  const refreshed = await refreshStoredAssetSignedUrl(post.final_asset_id);
+  if (!refreshed) return post.video_url;
+  if (refreshed !== post.video_url) {
+    const supabase = getSupabaseAdmin();
+    const updated = await supabase.from("posts").update({ video_url: refreshed }).eq("id", post.id);
+    if (updated.error) throw updated.error;
+  }
+  return refreshed;
+}
+
 async function publishPost(post: Post) {
-  const block = getTikTokPublishBlock(post);
+  const videoUrl = await resolvePublishVideoUrl(post);
+  if (!videoUrl) {
+    return blockPost(post, "blocked_missing_video", "Post is missing a final video URL.");
+  }
+  const block = getTikTokPublishBlock({ ...post, video_url: videoUrl });
   if (block) return blockPost(post, block.publishStatus, block.message);
-  const videoUrl = post.video_url as string;
   const privacyLevel = post.tiktok_privacy_level as string;
 
   const supabase = getSupabaseAdmin();
@@ -262,7 +319,10 @@ Deno.serve(async (request) => {
   const options = handleOptions(request);
   if (options) return options;
   if (request.method !== "POST") {
-    return errorResponse("Method not allowed.", 405);
+    return errorEnvelope("Method not allowed.", "METHOD_NOT_ALLOWED", 405);
+  }
+  if (!(await isAuthorizedCronCall(request))) {
+    return errorEnvelope("Unauthorized cron call", "UNAUTHORIZED_CRON", 401);
   }
 
   const supabase = getSupabaseAdmin();
@@ -315,8 +375,8 @@ Deno.serve(async (request) => {
       detail: { results },
     });
 
-    return jsonResponse({ processed: results.length, results });
+    return okEnvelope({ processed: results.length, results });
   } catch (error) {
-    return errorResponse(error);
+    return errorEnvelope(error, "PUBLISH_TIKTOK_DUE_FAILED", 500);
   }
 });

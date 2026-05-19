@@ -322,6 +322,8 @@ export function createRegenerationReset(
     render_provider: null,
     render_job_id: null,
     provider_request_id: null,
+    duration_tolerance_seconds_used: null,
+    perceptual_hash: null,
     post_id: null,
     locked_at: null,
     locked_by: null,

@@ -5,7 +5,8 @@
 //   - all-stock & filled → "picking_stock" (orchestrator will skip directly to stitch)
 //   - mixed/seedance with pending segments → "planning" (orchestrator dispatches seedance)
 
-import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import { handleOptions } from "../_shared/cors.ts";
+import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
 import { optionalEnv } from "../_shared/env.ts";
 import { createSegmentVisualPlan, normalizeSourceMode } from "../_shared/generation.ts";
 import { candidateDedupeKeys, selectUnique } from "../_shared/sources/dedupe.ts";
@@ -18,9 +19,11 @@ import type {
   SourceType,
 } from "../_shared/sources/types.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
+import { isAuthorizedInternalCall } from "../_shared/internal.ts";
 
 type Segment = {
   source: "stock" | "seedance";
+  sourceType?: SourceType | null;
   url?: string;
   prompt?: string;
   provider?: string | null;
@@ -30,6 +33,10 @@ type Segment = {
   durationSec?: number | null;
   toleranceSec?: number | null;
   reused?: boolean | null;
+  license?: string | null;
+  rightsHolder?: string | null;
+  attribution?: string | null;
+  storagePath?: string | null;
 };
 
 type CandidateSearchEnvelope = {
@@ -48,7 +55,10 @@ function fnUrl(name: string): string {
 async function invokeChild(name: string, body: unknown): Promise<Response> {
   return fetch(fnUrl(name), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "x-cron-secret": optionalEnv("CRON_SECRET") ?? "",
+    },
     body: JSON.stringify(body),
   });
 }
@@ -190,12 +200,14 @@ function sourceTypeForSearch(sourceMode: string): SourceType {
 function buildCandidateSegment(input: {
   candidate: SourceCandidate;
   url: string;
+  storagePath?: string | null;
   query: string;
   reused: boolean;
   toleranceSecondsUsed: number | null;
 }): Segment {
   return {
     source: "stock",
+    sourceType: input.candidate.source_type,
     url: input.url,
     provider: input.candidate.provider,
     externalId: input.candidate.external_id ?? null,
@@ -204,13 +216,22 @@ function buildCandidateSegment(input: {
     durationSec: Number(input.candidate.duration_seconds),
     toleranceSec: input.toleranceSecondsUsed,
     reused: input.reused,
+    license: input.candidate.license,
+    rightsHolder: input.candidate.rights_holder ?? null,
+    attribution: input.candidate.attribution ?? null,
+    storagePath: input.storagePath ?? input.candidate.storage_path ?? null,
   };
 }
 
 Deno.serve(async (request) => {
   const opt = handleOptions(request);
   if (opt) return opt;
-  if (request.method !== "POST") return errorResponse("Method not allowed", 405);
+  if (request.method !== "POST") {
+    return errorEnvelope("Method not allowed", "METHOD_NOT_ALLOWED", 405);
+  }
+  if (!isAuthorizedInternalCall(request)) {
+    return errorEnvelope("Unauthorized internal call.", "UNAUTHORIZED_INTERNAL", 401);
+  }
 
   try {
     const body = (await request.json()) as { itemId?: string };
@@ -327,6 +348,7 @@ Deno.serve(async (request) => {
             buildCandidateSegment({
               candidate: selected.candidate,
               url: cached.url,
+              storagePath: cached.storage_path,
               query: visualPlan.query,
               reused: selected.reused,
               toleranceSecondsUsed:
@@ -380,13 +402,16 @@ Deno.serve(async (request) => {
       .eq("id", body.itemId);
     if (updated.error) throw updated.error;
 
-    return jsonResponse({
-      ok: true,
+    return okEnvelope({
       itemId: body.itemId,
       segments,
       allFilled,
     });
   } catch (error) {
-    return errorResponse(error);
+    const message = error instanceof Error ? error.message : String(error);
+    const code = /No stock candidates|tolerance/i.test(message)
+      ? "TOLERANCE_EXCEEDED"
+      : "PICK_SOURCE_CLIP_FAILED";
+    return errorEnvelope(error, code, 500);
   }
 });

@@ -1,0 +1,15 @@
+{
+  "data": {
+    "creator_username": "fanagent_e2e",
+    "privacy_level_options": ["SELF_ONLY", "MUTUAL_FOLLOW_FRIENDS", "PUBLIC_TO_EVERYONE"],
+    "comment_disabled": false,
+    "duet_disabled": true,
+    "stitch_disabled": true,
+    "max_video_post_duration_sec": 600
+  },
+  "error": {
+    "code": "ok",
+    "message": "",
+    "log_id": "fixture"
+  }
+}

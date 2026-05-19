@@ -1,12 +1,15 @@
 // Verify storage object + register a project_assets row owned by the caller.
 import { createClient } from "npm:@supabase/supabase-js@2.105.4";
-import { corsHeaders, errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import { handleOptions } from "../_shared/cors.ts";
+import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
 Deno.serve(async (req) => {
   const opt = handleOptions(req);
   if (opt) return opt;
-  if (req.method !== "POST") return errorResponse("Method not allowed", 405);
+  if (req.method !== "POST") {
+    return errorEnvelope("Method not allowed", "METHOD_NOT_ALLOWED", 405);
+  }
 
   try {
     const auth = req.headers.get("Authorization") ?? "";
@@ -23,21 +26,38 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json() as {
-      storagePath: string;
-      mimeType: string;
-      fileName: string;
-      byteSize: number;
-      durationMs: number;
+      storagePath?: string;
+      mimeType?: string;
+      fileName?: string;
+      byteSize?: number;
+      durationMs?: number;
       kind?: "audio" | "audio_trimmed";
       bucket?: string;
     };
+    if (
+      !body.storagePath ||
+      !body.mimeType ||
+      !body.fileName ||
+      typeof body.byteSize !== "number" ||
+      typeof body.durationMs !== "number"
+    ) {
+      return errorEnvelope(
+        "storagePath, mimeType, fileName, byteSize, and durationMs are required",
+        "AUDIO_REGISTER_REQUEST_INVALID",
+        400,
+      );
+    }
 
     const admin = getSupabaseAdmin();
     const bucket = body.bucket || "audio-uploads";
     // Verify object exists
     const head = await admin.storage.from(bucket).createSignedUrl(body.storagePath, 60);
     if (head.error || !head.data?.signedUrl) {
-      return errorResponse(`Storage object not found: ${body.storagePath}`, 404);
+      return errorEnvelope(
+        `Storage object not found: ${body.storagePath}`,
+        "STORAGE_OBJECT_NOT_FOUND",
+        404,
+      );
     }
 
     const ins = await admin.from("project_assets").insert({
@@ -53,10 +73,8 @@ Deno.serve(async (req) => {
     if (ins.error) throw ins.error;
 
     const signed = await admin.storage.from(bucket).createSignedUrl(body.storagePath, 3600);
-    return jsonResponse({ id: ins.data.id, signedUrl: signed.data?.signedUrl ?? null });
+    return okEnvelope({ id: ins.data.id, signedUrl: signed.data?.signedUrl ?? null });
   } catch (e) {
-    return errorResponse(e);
+    return errorEnvelope(e, "KANVAS_LYRICS_AUDIO_REGISTER_FAILED", 500);
   }
 });
-// Re-export to avoid lint complaining about unused import
-export const _ = corsHeaders;

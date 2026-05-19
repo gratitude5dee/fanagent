@@ -4,17 +4,26 @@ import interactionPlugin, { Draggable, type DropArg } from "@fullcalendar/intera
 import FullCalendar from "@fullcalendar/react";
 import timeGridPlugin from "@fullcalendar/timegrid";
 import type { EventDropArg, EventInput } from "@fullcalendar/core";
+import type { CalendarView } from "@/lib/calendar/posts";
 
 type FanAgentCalendarProps = {
   events: EventInput[];
+  view: Exclude<CalendarView, "agenda">;
   onEventDrop: (arg: EventDropArg) => void;
   onEventClick: (postId: string) => void;
   externalLibraryContainerRef?: RefObject<HTMLElement | null>;
   onExternalLibraryDrop?: (libraryItemId: string, scheduledAt: Date) => void;
 };
 
+const fullCalendarView: Record<Exclude<CalendarView, "agenda">, string> = {
+  month: "dayGridMonth",
+  week: "timeGridWeek",
+  day: "timeGridDay",
+};
+
 export default function FanAgentCalendar({
   events,
+  view,
   onEventDrop,
   onEventClick,
   externalLibraryContainerRef,
@@ -40,8 +49,9 @@ export default function FanAgentCalendar({
 
   return (
     <FullCalendar
+      key={view}
       plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-      initialView="timeGridWeek"
+      initialView={fullCalendarView[view]}
       height="auto"
       editable
       selectable
@@ -54,7 +64,7 @@ export default function FanAgentCalendar({
       headerToolbar={{
         left: "prev,next today",
         center: "title",
-        right: "dayGridMonth,timeGridWeek,timeGridDay",
+        right: "",
       }}
     />
   );

@@ -5,6 +5,7 @@ type SportsAdapterSettings = {
   league?: string;
   team?: string;
   allowedChannels?: string[] | string;
+  ownerAssetUrls?: Record<string, string> | Array<{ videoId?: string; url?: string }>;
   publishedAfter?: string;
   maxAgeDays?: number;
 };
@@ -66,6 +67,29 @@ export function parseYouTubeDurationSeconds(duration: string | undefined): numbe
   return hours * 3600 + minutes * 60 + seconds;
 }
 
+function validOwnerAssetUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function ownerAssetUrlForVideo(
+  videoId: string,
+  settings: SportsAdapterSettings,
+): string | null {
+  const configured = settings.ownerAssetUrls;
+  if (!configured) return null;
+  if (Array.isArray(configured)) {
+    const match = configured.find((entry) => entry.videoId === videoId);
+    return validOwnerAssetUrl(match?.url);
+  }
+  return validOwnerAssetUrl(configured[videoId]);
+}
+
 function isLikelyPortrait(video: YouTubeVideo): boolean {
   const text = `${video.snippet?.title ?? ""} ${video.snippet?.description ?? ""}`.toLowerCase();
   return /#shorts?\b|vertical|9:16|short-form/.test(text);
@@ -86,36 +110,35 @@ function bestThumbnail(video: YouTubeVideo): string | null {
 export function youtubeVideoToCandidate(input: {
   video: YouTubeVideo;
   requestedChannel: string;
+  ownerAssetUrl?: string | null;
 }): SourceCandidate {
   const url = `https://www.youtube.com/watch?v=${encodeURIComponent(input.video.id)}`;
   const duration = parseYouTubeDurationSeconds(input.video.contentDetails?.duration);
   const channelTitle = input.video.snippet?.channelTitle ?? input.requestedChannel;
   const channelId = input.video.snippet?.channelId ?? input.requestedChannel;
-  const license =
-    input.video.status?.license === "creativeCommon"
-      ? "youtube_creative_commons"
-      : "youtube_standard";
-
   return {
     source_type: "sports_edit",
     provider: "youtube",
     external_id: input.video.id,
     origin_url: url,
+    cached_url: input.ownerAssetUrl ?? null,
     width: 1080,
     height: isLikelyPortrait(input.video) ? 1920 : 608,
     duration_seconds: duration,
     is_portrait: isLikelyPortrait(input.video),
-    license,
+    license: "youtube_owner_provided",
     rights_holder: channelTitle,
     attribution: `${channelTitle} - ${url}`,
     metadata: {
       title: input.video.snippet?.title ?? null,
       channel_id: channelId,
       requested_channel: input.requestedChannel,
+      owner_asset_url: input.ownerAssetUrl ?? null,
       published_at: input.video.snippet?.publishedAt ?? null,
       thumbnail_url: bestThumbnail(input.video),
       embeddable: input.video.status?.embeddable ?? null,
       licensed_content: input.video.contentDetails?.licensedContent ?? null,
+      youtube_license: input.video.status?.license ?? null,
       privacy_status: input.video.status?.privacyStatus ?? null,
       official_api: "youtube-data-api-v3",
     },
@@ -232,14 +255,30 @@ export const sportsEditAdapter: SourceAdapter = {
       candidates.push(
         ...videos
           .filter((video) => isAllowedVideo(video, channelId))
-          .map((video) => youtubeVideoToCandidate({ video, requestedChannel: channel })),
+          .map((video) =>
+            youtubeVideoToCandidate({
+              video,
+              requestedChannel: channel,
+              ownerAssetUrl: ownerAssetUrlForVideo(video.id, settings),
+            }),
+          ),
       );
     }
     return candidates;
   },
   async cache(candidate) {
+    const ownerAssetUrl =
+      candidate.cached_url ??
+      (typeof candidate.metadata?.owner_asset_url === "string"
+        ? validOwnerAssetUrl(candidate.metadata.owner_asset_url)
+        : null);
+    if (!ownerAssetUrl) {
+      throw new Error(
+        "sports_edit candidates require an owner-provided MP4 asset URL; public YouTube watch URLs are provenance only.",
+      );
+    }
     return {
-      url: candidate.cached_url ?? candidate.origin_url,
+      url: ownerAssetUrl,
       storage_path: candidate.storage_path,
     };
   },

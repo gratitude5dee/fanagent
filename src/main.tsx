@@ -9,6 +9,7 @@ const LyricsWizard = lazy(() => import("./pages/lyrics/LyricsWizard"));
 const LibraryLanding = lazy(() => import("./pages/library/LibraryLanding"));
 const LibraryDetail = lazy(() => import("./pages/library/LibraryDetail"));
 const CalendarPage = lazy(() => import("./pages/calendar/CalendarPage"));
+const AccountsPage = lazy(() => import("./pages/settings/AccountsPage"));
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -60,6 +61,14 @@ createRoot(document.getElementById("root")!).render(
           element={
             <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
               <CalendarPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/settings/accounts"
+          element={
+            <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
+              <AccountsPage />
             </Suspense>
           }
         />

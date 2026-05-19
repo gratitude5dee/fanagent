@@ -40,12 +40,21 @@ function adapterSettings(input: AdapterSearchInput): StreamerAdapterSettings {
   return (input.adapterSettings ?? {}) as StreamerAdapterSettings;
 }
 
+export function twitchMp4UrlFromThumbnail(thumbnailUrl: string | undefined): string | null {
+  if (!thumbnailUrl) return null;
+  const cleanUrl = thumbnailUrl.split("?")[0] ?? "";
+  if (!cleanUrl.includes("clips-media-assets")) return null;
+  const mp4Url = cleanUrl.replace(/-preview-\d+x\d+\.jpg$/i, ".mp4");
+  return mp4Url.endsWith(".mp4") ? mp4Url : null;
+}
+
 export function twitchClipToCandidate(input: {
   clip: TwitchClip;
   requestedChannel: string;
 }): SourceCandidate {
   const broadcaster = input.clip.broadcaster_name ?? input.requestedChannel;
   const duration = Number(input.clip.duration ?? 0);
+  const cacheSourceUrl = twitchMp4UrlFromThumbnail(input.clip.thumbnail_url);
   return {
     source_type: "streamer_clip",
     provider: "twitch",
@@ -65,6 +74,7 @@ export function twitchClipToCandidate(input: {
       requested_channel: input.requestedChannel,
       created_at: input.clip.created_at ?? null,
       thumbnail_url: input.clip.thumbnail_url ?? null,
+      cache_source_url: cacheSourceUrl,
       embed_url: input.clip.embed_url ?? null,
       official_api: "twitch-helix",
     },
@@ -161,6 +171,81 @@ function requestedChannels(input: AdapterSearchInput): string[] {
   return requested.filter((channel) => allowed.includes(channel));
 }
 
+async function signedStockCacheUrl(storagePath: string): Promise<string> {
+  const { getSupabaseAdmin } = await import("../supabase.ts");
+  const supabase = getSupabaseAdmin();
+  const signed = await supabase.storage
+    .from("stock-cache")
+    .createSignedUrl(storagePath, 60 * 60 * 24 * 7);
+  if (signed.error || !signed.data?.signedUrl) {
+    throw signed.error ?? new Error("Could not create signed stock-cache URL.");
+  }
+  return signed.data.signedUrl;
+}
+
+async function cacheTwitchClip(candidate: SourceCandidate): Promise<{
+  url: string;
+  storage_path: string;
+}> {
+  if (candidate.storage_path) {
+    return {
+      url: candidate.cached_url ?? (await signedStockCacheUrl(candidate.storage_path)),
+      storage_path: candidate.storage_path,
+    };
+  }
+
+  const sourceUrl =
+    typeof candidate.metadata?.cache_source_url === "string"
+      ? candidate.metadata.cache_source_url
+      : twitchMp4UrlFromThumbnail(
+          typeof candidate.metadata?.thumbnail_url === "string"
+            ? candidate.metadata.thumbnail_url
+            : undefined,
+        );
+  if (!sourceUrl) {
+    throw new Error("streamer_clip candidates require a cacheable Twitch clip MP4 URL.");
+  }
+
+  const externalId = candidate.external_id ?? candidate.id ?? crypto.randomUUID();
+  const storagePath = `twitch/${String(externalId).replace(/[^\w.-]/g, "_")}.mp4`;
+  const { downloadBytes } = await import("../assets.ts");
+  const bytes = await downloadBytes(sourceUrl);
+  if (bytes.bytes.byteLength > 190 * 1024 * 1024) {
+    throw new Error("Twitch clip exceeds the stock-cache 200MB storage limit.");
+  }
+
+  const { getSupabaseAdmin } = await import("../supabase.ts");
+  const supabase = getSupabaseAdmin();
+  const upload = await supabase.storage.from("stock-cache").upload(storagePath, bytes.bytes, {
+    contentType: bytes.mimeType === "application/octet-stream" ? "video/mp4" : bytes.mimeType,
+    cacheControl: "604800",
+    upsert: true,
+  });
+  if (upload.error) throw upload.error;
+
+  const cachedUrl = await signedStockCacheUrl(storagePath);
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  if (candidate.id) {
+    const updated = await supabase
+      .from("source_candidates")
+      .update({
+        cached_url: cachedUrl,
+        storage_bucket: "stock-cache",
+        storage_path: storagePath,
+        expires_at: expiresAt,
+        metadata: {
+          ...(candidate.metadata ?? {}),
+          cache_source_url: sourceUrl,
+          cached_at: new Date().toISOString(),
+        },
+      })
+      .eq("id", candidate.id);
+    if (updated.error) throw updated.error;
+  }
+
+  return { url: cachedUrl, storage_path: storagePath };
+}
+
 export const streamerClipAdapter: SourceAdapter = {
   type: "streamer_clip",
   async search(input) {
@@ -194,10 +279,7 @@ export const streamerClipAdapter: SourceAdapter = {
     return candidates;
   },
   async cache(candidate) {
-    return {
-      url: candidate.cached_url ?? candidate.origin_url,
-      storage_path: candidate.storage_path,
-    };
+    return cacheTwitchClip(candidate);
   },
   describeLicense(candidate) {
     return {

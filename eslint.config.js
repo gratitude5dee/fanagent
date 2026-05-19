@@ -82,4 +82,14 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    files: ["playwright.config.ts", "tests-e2e/**/*.ts"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+      },
+    },
+  },
 );

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { filterByDuration, filterPortrait } from "../supabase/functions/_shared/sources/filters.ts";
 import {
   candidateDedupeKeys,
@@ -10,6 +11,7 @@ import {
   sourceAdapterTypes,
 } from "../supabase/functions/_shared/sources/registry.ts";
 import type { SourceCandidate } from "../supabase/functions/_shared/sources/types.ts";
+import { isAllowedSourceLicense } from "../supabase/functions/_shared/sources/types.ts";
 
 const candidates: SourceCandidate[] = [
   {
@@ -148,5 +150,25 @@ describe("source adapter registry", () => {
     ]);
     expect(getSourceAdapter("stock").type).toBe("stock");
     expect(getSourceAdapter("streamer_clip").type).toBe("streamer_clip");
+  });
+
+  it("keeps source licenses inside the rights contract", () => {
+    expect(isAllowedSourceLicense("pexels")).toBe(true);
+    expect(isAllowedSourceLicense("youtube_owner_provided")).toBe(true);
+    expect(isAllowedSourceLicense("twitch_creator_rights")).toBe(true);
+    expect(isAllowedSourceLicense("youtube_standard")).toBe(false);
+  });
+
+  it("carries selected candidate rights metadata into generation segments", () => {
+    const source = readFileSync("supabase/functions/pick-stock-clip/index.ts", "utf8");
+
+    expect(source).toContain("sourceType: input.candidate.source_type");
+    expect(source).toContain("license: input.candidate.license");
+    expect(source).toContain("rightsHolder: input.candidate.rights_holder ?? null");
+    expect(source).toContain("attribution: input.candidate.attribution ?? null");
+    expect(source).toContain(
+      "storagePath: input.storagePath ?? input.candidate.storage_path ?? null",
+    );
+    expect(source).toContain("storagePath: cached.storage_path");
   });
 });

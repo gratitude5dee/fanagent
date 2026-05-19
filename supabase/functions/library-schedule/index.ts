@@ -1,5 +1,6 @@
 import { handleOptions } from "../_shared/cors.ts";
 import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
+import { refreshRenderableAssetUrls } from "../_shared/schedule-assets.ts";
 import { buildScheduledPostRow, scheduledPostResponse } from "../_shared/schedule.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
@@ -68,6 +69,7 @@ Deno.serve(async (request) => {
         assetById.set(String(asset.id), asset);
       }
     }
+    const refreshedAssetById = await refreshRenderableAssetUrls(assetById);
 
     const rows: Record<string, unknown>[] = [];
     const blockedReasons: BlockedReason[] = [];
@@ -87,7 +89,9 @@ Deno.serve(async (request) => {
           buildScheduledPostRow({
             item,
             asset:
-              typeof item.final_asset_id === "string" ? assetById.get(item.final_asset_id) : null,
+              typeof item.final_asset_id === "string"
+                ? refreshedAssetById.get(item.final_asset_id)
+                : null,
             scheduledAt: requestedItem.scheduledAt ?? "",
             caption: requestedItem.caption,
             hashtags: requestedItem.hashtags,
@@ -121,7 +125,9 @@ Deno.serve(async (request) => {
     const posts = ((insertedPosts.data ?? []) as Record<string, unknown>[]).map((post) =>
       scheduledPostResponse(
         post,
-        typeof post.final_asset_id === "string" ? assetById.get(post.final_asset_id) : null,
+        typeof post.final_asset_id === "string"
+          ? refreshedAssetById.get(post.final_asset_id)
+          : null,
       ),
     );
     return okEnvelope({ posts, blocked: blockedReasons, blockedReasons });

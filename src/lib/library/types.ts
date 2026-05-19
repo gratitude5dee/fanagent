@@ -10,13 +10,23 @@ export type LibraryStatus =
 
 export type LibrarySegment = {
   source?: string | null;
+  sourceType?: string | null;
+  source_type?: string | null;
   url?: string | null;
   provider?: string | null;
   externalId?: string | null;
+  external_id?: string | null;
   query?: string | null;
   durationSec?: number | null;
+  duration_seconds?: number | null;
+  toleranceSec?: number | null;
+  tolerance_seconds_used?: number | null;
   reused?: boolean | null;
   prompt?: string | null;
+  license?: string | null;
+  rightsHolder?: string | null;
+  rights_holder?: string | null;
+  attribution?: string | null;
 };
 
 export type MediaAsset = {
@@ -70,6 +80,7 @@ export type LibraryItem = {
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  next_scheduled_at?: string | null;
   media?: MediaAsset | null;
 };
 

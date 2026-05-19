@@ -1,25 +1,11 @@
 import { CalendarClock, Info, Loader2 } from "lucide-react";
 import type { Duration } from "./UploadStep";
-
-export type SourceMode =
-  | "stock"
-  | "seedance"
-  | "mixed"
-  | "gmi_seedance"
-  | "sports_edit"
-  | "streamer_clip";
+import type { SourceMode, SourceOption } from "@/lib/fanagent/sourceMode";
 
 type StockProviders = {
   library: boolean;
   pexels: boolean;
   pixabay: boolean;
-};
-
-type SourceOption = {
-  value: SourceMode;
-  label: string;
-  disabled?: boolean;
-  reason?: string;
 };
 
 type CampaignStepProps = {
@@ -29,10 +15,15 @@ type CampaignStepProps = {
   postCount: number;
   prompt: string;
   publishPrivacy: string;
+  lyricTemplateReady: boolean;
   schemaReady: boolean;
   seedanceResolution: "480p" | "720p" | "1080p";
   sourceMode: SourceMode;
   sourceOptions: SourceOption[];
+  sportsAllowedChannels: string;
+  sportsLeague: string;
+  sportsOwnerAssetUrls: string;
+  sportsTeam: string;
   startAt: string;
   stockAllowReuse: boolean;
   stockAvoidReuse: boolean;
@@ -42,6 +33,8 @@ type CampaignStepProps = {
   stockNegativeKeywords: string;
   stockPortraitOnly: boolean;
   stockProviders: StockProviders;
+  streamerAllowedChannels: string;
+  streamerName: string;
   trimmedAudioReady: boolean;
   onCadenceMinutes: (value: number) => void;
   onPostCount: (value: number) => void;
@@ -49,6 +42,10 @@ type CampaignStepProps = {
   onPublishPrivacy: (value: string) => void;
   onSeedanceResolution: (value: "480p" | "720p" | "1080p") => void;
   onSourceMode: (value: SourceMode) => void;
+  onSportsAllowedChannels: (value: string) => void;
+  onSportsLeague: (value: string) => void;
+  onSportsOwnerAssetUrls: (value: string) => void;
+  onSportsTeam: (value: string) => void;
   onStartAt: (value: string) => void;
   onStockAllowReuse: (value: boolean) => void;
   onStockAvoidReuse: (value: boolean) => void;
@@ -58,6 +55,8 @@ type CampaignStepProps = {
   onStockNegativeKeywords: (value: string) => void;
   onStockPortraitOnly: (value: boolean) => void;
   onStockProviders: (value: StockProviders) => void;
+  onStreamerAllowedChannels: (value: string) => void;
+  onStreamerName: (value: string) => void;
 };
 
 export function CampaignStep(props: CampaignStepProps) {
@@ -204,6 +203,65 @@ export function CampaignStep(props: CampaignStepProps) {
               />
             </label>
           </div>
+          {props.sourceMode === "sports_edit" ? (
+            <>
+              <div className="split">
+                <label>
+                  League
+                  <input
+                    value={props.sportsLeague}
+                    onChange={(e) => props.onSportsLeague(e.target.value)}
+                    placeholder="NBA, WNBA, EPL"
+                  />
+                </label>
+                <label>
+                  Team
+                  <input
+                    value={props.sportsTeam}
+                    onChange={(e) => props.onSportsTeam(e.target.value)}
+                    placeholder="Lakers, Liberty"
+                  />
+                </label>
+              </div>
+              <label>
+                Allowed YouTube channels
+                <input
+                  value={props.sportsAllowedChannels}
+                  onChange={(e) => props.onSportsAllowedChannels(e.target.value)}
+                  placeholder="UC..., @officialchannel"
+                />
+              </label>
+              <label>
+                Owner MP4 asset URLs
+                <textarea
+                  rows={3}
+                  value={props.sportsOwnerAssetUrls}
+                  onChange={(e) => props.onSportsOwnerAssetUrls(e.target.value)}
+                  placeholder="youtubeVideoId=https://cdn.example.com/owned-edit.mp4"
+                />
+              </label>
+            </>
+          ) : null}
+          {props.sourceMode === "streamer_clip" ? (
+            <div className="split">
+              <label>
+                Streamer
+                <input
+                  value={props.streamerName}
+                  onChange={(e) => props.onStreamerName(e.target.value)}
+                  placeholder="creatorname"
+                />
+              </label>
+              <label>
+                Allowed Twitch channels
+                <input
+                  value={props.streamerAllowedChannels}
+                  onChange={(e) => props.onStreamerAllowedChannels(e.target.value)}
+                  placeholder="creatorname, teammate"
+                />
+              </label>
+            </div>
+          ) : null}
           <label>
             fal Seedance resolution
             <select
@@ -245,7 +303,12 @@ export function CampaignStep(props: CampaignStepProps) {
         ) : null}
         <button
           className="button primary"
-          disabled={props.busy || !props.trimmedAudioReady || !props.schemaReady}
+          disabled={
+            props.busy ||
+            !props.trimmedAudioReady ||
+            !props.lyricTemplateReady ||
+            !props.schemaReady
+          }
           type="submit"
         >
           {props.busy ? <Loader2 className="spin" size={16} /> : <CalendarClock size={16} />}{" "}

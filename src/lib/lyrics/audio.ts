@@ -31,8 +31,12 @@ export async function decodePeaks(
   buckets = 240,
 ): Promise<{ peaks: number[]; durationSec: number }> {
   const Ctx: typeof AudioContext =
-    (window as unknown as { AudioContext: typeof AudioContext; webkitAudioContext: typeof AudioContext })
-      .AudioContext ??
+    (
+      window as unknown as {
+        AudioContext: typeof AudioContext;
+        webkitAudioContext: typeof AudioContext;
+      }
+    ).AudioContext ??
     (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   const ctx = new Ctx();
   try {
@@ -62,8 +66,12 @@ export async function decodePeaks(
 
 export async function sliceToWav(file: File, startSec: number, endSec: number): Promise<Blob> {
   const Ctx: typeof AudioContext =
-    (window as unknown as { AudioContext: typeof AudioContext; webkitAudioContext: typeof AudioContext })
-      .AudioContext ??
+    (
+      window as unknown as {
+        AudioContext: typeof AudioContext;
+        webkitAudioContext: typeof AudioContext;
+      }
+    ).AudioContext ??
     (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   const ctx = new Ctx();
   const buf = await file.arrayBuffer();

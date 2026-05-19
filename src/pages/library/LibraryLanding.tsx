@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, Home, Library, RefreshCcw, Search } from "lucide-react";
+import { ArrowRight, Home, Library, PlugZap, RefreshCcw, Search } from "lucide-react";
 import { listAudioClips, type AudioClipSummary } from "@/lib/library/api";
 import { displayError } from "@/lib/errors";
 
@@ -66,6 +66,9 @@ export default function LibraryLanding() {
         <div className="topbar-actions">
           <Link className="button ghost" to="/">
             <Home size={14} /> Home
+          </Link>
+          <Link className="button ghost" to="/settings/accounts">
+            <PlugZap size={14} /> Accounts
           </Link>
           <button className="button ghost" type="button" disabled={busy} onClick={refresh}>
             <RefreshCcw className={busy ? "spin" : undefined} size={14} /> Refresh

@@ -2,7 +2,8 @@
 // word-timed lyric blocks. Falls back gracefully on errors so the UI can offer
 // manual entry.
 import { createClient } from "npm:@supabase/supabase-js@2.105.4";
-import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import { handleOptions } from "../_shared/cors.ts";
+import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
 type Word = { id: string; text: string; startTime: number; endTime: number; confidence?: number };
@@ -81,7 +82,9 @@ function wordsToBlocks(words: Word[]): Block[] {
 Deno.serve(async (req) => {
   const opt = handleOptions(req);
   if (opt) return opt;
-  if (req.method !== "POST") return errorResponse("Method not allowed", 405);
+  if (req.method !== "POST") {
+    return errorEnvelope("Method not allowed", "METHOD_NOT_ALLOWED", 405);
+  }
 
   try {
     const auth = req.headers.get("Authorization") ?? "";
@@ -97,18 +100,23 @@ Deno.serve(async (req) => {
       if (userRes?.user) userId = userRes.user.id;
     }
 
-    const body = await req.json() as { templateId: string; force?: boolean };
+    const body = await req.json() as { templateId?: string; force?: boolean };
+    if (!body.templateId) {
+      return errorEnvelope("templateId is required", "TEMPLATE_ID_REQUIRED", 400);
+    }
 
     const admin = getSupabaseAdmin();
     const tpl = await admin.from("kanvas_lyric_templates")
       .select("*").eq("id", body.templateId).eq("user_id", userId).single();
     if (tpl.error) throw tpl.error;
     if (!body.force && tpl.data.lyric_blocks?.length) {
-      return jsonResponse({ template: tpl.data });
+      return okEnvelope({ template: tpl.data });
     }
 
     const assetId = tpl.data.trimmed_audio_asset_id;
-    if (!assetId) return errorResponse("Template has no trimmed audio.", 400);
+    if (!assetId) {
+      return errorEnvelope("Template has no trimmed audio.", "TEMPLATE_AUDIO_MISSING", 400);
+    }
     const asset = await admin.from("project_assets")
       .select("storage_bucket,storage_path").eq("id", assetId).single();
     if (asset.error) throw asset.error;
@@ -144,7 +152,7 @@ Deno.serve(async (req) => {
       const updated = await admin.from("kanvas_lyric_templates").update({
         status: "failed", error_message: errorMsg,
       }).eq("id", body.templateId).select("*").single();
-      return jsonResponse({ template: updated.data });
+      return okEnvelope({ template: updated.data });
     }
 
     const blocks = wordsToBlocks(result.words);
@@ -159,8 +167,8 @@ Deno.serve(async (req) => {
       error_message: null,
     }).eq("id", body.templateId).select("*").single();
 
-    return jsonResponse({ template: updated.data });
+    return okEnvelope({ template: updated.data });
   } catch (e) {
-    return errorResponse(e);
+    return errorEnvelope(e, "KANVAS_LYRICS_TRANSCRIBE_FAILED", 500);
   }
 });

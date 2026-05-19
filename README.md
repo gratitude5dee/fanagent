@@ -10,7 +10,7 @@ FanAgent v2 turns one trimmed audio clip into a reusable library of finalized ly
 2. Upload audio, trim one 15/30/45/60/75/90 second clip, and review the lyric template.
 3. Generate a video library with stock, library, Seedance, GMI Seedance, sports-edit, or streamer-clip sources.
 4. Review finalized videos at `/library` or `/library/:audioClipId`, including provenance, duration, reuse flags, regenerate, and segment replacement.
-5. Schedule ready library items from `/calendar` with drag/drop or bulk cadence/window tools.
+5. Schedule ready library items from `/calendar` with drag/drop or bulk cadence/window tools, including optional jitter to avoid robotic posting times.
 6. Let `fanpage-publish-due` publish due posts through TikTok Direct Post.
 
 Publishing failures are isolated from generation. Posts stay `pending` with actionable `publish_status` values such as `blocked_account_not_connected`, `blocked_missing_privacy`, `blocked_creator_restriction`, `blocked_missing_video`, or `retry_scheduled`; the library item remains intact.
@@ -64,7 +64,7 @@ SITE_URL=...
 
 Stock generation can run with either `PEXELS_API_KEY` or `PIXABAY_API_KEY`; both improves coverage. `FAL_KEY` is required for Seedance segments and ffmpeg-based audio/video composition. `GMI_*`, `ELEVENLABS_API_KEY`, and `LOVABLE_API_KEY` are optional feature enrichments surfaced by the dashboard preflight panel.
 
-Sports and streamer adapters are disabled until their official API credentials and allowlists are set. `sports_edit` uses YouTube Data API metadata from allowed owned or licensed channels. `streamer_clip` uses Twitch Helix clips for explicitly allowed creators and stores creator attribution in source provenance.
+Sports and streamer adapters are disabled until their official API credentials and allowlists are set. `sports_edit` uses YouTube Data API metadata from allowed owned or licensed channels, but rendering requires owner-provided MP4 asset URLs; public YouTube watch URLs are provenance only. `streamer_clip` uses Twitch Helix clips for explicitly allowed creators and stores creator attribution in source provenance.
 
 ## Edge Functions
 
@@ -72,7 +72,7 @@ Sports and streamer adapters are disabled until their official API credentials a
 - `audio-clip-register` and `audio-clip-transcribe`: create the user-facing audio clip and transcription state.
 - `source-candidate-search` and `source-candidate-replace`: search/cache adapter candidates and replace one segment.
 - `library-finalize`, `library-schedule`, and `library-bulk-schedule`: materialize finalized library items and calendar posts.
-- `fanpage-generate-due`: claims due queue rows, handles stock/fal/GMI generation, stores durable final MP4s in Supabase Storage, and creates pending posts.
+- `fanpage-generate-due`: claims due queue rows, handles stock/fal/GMI generation, stores durable final MP4s in Supabase Storage, and finalizes `video_library_items`.
 - `publish-tiktok-due`: publishes due posts through TikTok Direct Post and polls in-flight publish IDs.
 - `tiktok-oauth-callback`: starts and completes TikTok OAuth.
 - `update-post-schedule`: edits scheduled time, caption, hashtags, privacy, and interaction settings.

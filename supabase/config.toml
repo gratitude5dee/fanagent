@@ -12,6 +12,9 @@ verify_jwt = false
 [functions.fanpage-publish-due]
 verify_jwt = false
 
+[functions.process-generation-due]
+verify_jwt = false
+
 [functions.create-generation-batch]
 verify_jwt = false
 

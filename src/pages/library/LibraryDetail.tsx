@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
-import { ArrowLeft, Home, Library, RefreshCcw } from "lucide-react";
+import { ArrowLeft, Home, Library, PlugZap, RefreshCcw } from "lucide-react";
+import BulkScheduleDialog from "@/components/calendar/BulkScheduleDialog";
 import LibraryGrid from "@/components/library/LibraryGrid";
 import SegmentReplaceDialog from "@/components/library/SegmentReplaceDialog";
+import SingleScheduleDialog from "@/components/library/SingleScheduleDialog";
 import {
   getLibraryDetail,
+  markLibraryItemUnfit,
   regenerateGenerationItems,
   type LibraryDetail as LibraryDetailData,
 } from "@/lib/library/api";
@@ -24,6 +27,8 @@ export default function LibraryDetail() {
     item: LibraryItem;
     segmentIndex: number;
   } | null>(null);
+  const [bulkScheduleTargetIds, setBulkScheduleTargetIds] = useState<string[]>([]);
+  const [singleScheduleTarget, setSingleScheduleTarget] = useState<LibraryItem | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -86,6 +91,30 @@ export default function LibraryDetail() {
     regenerate([item.generation_item_id]);
   }
 
+  async function markUnfit(item: LibraryItem) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await markLibraryItemUnfit(item.id);
+      setSelectedIds((current) => {
+        const next = new Set(current);
+        next.delete(item.id);
+        return next;
+      });
+      await refresh();
+      setMessage(`Marked clip ${item.library_index + 1} as unfit.`);
+    } catch (error) {
+      setMessage(displayError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openBulkScheduleDialog(libraryItemIds: string[]) {
+    if (libraryItemIds.length === 0) return;
+    setBulkScheduleTargetIds(libraryItemIds);
+  }
+
   return (
     <main className="app-shell library-shell">
       <header className="topbar">
@@ -103,6 +132,9 @@ export default function LibraryDetail() {
           </Link>
           <Link className="button ghost" to="/">
             <Home size={14} /> Home
+          </Link>
+          <Link className="button ghost" to="/settings/accounts">
+            <PlugZap size={14} /> Accounts
           </Link>
           <button className="button ghost" type="button" disabled={busy} onClick={refresh}>
             <RefreshCcw className={busy ? "spin" : undefined} size={14} /> Refresh
@@ -126,9 +158,12 @@ export default function LibraryDetail() {
           onToggle={toggleItem}
           onSelectMany={selectMany}
           onClearSelection={() => setSelectedIds(new Set())}
+          onBulkSchedule={openBulkScheduleDialog}
           onBulkRegenerate={regenerate}
           onRegenerate={regenerateOne}
+          onMarkUnfit={markUnfit}
           onReplaceSegment={(item, segmentIndex) => setReplaceTarget({ item, segmentIndex })}
+          onSchedule={setSingleScheduleTarget}
         />
       )}
 
@@ -142,6 +177,29 @@ export default function LibraryDetail() {
           refresh();
         }}
       />
+
+      {bulkScheduleTargetIds.length > 0 ? (
+        <BulkScheduleDialog
+          libraryItemIds={bulkScheduleTargetIds}
+          onClose={() => setBulkScheduleTargetIds([])}
+          onScheduled={() => {
+            setBulkScheduleTargetIds([]);
+            setSelectedIds(new Set());
+            refresh();
+          }}
+        />
+      ) : null}
+
+      {singleScheduleTarget ? (
+        <SingleScheduleDialog
+          item={singleScheduleTarget}
+          onClose={() => setSingleScheduleTarget(null)}
+          onScheduled={() => {
+            setSingleScheduleTarget(null);
+            refresh();
+          }}
+        />
+      ) : null}
     </main>
   );
 }

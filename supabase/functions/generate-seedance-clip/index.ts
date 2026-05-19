@@ -2,8 +2,11 @@
 // and stores the resulting URL into generation_items.segments[i].url.
 // Input: { itemId, segmentIndex }
 
-import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import { handleOptions } from "../_shared/cors.ts";
+import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
 import { generateSeedanceClip } from "../_shared/fal.ts";
+import { isAuthorizedInternalCall } from "../_shared/internal.ts";
+import { withRenderAttempt } from "../_shared/render-attempts.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
 type Segment = {
@@ -20,7 +23,12 @@ type Segment = {
 Deno.serve(async (request) => {
   const opt = handleOptions(request);
   if (opt) return opt;
-  if (request.method !== "POST") return errorResponse("Method not allowed", 405);
+  if (request.method !== "POST") {
+    return errorEnvelope("Method not allowed", "METHOD_NOT_ALLOWED", 405);
+  }
+  if (!isAuthorizedInternalCall(request)) {
+    return errorEnvelope("Unauthorized internal call.", "UNAUTHORIZED_INTERNAL", 401);
+  }
 
   try {
     const body = (await request.json()) as { itemId?: string; segmentIndex?: number };
@@ -46,13 +54,24 @@ Deno.serve(async (request) => {
       Number(seg.durationSec ?? item.data.duration_seconds ?? 15),
     );
 
-    const url = await generateSeedanceClip(prompt, {
-      durationSeconds,
-      resolution:
-        seedanceSettings.resolution === "480p" || seedanceSettings.resolution === "1080p"
-          ? seedanceSettings.resolution
-          : "720p",
-    });
+    const resolution =
+      seedanceSettings.resolution === "480p" || seedanceSettings.resolution === "1080p"
+        ? seedanceSettings.resolution
+        : "720p";
+    const url = await withRenderAttempt(
+      {
+        generationItemId: body.itemId,
+        stage: "sourcing",
+        provider: "fal_seedance",
+        detail: {
+          action: "generate-seedance-clip",
+          segment_index: idx,
+          duration_seconds: durationSeconds,
+          resolution,
+        },
+      },
+      () => generateSeedanceClip(prompt, { durationSeconds, resolution }),
+    );
     segments[idx] = { ...seg, url };
 
     const updated = await supabase
@@ -61,8 +80,8 @@ Deno.serve(async (request) => {
       .eq("id", body.itemId);
     if (updated.error) throw updated.error;
 
-    return jsonResponse({ ok: true, itemId: body.itemId, segmentIndex: idx, url });
+    return okEnvelope({ itemId: body.itemId, segmentIndex: idx, url });
   } catch (error) {
-    return errorResponse(error);
+    return errorEnvelope(error, "GENERATE_SEEDANCE_CLIP_FAILED", 500);
   }
 });

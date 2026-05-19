@@ -3,21 +3,34 @@
 // ffmpeg-api/compose, then registers the rendered video as a media_asset and
 // marks the item ready. No external Remotion host required.
 
-import { errorResponse, handleOptions, jsonResponse } from "../_shared/cors.ts";
+import { handleOptions } from "../_shared/cors.ts";
+import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
 import { optionalEnv } from "../_shared/env.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 import { composeWithSubtitles, extractFrame } from "../_shared/fal.ts";
-import { downloadBytes, createMediaAssetFromBytes } from "../_shared/assets.ts";
+import { contentFingerprint64 } from "../_shared/hash.ts";
+import { isAuthorizedInternalCall } from "../_shared/internal.ts";
+import { withRenderAttempt } from "../_shared/render-attempts.ts";
+import {
+  createMediaAssetFromBytes,
+  downloadBytes,
+  renderedVideoSignedUrlSeconds,
+  renderedVideoStoragePath,
+} from "../_shared/assets.ts";
+import { blocksToSrt, type RenderLyricBlock } from "../_shared/lyrics.ts";
 
-type Word = {
-  text?: string;
-  word?: string;
-  startMs?: number;
-  endMs?: number;
-  start?: number;
-  end?: number;
+type GenerationItemRow = {
+  id: string;
+  account_id: string;
+  batch_id: string;
+  stock_clip_url: string;
+  input_payload: unknown;
+  duration_seconds: number | null;
+  lyric_template_id: string | null;
+  library_item_id: string | null;
+  audio_clip_id: string | null;
+  item_index: number | null;
 };
-type Block = { text?: string; startMs?: number; endMs?: number; words?: Word[] };
 
 function fnUrl(name: string): string {
   return `${optionalEnv("SUPABASE_URL")}/functions/v1/${name}`;
@@ -26,7 +39,10 @@ function fnUrl(name: string): string {
 async function finalizeLibraryItem(generationItemId: string): Promise<unknown> {
   const response = await fetch(fnUrl("library-finalize"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "x-cron-secret": optionalEnv("CRON_SECRET") ?? "",
+    },
     body: JSON.stringify({ generationItemId }),
   });
   const json = await response.json().catch(() => null);
@@ -36,38 +52,109 @@ async function finalizeLibraryItem(generationItemId: string): Promise<unknown> {
   return json;
 }
 
-function fmtTs(ms: number): string {
-  if (ms < 0) ms = 0;
-  const h = Math.floor(ms / 3_600_000);
-  const m = Math.floor((ms % 3_600_000) / 60_000);
-  const s = Math.floor((ms % 60_000) / 1000);
-  const cs = Math.floor(ms % 1000);
-  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
-  return `${pad(h)}:${pad(m)}:${pad(s)},${pad(cs, 3)}`;
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
-function blocksToSrt(blocks: Block[], selectionStartMs: number, totalSeconds: number): string {
-  const totalMs = totalSeconds * 1000;
-  const cues: { start: number; end: number; text: string }[] = [];
-  for (const b of blocks ?? []) {
-    const text = (b.text ?? (b.words ?? []).map((w) => w.text ?? w.word ?? "").join(" ")).trim();
-    if (!text) continue;
-    const startMs = b.startMs ?? b.words?.[0]?.startMs ?? 0;
-    const endMs = b.endMs ?? b.words?.[b.words.length - 1]?.endMs ?? startMs + 1500;
-    const s = startMs - selectionStartMs;
-    const e = endMs - selectionStartMs;
-    if (e <= 0 || s >= totalMs) continue;
-    cues.push({ start: Math.max(0, s), end: Math.min(totalMs, e), text });
+function libraryItemIdFromFinalize(value: unknown): string | null {
+  const envelope = record(value);
+  const data = record(envelope.data ?? envelope);
+  const libraryItem = record(data.library_item);
+  return typeof libraryItem.id === "string" && libraryItem.id ? libraryItem.id : null;
+}
+
+async function resolveLibraryItemId(item: GenerationItemRow): Promise<string> {
+  if (item.library_item_id) return item.library_item_id;
+  if (!item.audio_clip_id) {
+    throw new Error("generation item is missing library_item_id and audio_clip_id.");
   }
-  return cues
-    .map((c, i) => `${i + 1}\n${fmtTs(c.start)} --> ${fmtTs(c.end)}\n${c.text}\n`)
-    .join("\n");
+
+  const supabase = getSupabaseAdmin();
+  const existing = await supabase
+    .from("video_library_items")
+    .select("id")
+    .eq("generation_item_id", item.id)
+    .maybeSingle();
+  if (existing.error) throw existing.error;
+  if (existing.data?.id) return existing.data.id;
+
+  const slot = await supabase
+    .from("video_library_items")
+    .select("id")
+    .eq("batch_id", item.batch_id)
+    .eq("audio_clip_id", item.audio_clip_id)
+    .eq("library_index", item.item_index ?? 0)
+    .maybeSingle();
+  if (slot.error) throw slot.error;
+  if (!slot.data?.id) {
+    const inserted = await supabase
+      .from("video_library_items")
+      .insert({
+        account_id: item.account_id,
+        audio_clip_id: item.audio_clip_id,
+        batch_id: item.batch_id,
+        generation_item_id: item.id,
+        library_index: item.item_index ?? 0,
+        status: "not_ready",
+        duration_sec: item.duration_seconds ?? 15,
+      })
+      .select("id")
+      .single();
+    if (inserted.error) throw inserted.error;
+    const updatedItem = await supabase
+      .from("generation_items")
+      .update({ library_item_id: inserted.data.id, updated_at: new Date().toISOString() })
+      .eq("id", item.id);
+    if (updatedItem.error) throw updatedItem.error;
+    return inserted.data.id;
+  }
+
+  const updatedItem = await supabase
+    .from("generation_items")
+    .update({ library_item_id: slot.data.id, updated_at: new Date().toISOString() })
+    .eq("id", item.id);
+  if (updatedItem.error) throw updatedItem.error;
+
+  const updatedSlot = await supabase
+    .from("video_library_items")
+    .update({ generation_item_id: item.id, updated_at: new Date().toISOString() })
+    .eq("id", slot.data.id);
+  if (updatedSlot.error) throw updatedSlot.error;
+
+  return slot.data.id;
+}
+
+async function uploadThumbnailFrame(input: {
+  libraryItemId: string;
+  frameUrl: string;
+}): Promise<{ publicUrl: string; storagePath: string }> {
+  const supabase = getSupabaseAdmin();
+  const frame = await downloadBytes(input.frameUrl);
+  const mimeType = frame.mimeType === "application/octet-stream" ? "image/png" : frame.mimeType;
+  const extension = mimeType.includes("jpeg") ? "jpg" : mimeType.includes("png") ? "png" : "jpg";
+  const storagePath = `thumbnails/${input.libraryItemId}.${extension}`;
+  const upload = await supabase.storage.from("thumbnails").upload(storagePath, frame.bytes, {
+    contentType: mimeType,
+    cacheControl: "31536000",
+    upsert: true,
+  });
+  if (upload.error) throw upload.error;
+
+  const { data } = supabase.storage.from("thumbnails").getPublicUrl(storagePath);
+  return { publicUrl: data.publicUrl, storagePath };
 }
 
 Deno.serve(async (request) => {
   const opt = handleOptions(request);
   if (opt) return opt;
-  if (request.method !== "POST") return errorResponse("Method not allowed", 405);
+  if (request.method !== "POST") {
+    return errorEnvelope("Method not allowed", "METHOD_NOT_ALLOWED", 405);
+  }
+  if (!isAuthorizedInternalCall(request)) {
+    return errorEnvelope("Unauthorized internal call.", "UNAUTHORIZED_INTERNAL", 401);
+  }
 
   try {
     const body = (await request.json()) as { itemId?: string };
@@ -77,12 +164,14 @@ Deno.serve(async (request) => {
     const item = await supabase
       .from("generation_items")
       .select(
-        "id,account_id,batch_id,stock_clip_url,input_payload,duration_seconds,lyric_template_id",
+        "id,account_id,batch_id,stock_clip_url,input_payload,duration_seconds,lyric_template_id,library_item_id,audio_clip_id,item_index",
       )
       .eq("id", body.itemId)
       .single();
     if (item.error) throw item.error;
     if (!item.data.stock_clip_url) throw new Error("Item has no stock_clip_url; stitch first");
+    const generationItem = item.data as GenerationItemRow;
+    const libraryItemId = await resolveLibraryItemId(generationItem);
 
     const batch = await supabase
       .from("generation_batches")
@@ -104,91 +193,154 @@ Deno.serve(async (request) => {
     let finalUrl: string = item.data.stock_clip_url;
     let provider = "passthrough";
 
-    if (lyricTemplateId) {
-      const lt = await supabase
-        .from("kanvas_lyric_templates")
-        .select("id,lyric_blocks,selection_start_ms")
-        .eq("id", lyricTemplateId)
-        .maybeSingle();
-      const blocks = (lt.data?.lyric_blocks ?? []) as Block[];
-      if (blocks.length > 0) {
-        const srt = blocksToSrt(blocks, lt.data!.selection_start_ms ?? 0, totalSeconds);
-        // Upload SRT to public bucket so fal can fetch it.
-        const srtPath = `subtitles/${body.itemId}-${Date.now()}.srt`;
-        const up = await supabase.storage
-          .from("post-assets")
-          .upload(srtPath, new TextEncoder().encode(srt), {
-            contentType: "application/x-subrip",
-            upsert: true,
-          });
-        if (up.error) throw up.error;
-        const { data: pub } = supabase.storage.from("post-assets").getPublicUrl(srtPath);
-        finalUrl = await composeWithSubtitles({
-          videoUrl: item.data.stock_clip_url,
-          audioUrl: audio.data.public_url,
-          subtitlesUrl: pub.publicUrl,
-          totalSeconds,
-        });
-        provider = "fal_ffmpeg";
-      }
-    }
-
-    // Always download + re-host the final MP4 so posts never depend on
-    // provider URLs or short-lived signed stock-cache URLs.
-    const dl = await downloadBytes(finalUrl);
-    const asset = await createMediaAssetFromBytes({
-      accountId: item.data.account_id,
-      kind: "rendered_video",
-      source: provider,
-      bytes: dl.bytes,
-      mimeType: dl.mimeType === "application/octet-stream" ? "video/mp4" : dl.mimeType,
-      fileName: `${body.itemId}.mp4`,
-      metadata: {
-        generation_item_id: body.itemId,
-        lyric_template_id: lyricTemplateId,
-        original_url: finalUrl,
+    const rendered = await withRenderAttempt(
+      {
+        generationItemId: body.itemId,
+        stage: "karaoke",
+        provider: "fal_ffmpeg",
+        detail: {
+          action: "render-karaoke",
+          lyric_template_id: lyricTemplateId,
+          library_item_id: libraryItemId,
+          idempotency_key: `${body.itemId}:karaoke`,
+        },
       },
-    });
+      async () => {
+        if (lyricTemplateId) {
+          const lt = await supabase
+            .from("kanvas_lyric_templates")
+            .select("id,lyric_blocks,selection_start_ms")
+            .eq("id", lyricTemplateId)
+            .maybeSingle();
+          const blocks = (lt.data?.lyric_blocks ?? []) as RenderLyricBlock[];
+          if (blocks.length > 0) {
+            const srt = blocksToSrt(blocks, lt.data!.selection_start_ms ?? 0, totalSeconds);
+            // Upload SRT to public bucket so fal can fetch it.
+            const srtPath = `subtitles/${body.itemId}-${Date.now()}.srt`;
+            const up = await supabase.storage
+              .from("post-assets")
+              .upload(srtPath, new TextEncoder().encode(srt), {
+                contentType: "application/x-subrip",
+                upsert: true,
+              });
+            if (up.error) throw up.error;
+            const { data: pub } = supabase.storage.from("post-assets").getPublicUrl(srtPath);
+            finalUrl = await composeWithSubtitles({
+              videoUrl: item.data.stock_clip_url,
+              audioUrl: audio.data.public_url,
+              subtitlesUrl: pub.publicUrl,
+              totalSeconds,
+            });
+            provider = "fal_ffmpeg";
+          }
+        }
 
-    // Best-effort thumbnail extraction; never block readiness on failure.
-    let thumbnailUrl: string | null = null;
-    try {
-      const frame = await extractFrame(finalUrl, "middle");
-      thumbnailUrl = frame.url;
-      await supabase
-        .from("media_assets")
-        .update({
+        // Always download + re-host the final MP4 so posts never depend on
+        // provider URLs or short-lived signed stock-cache URLs.
+        const dl = await downloadBytes(finalUrl);
+        const perceptualHash = await contentFingerprint64(dl.bytes);
+        const asset = await createMediaAssetFromBytes({
+          accountId: generationItem.account_id,
+          kind: "rendered_video",
+          source: provider,
+          bytes: dl.bytes,
+          mimeType: dl.mimeType === "application/octet-stream" ? "video/mp4" : dl.mimeType,
+          fileName: `${libraryItemId}.mp4`,
+          storageBucket: "renders",
+          storagePath: renderedVideoStoragePath(generationItem.account_id, libraryItemId),
+          publicUrlMode: "signed",
+          signedUrlExpiresIn: renderedVideoSignedUrlSeconds,
+          upsert: true,
           metadata: {
-            ...(asset.metadata ?? {}),
-            thumbnail_url: thumbnailUrl,
+            generation_item_id: body.itemId,
+            library_item_id: libraryItemId,
+            lyric_template_id: lyricTemplateId,
+            original_url: finalUrl,
+            perceptual_hash: perceptualHash,
+            perceptual_hash_kind: "sha256_64_content_fingerprint",
+            signed_url_expires_in_seconds: renderedVideoSignedUrlSeconds,
           },
-        })
-        .eq("id", asset.id);
-    } catch (err) {
-      console.warn(`[render-karaoke] extractFrame failed for ${body.itemId}: ${err}`);
-    }
+        });
+
+        return { finalUrl, provider, asset, perceptualHash };
+      },
+    );
 
     const upd = await supabase
       .from("generation_items")
       .update({
         status: "ready",
-        render_provider: provider,
-        final_asset_id: asset.id,
+        render_provider: rendered.provider,
+        final_asset_id: rendered.asset.id,
+        perceptual_hash: rendered.perceptualHash,
       })
       .eq("id", body.itemId);
     if (upd.error) throw upd.error;
 
-    const finalized = await finalizeLibraryItem(body.itemId);
+    const finalized = await withRenderAttempt(
+      {
+        generationItemId: body.itemId,
+        stage: "finalize",
+        provider: "library-finalize",
+        detail: {
+          action: "library-finalize",
+          library_item_id: libraryItemId,
+        },
+      },
+      () => finalizeLibraryItem(body.itemId!),
+    );
+    const finalizedLibraryItemId = libraryItemIdFromFinalize(finalized) ?? libraryItemId;
 
-    return jsonResponse({
+    // Best-effort thumbnail extraction; never block readiness on failure.
+    let thumbnailUrl: string | null = null;
+    try {
+      const thumbnail = await withRenderAttempt(
+        {
+          generationItemId: body.itemId,
+          stage: "thumbnail",
+          provider: "fal_ffmpeg",
+          detail: {
+            action: "extract-frame",
+            library_item_id: finalizedLibraryItemId,
+          },
+        },
+        async () => {
+          const frame = await extractFrame(rendered.asset.public_url, "middle");
+          return uploadThumbnailFrame({
+            libraryItemId: finalizedLibraryItemId,
+            frameUrl: frame.url,
+          });
+        },
+      );
+      thumbnailUrl = thumbnail.publicUrl;
+      await supabase
+        .from("media_assets")
+        .update({
+          metadata: {
+            ...(rendered.asset.metadata ?? {}),
+            thumbnail_url: thumbnailUrl,
+            thumbnail_storage_bucket: "thumbnails",
+            thumbnail_storage_path: thumbnail.storagePath,
+          },
+        })
+        .eq("id", rendered.asset.id);
+      await supabase
+        .from("video_library_items")
+        .update({ thumbnail_url: thumbnailUrl, updated_at: new Date().toISOString() })
+        .eq("id", finalizedLibraryItemId);
+    } catch (err) {
+      console.warn(`[render-karaoke] extractFrame failed for ${body.itemId}: ${err}`);
+    }
+
+    return okEnvelope({
       itemId: body.itemId,
-      provider,
-      finalAssetId: asset.id,
-      url: asset.public_url,
+      provider: rendered.provider,
+      finalAssetId: rendered.asset.id,
+      url: rendered.asset.public_url,
       thumbnailUrl,
       finalized,
     });
   } catch (error) {
-    return errorResponse(error);
+    return errorEnvelope(error, "RENDER_KARAOKE_FAILED", 500);
   }
 });
