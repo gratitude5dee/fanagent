@@ -1,7 +1,7 @@
 // Edge function wrappers. All numeric values cross the boundary in milliseconds.
 import { supabase } from "@/integrations/supabase/client";
 import { invokeEdgeFunction } from "@/lib/fanagent/invokeFunction";
-import type { LyricBlock, LyricTemplate, TemplateStatus } from "./types";
+import type { LyricBlock, LyricTemplate, RemixRenderDefaults, TemplateStatus } from "./types";
 
 async function call<T>(fn: string, body: Record<string, unknown>): Promise<T> {
   return invokeEdgeFunction<T>(fn, body);
