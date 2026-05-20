@@ -8,6 +8,7 @@ type CategoryPickerProps = {
   subcategorySlug: string;
   randomize: boolean;
   autoRender: boolean;
+  requiredShots?: number;
   loading?: boolean;
   onCategoryId: (id: string) => void;
   onSubcategorySlug: (slug: string) => void;
@@ -23,6 +24,7 @@ export function CategoryPicker(props: CategoryPickerProps) {
     subcategorySlug,
     randomize,
     autoRender,
+    requiredShots = 1,
     loading,
   } = props;
 
@@ -38,7 +40,11 @@ export function CategoryPicker(props: CategoryPickerProps) {
         : poolCounts.totalForCategory(selected.id)
       : 0;
 
-  const insufficientPool = poolCounts != null && !randomize && exactCount < 1;
+  const needed = Math.max(1, requiredShots);
+  const poolEmpty = poolCounts != null && !randomize && selected != null && exactCount < 1;
+  const poolUnderfilled =
+    poolCounts != null && !randomize && selected != null && exactCount > 0 && exactCount < needed;
+
 
   return (
     <div className="stack" style={{ gap: 8 }}>
