@@ -392,7 +392,7 @@ export default function AutopilotPanel() {
     return () => {
       cancelled = true;
     };
-  }, [accountId, schemaReady, trimmedAudio, trimmedAudioKey]);
+  }, [accountId, trimmedAudio, trimmedAudioKey]);
 
   useEffect(() => {
     setSourceMode((current) => coerceSelectableSourceMode(current, diagnostics?.env));
