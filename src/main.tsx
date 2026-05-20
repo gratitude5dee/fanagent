@@ -4,11 +4,8 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import App from "./App";
 import "./styles.css";
 
-const LyricsLanding = lazy(() => import("./pages/lyrics/LyricsLanding"));
-const LyricsWizard = lazy(() => import("./pages/lyrics/LyricsWizard"));
 const LibraryLanding = lazy(() => import("./pages/library/LibraryLanding"));
 const LibraryDetail = lazy(() => import("./pages/library/LibraryDetail"));
-const CalendarPage = lazy(() => import("./pages/calendar/CalendarPage"));
 const AccountsPage = lazy(() => import("./pages/settings/AccountsPage"));
 
 createRoot(document.getElementById("root")!).render(
@@ -16,30 +13,6 @@ createRoot(document.getElementById("root")!).render(
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<App />} />
-        <Route
-          path="/lyrics"
-          element={
-            <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
-              <LyricsLanding />
-            </Suspense>
-          }
-        />
-        <Route
-          path="/lyrics/new"
-          element={
-            <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
-              <LyricsWizard />
-            </Suspense>
-          }
-        />
-        <Route
-          path="/lyrics/templates/:templateId"
-          element={
-            <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
-              <LyricsWizard />
-            </Suspense>
-          }
-        />
         <Route
           path="/library"
           element={
@@ -57,14 +30,6 @@ createRoot(document.getElementById("root")!).render(
           }
         />
         <Route
-          path="/calendar"
-          element={
-            <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
-              <CalendarPage />
-            </Suspense>
-          }
-        />
-        <Route
           path="/settings/accounts"
           element={
             <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
@@ -72,6 +37,8 @@ createRoot(document.getElementById("root")!).render(
             </Suspense>
           }
         />
+        <Route path="/lyrics/*" element={<Navigate to="/?step=lyrics" replace />} />
+        <Route path="/calendar" element={<Navigate to="/?mode=studio&view=calendar" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

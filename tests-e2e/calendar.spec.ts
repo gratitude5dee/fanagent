@@ -46,7 +46,8 @@ test.describe("calendar e2e", () => {
       if (scheduleError) throw scheduleError;
       expect(scheduled.scheduled_at).toContain("2026-06-03");
 
-      await page.goto("/calendar");
+      await page.goto("/?mode=studio&view=calendar");
+      await expect(page).toHaveURL(/\/$/);
       await expect(page.getByText(/e2e caption/i)).toBeVisible();
       await page.getByText(/e2e caption/i).click();
       await page.getByLabel(/Scheduled/i).fill("2026-06-04T09:00");

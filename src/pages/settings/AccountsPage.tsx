@@ -89,7 +89,7 @@ export default function AccountsPage() {
           <Link className="button ghost" to="/library">
             <Images size={14} /> Library
           </Link>
-          <Link className="button ghost" to="/calendar">
+          <Link className="button ghost" to="/?mode=studio&view=calendar">
             <CalendarDays size={14} /> Calendar
           </Link>
           <button className="button ghost" type="button" disabled={busy} onClick={refresh}>

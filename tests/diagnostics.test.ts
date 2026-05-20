@@ -51,7 +51,6 @@ describe("FanAgent diagnostics schema readiness", () => {
     ).toBe(false);
   });
 
-
   it("summarizes explicit schema cache errors ahead of derived missing labels", () => {
     expect(
       schemaDiagnosticsSummary({

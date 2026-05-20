@@ -220,6 +220,15 @@ textarea {
   max-width: 1520px;
 }
 
+.studio-shell {
+  align-content: start;
+}
+
+.studio-view-toggle {
+  display: inline-flex;
+  gap: 6px;
+}
+
 .panel {
   background: var(--fanagent-surface);
   border: 1px solid var(--fanagent-line);
@@ -1237,6 +1246,17 @@ video {
   }
 }
 .autopilot-panel {
+  --lyr-bg: #050506;
+  --lyr-panel: #11131a;
+  --lyr-wave: #0b0e14;
+  --lyr-line: #1f2230;
+  --lyr-muted: rgba(255, 255, 255, 0.55);
+  --lyr-text: rgba(255, 255, 255, 0.92);
+  --lyr-orange: #f97316;
+  --lyr-orange-2: #fb923c;
+  --lyr-cyan: #22d3ee;
+  --lyr-emerald: #10b981;
+  --lyr-rose: #fb7185;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -1318,6 +1338,10 @@ video {
   display: grid;
   gap: 12px;
   padding: 14px;
+}
+
+.lyrics-step--builder {
+  grid-column: 1 / -1;
 }
 
 /* Lyrics Template Builder — scoped dark theme */

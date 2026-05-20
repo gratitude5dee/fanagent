@@ -1,13 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
+import { unwrapFunctionData } from "@/lib/studio/envelope";
 import type { AudioClip, LibraryItem, MediaAsset, SourceCandidate } from "./types";
-
-type FunctionEnvelope<T> = {
-  success: boolean;
-  code?: string;
-  message?: string;
-  data: T | null;
-  error?: string | null;
-};
 
 export type AudioClipSummary = {
   clip: AudioClip;
@@ -40,13 +33,6 @@ export type BulkScheduleRequest = {
   hashtags?: string[];
   tiktokOptions?: Record<string, unknown>;
 };
-
-function unwrapFunctionData<T>(value: unknown): T {
-  if (typeof value !== "object" || value === null || !("success" in value)) return value as T;
-  const envelope = value as FunctionEnvelope<T>;
-  if (envelope.success) return envelope.data as T;
-  throw new Error(envelope.error || envelope.message || envelope.code || "Function failed");
-}
 
 function metadata(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)

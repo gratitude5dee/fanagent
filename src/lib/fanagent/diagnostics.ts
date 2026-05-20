@@ -48,7 +48,6 @@ export function isFanAgentSchemaReady(
   return (schema.errors?.length ?? 0) === 0;
 }
 
-
 export function schemaDiagnosticsSummary(
   schema: FanAgentSchemaDiagnostics | null | undefined,
 ): string {

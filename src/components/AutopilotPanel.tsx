@@ -141,6 +141,11 @@ async function callCampaign<T>(action: string, body?: Record<string, unknown>): 
   return invokeEdgeFunction<T>("fanpage-campaign", { action, ...(body ?? {}) });
 }
 
+type AutopilotPanelProps = {
+  initialTab?: "campaign" | "lyrics";
+  focusLyricsStepSignal?: number;
+};
+
 function tiktokConnectUrl(accountId: string): string {
   return `${SUPABASE_URL}/functions/v1/tiktok-oauth-callback?action=connect&accountId=${encodeURIComponent(accountId)}`;
 }
@@ -199,8 +204,12 @@ function summarizeSegments(
   return Array.from(new Set(labels)).join(" + ");
 }
 
-export default function AutopilotPanel() {
+export default function AutopilotPanel({
+  initialTab,
+  focusLyricsStepSignal,
+}: AutopilotPanelProps = {}) {
   const [data, setData] = useState<CampaignList | null>(null);
+  const [lyricTemplates, setLyricTemplates] = useState<LyricTemplateSummary[]>([]);
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [trimmedAudio, setTrimmedAudio] = useState<{
     blob: Blob;
@@ -240,7 +249,7 @@ export default function AutopilotPanel() {
   const [publishPrivacy, setPublishPrivacy] = useState("SELF_ONLY");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [tab, setTab] = useState<"campaign" | "lyrics">("campaign");
+  const [tab, setTab] = useState<"campaign" | "lyrics">(initialTab ?? "campaign");
   const [lyricTemplateId, setLyricTemplateId] = useState<string | "">("");
   const [lyricsDrawerOpen, setLyricsDrawerOpen] = useState(false);
   const [registeredAudioClip, setRegisteredAudioClip] = useState<RegisteredAudioClipSummary | null>(
@@ -250,12 +259,12 @@ export default function AutopilotPanel() {
   const [audioClipError, setAudioClipError] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
 
-  const lyricTemplates = useMemo(() => data?.lyricTemplates ?? [], [data?.lyricTemplates]);
   const templateById = useMemo(
     () => new Map(lyricTemplates.map((t) => [t.id, t])),
     [lyricTemplates],
   );
   const lyricTemplateIdRef = useRef(lyricTemplateId);
+  const lyricsStepRef = useRef<HTMLDivElement | null>(null);
 
   const account = data?.account ?? null;
   const accountId = account?.id ?? "";
@@ -284,6 +293,16 @@ export default function AutopilotPanel() {
     try {
       const next = await callCampaign<CampaignList>("list");
       setData(next);
+      setLyricTemplates(next.lyricTemplates ?? []);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function refreshLyricTemplates() {
+    try {
+      const next = await lyricsApi.list();
+      setLyricTemplates(next.templates);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     }
@@ -312,6 +331,18 @@ export default function AutopilotPanel() {
     return () => clearInterval(t);
   }, []);
 
+  useEffect(() => {
+    if (initialTab) setTab(initialTab);
+  }, [initialTab]);
+
+  useEffect(() => {
+    if (!focusLyricsStepSignal) return;
+    setTab("lyrics");
+    window.requestAnimationFrame(() => {
+      lyricsStepRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+      lyricsStepRef.current?.focus({ preventScroll: true });
+    });
+  }, [focusLyricsStepSignal]);
 
   useEffect(() => {
     if (trimmedAudio && !lyricTemplateId) setLyricsDrawerOpen(true);
@@ -682,13 +713,16 @@ export default function AutopilotPanel() {
       ) : null}
 
       {tab === "lyrics" ? (
-        <LyricsStep
-          lyricTemplateId={lyricTemplateId}
-          lyricTemplates={lyricTemplates}
-          drawerOpen={lyricsDrawerOpen}
-          onDrawerOpen={setLyricsDrawerOpen}
-          onTemplate={setLyricTemplateId}
-        />
+        <div ref={lyricsStepRef} tabIndex={-1}>
+          <LyricsStep
+            lyricTemplateId={lyricTemplateId}
+            lyricTemplates={lyricTemplates}
+            drawerOpen={lyricsDrawerOpen}
+            onDrawerOpen={setLyricsDrawerOpen}
+            onTemplate={setLyricTemplateId}
+            onTemplatesChanged={refreshLyricTemplates}
+          />
+        </div>
       ) : null}
 
       {tab !== "campaign" ? null : (
@@ -726,6 +760,7 @@ export default function AutopilotPanel() {
                   drawerOpen={lyricsDrawerOpen}
                   onDrawerOpen={setLyricsDrawerOpen}
                   onTemplate={setLyricTemplateId}
+                  onTemplatesChanged={refreshLyricTemplates}
                 />
                 <CampaignStep
                   busy={busy}

@@ -303,12 +303,7 @@ export function CampaignStep(props: CampaignStepProps) {
         ) : null}
         <button
           className="button primary"
-          disabled={
-            props.busy ||
-            !props.trimmedAudioReady ||
-            !props.lyricTemplateReady
-          }
-
+          disabled={props.busy || !props.trimmedAudioReady || !props.lyricTemplateReady}
           type="submit"
         >
           {props.busy ? <Loader2 className="spin" size={16} /> : <CalendarClock size={16} />}{" "}

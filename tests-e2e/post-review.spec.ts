@@ -42,7 +42,8 @@ test.describe("post review e2e", () => {
         .single();
       if (post.error) throw post.error;
 
-      await page.goto("/calendar");
+      await page.goto("/?mode=studio&view=calendar");
+      await expect(page).toHaveURL(/\/$/);
       await page.getByText(/initial caption/i).click();
       await page.getByLabel(/Caption/i).fill("edited caption");
       await page.getByLabel(/TikTok privacy/i).selectOption("PUBLIC_TO_EVERYONE");

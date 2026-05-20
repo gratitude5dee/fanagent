@@ -108,6 +108,15 @@ describe("calendar post UI helpers", () => {
     expect(bulkSource).toContain("max={240}");
   });
 
+  it("moves calendar controls into the route-free Studio panel", () => {
+    const studioPanel = readFileSync("src/components/studio/StudioCalendarPanel.tsx", "utf8");
+
+    expect(studioPanel).toContain("CALENDAR_VIEWS");
+    expect(studioPanel).toContain("filterCalendarPosts");
+    expect(studioPanel).toContain("FanAgentCalendar");
+    expect(studioPanel).not.toContain("useNavigate");
+  });
+
   it("formats publish statuses for the post review sheet", () => {
     expect(publishStatusLabel("blocked_missing_privacy")).toBe("blocked missing privacy");
     expect(publishStatusLabel("regenerated")).toBe("regenerated");

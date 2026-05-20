@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
 import { ChevronLeft, HelpCircle, Loader2, Save, Sparkles } from "lucide-react";
-import AudioPanel from "./panels/AudioPanel";
-import LyricsPanel from "./panels/LyricsPanel";
-import MarkersPanel from "./panels/MarkersPanel";
-import { lyricsApi } from "@/lib/lyrics/api";
-import type { LyricBlock, LyricTemplate, TemplateStatus } from "@/lib/lyrics/types";
-import { statusToStep } from "@/lib/lyrics/types";
+import AudioPanel from "@/pages/lyrics/panels/AudioPanel";
+import LyricsPanel from "@/pages/lyrics/panels/LyricsPanel";
+import MarkersPanel from "@/pages/lyrics/panels/MarkersPanel";
 import { supabase } from "@/integrations/supabase/client";
+import { lyricsApi } from "@/lib/lyrics/api";
+import type { LyricBlock, LyricTemplate } from "@/lib/lyrics/types";
+import { statusToStep, type WizardStep } from "@/lib/lyrics/types";
+
+export interface LyricsTemplateBuilderProps {
+  templateId: string | null;
+  onTemplateIdChange: (id: string | null) => void;
+  onSaved: (template: LyricTemplate) => void;
+  onClose: () => void;
+}
 
 type State = {
   templateId: string | null;
@@ -19,6 +25,7 @@ type State = {
 };
 
 type Action =
+  | { type: "reset"; templateId: string | null }
   | { type: "set_template"; template: LyricTemplate }
   | { type: "loading"; loading: boolean }
   | { type: "saving"; saving: boolean }
@@ -28,6 +35,15 @@ type Action =
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
+    case "reset":
+      return {
+        templateId: action.templateId,
+        template: null,
+        trimmedAudioUrl: null,
+        loading: !!action.templateId,
+        saving: false,
+        error: null,
+      };
     case "set_template":
       return { ...state, template: action.template, templateId: action.template.id };
     case "loading":
@@ -40,39 +56,46 @@ function reducer(state: State, action: Action): State {
       return { ...state, trimmedAudioUrl: action.url };
     case "patch":
       return state.template
-        ? { ...state, template: { ...state.template, ...action.patch } as LyricTemplate }
+        ? { ...state, template: { ...state.template, ...action.patch } }
         : state;
     default:
       return state;
   }
 }
 
-export default function LyricsWizard() {
-  const params = useParams<{ templateId?: string }>();
-  const navigate = useNavigate();
+export default function LyricsTemplateBuilder({
+  templateId,
+  onTemplateIdChange,
+  onSaved,
+  onClose,
+}: LyricsTemplateBuilderProps) {
   const [state, dispatch] = useReducer(reducer, {
-    templateId: params.templateId ?? null,
+    templateId,
     template: null,
     trimmedAudioUrl: null,
-    loading: !!params.templateId,
+    loading: !!templateId,
     saving: false,
     error: null,
   });
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [step, setStep] = useState<WizardStep>(1);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
 
-  // Hydrate existing template
   useEffect(() => {
-    if (!params.templateId) return;
+    onTemplateIdChange(state.templateId);
+  }, [onTemplateIdChange, state.templateId]);
+
+  useEffect(() => {
+    dispatch({ type: "reset", templateId });
+    setStep(1);
+    if (!templateId) return undefined;
     let cancelled = false;
     (async () => {
       try {
-        const { template } = await lyricsApi.get(params.templateId!);
+        const { template } = await lyricsApi.get(templateId);
         if (cancelled) return;
         dispatch({ type: "set_template", template });
         setStep(statusToStep(template.status));
         if (template.trimmed_audio_asset_id) {
-          // Generate signed URL via storage SDK
           const { data: asset } = await supabase
             .from("project_assets")
             .select("storage_bucket,storage_path")
@@ -85,8 +108,8 @@ export default function LyricsWizard() {
             if (signed?.signedUrl) dispatch({ type: "set_audio_url", url: signed.signedUrl });
           }
         }
-      } catch (e) {
-        dispatch({ type: "error", error: e instanceof Error ? e.message : String(e) });
+      } catch (error) {
+        dispatch({ type: "error", error: error instanceof Error ? error.message : String(error) });
       } finally {
         dispatch({ type: "loading", loading: false });
       }
@@ -94,23 +117,21 @@ export default function LyricsWizard() {
     return () => {
       cancelled = true;
     };
-  }, [params.templateId]);
+  }, [templateId]);
 
   const onAudioConfirmed = useCallback(
     async (out: { template: LyricTemplate; signedUrl: string }) => {
       dispatch({ type: "set_template", template: out.template });
       dispatch({ type: "set_audio_url", url: out.signedUrl });
       setStep(2);
-      navigate(`/lyrics/templates/${out.template.id}`, { replace: true });
-      // Kick off transcription
       try {
         const { template } = await lyricsApi.transcribe(out.template.id, false);
         dispatch({ type: "set_template", template });
-      } catch (e) {
-        dispatch({ type: "error", error: e instanceof Error ? e.message : String(e) });
+      } catch (error) {
+        dispatch({ type: "error", error: error instanceof Error ? error.message : String(error) });
       }
     },
-    [navigate],
+    [],
   );
 
   async function onLyricsDone(blocks: LyricBlock[]) {
@@ -126,10 +147,11 @@ export default function LyricsWizard() {
   async function onMarkersChange(markers: number[]) {
     if (!state.template) return;
     dispatch({ type: "patch", patch: { cut_markers: markers } });
-    // Debounce-light: fire and forget
     lyricsApi
       .patch(state.template.id, { cut_markers: markers })
-      .catch((e) => dispatch({ type: "error", error: e instanceof Error ? e.message : String(e) }));
+      .catch((error) =>
+        dispatch({ type: "error", error: error instanceof Error ? error.message : String(error) }),
+      );
   }
 
   async function save() {
@@ -138,36 +160,37 @@ export default function LyricsWizard() {
     try {
       const next = await lyricsApi.finalize(state.template.id);
       dispatch({ type: "set_template", template: next.template });
-      navigate("/lyrics");
-    } catch (e) {
-      dispatch({ type: "error", error: e instanceof Error ? e.message : String(e) });
+      onSaved(next.template);
+    } catch (error) {
+      dispatch({ type: "error", error: error instanceof Error ? error.message : String(error) });
     } finally {
       dispatch({ type: "saving", saving: false });
     }
   }
 
   const wordCount = (state.template?.lyric_blocks ?? []).reduce(
-    (s, b) => s + (b.words?.length ?? 0),
+    (sum, block) => sum + (block.words?.length ?? 0),
     0,
   );
-  const clipDur = (state.template?.selection_duration_ms ?? 15000) / 1000;
+  const clipDuration = (state.template?.selection_duration_ms ?? 15000) / 1000;
   const canSave =
     !!state.template && !!state.template.trimmed_audio_asset_id && wordCount > 0 && !state.saving;
 
   return (
     <div className="lyrics-root">
       <header className="lyr-topbar">
-        <Link to="/lyrics" className="lyr-brand">
+        <div className="lyr-brand">
           <Sparkles size={16} /> WZRD<span>STUDIO</span>
           <em className="lyr-chip">ALPHA</em>
-        </Link>
-        <Link to="/lyrics" className="lyr-pill">
+        </div>
+        <button type="button" className="lyr-pill" onClick={onClose}>
           <ChevronLeft size={14} /> Back to templates
-        </Link>
+        </button>
       </header>
 
       <h1 className="lyr-page-title">CREATE TEMPLATE</h1>
 
+      {state.loading ? <div className="lyr-banner">Loading template...</div> : null}
       {state.error ? <div className="lyr-banner bad">{state.error}</div> : null}
 
       <div className="lyr-wizard-grid">
@@ -180,7 +203,7 @@ export default function LyricsWizard() {
             existing={state.template}
             existingAudioUrl={state.trimmedAudioUrl}
             onConfirmed={onAudioConfirmed}
-            onError={(m) => dispatch({ type: "error", error: m })}
+            onError={(message) => dispatch({ type: "error", error: message })}
           />
         </section>
 
@@ -199,8 +222,11 @@ export default function LyricsWizard() {
               try {
                 const { template } = await lyricsApi.transcribe(state.template.id, true);
                 dispatch({ type: "set_template", template });
-              } catch (e) {
-                dispatch({ type: "error", error: e instanceof Error ? e.message : String(e) });
+              } catch (error) {
+                dispatch({
+                  type: "error",
+                  error: error instanceof Error ? error.message : String(error),
+                });
               }
             }}
           />
@@ -222,29 +248,29 @@ export default function LyricsWizard() {
 
       <footer className="lyr-footer">
         <div className="lyr-stepper">
-          {[1, 2, 3].map((n) => (
-            <span key={n} className={`lyr-dot ${step >= n ? "on" : ""}`}>
-              {n}
+          {[1, 2, 3].map((stepNumber) => (
+            <span key={stepNumber} className={`lyr-dot ${step >= stepNumber ? "on" : ""}`}>
+              {stepNumber}
             </span>
           ))}
         </div>
         <div className="lyr-footer__meta">
-          <span>{clipDur}s clip</span>
+          <span>{clipDuration}s clip</span>
           <span>{wordCount} words</span>
         </div>
-        <button className="lyr-btn primary" disabled={!canSave} onClick={save}>
+        <button type="button" className="lyr-btn primary" disabled={!canSave} onClick={save}>
           {state.saving ? <Loader2 className="spin" size={16} /> : <Save size={16} />} SAVE TEMPLATE
         </button>
       </footer>
 
-      <button className="lyr-help" aria-label="Help">
+      <button type="button" className="lyr-help" aria-label="Help">
         <HelpCircle size={20} />
       </button>
 
       {state.saving ? (
         <div className="lyr-overlay">
           <Loader2 className="spin" size={28} />
-          <span>Saving template…</span>
+          <span>Saving template...</span>
         </div>
       ) : null}
     </div>
