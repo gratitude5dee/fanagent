@@ -45,6 +45,7 @@ export default function AudioTrimmer({ file, maxDurationSec, onTrimmed }: Props)
 
   useEffect(() => {
     if (!containerRef.current) return;
+    let cancelled = false;
     const url = URL.createObjectURL(file);
 
     const regions = RegionsPlugin.create();
@@ -65,9 +66,16 @@ export default function AudioTrimmer({ file, maxDurationSec, onTrimmed }: Props)
     });
     wsRef.current = ws;
 
-    ws.load(url);
+    // ws.load returns a promise that rejects with AbortError when destroyed mid-fetch.
+    ws.load(url).catch((err: unknown) => {
+      if (cancelled) return;
+      const name = (err as { name?: string } | null)?.name;
+      if (name === "AbortError") return;
+      setError(err instanceof Error ? err.message : String(err));
+    });
 
     ws.on("ready", () => {
+      if (cancelled || wsRef.current !== ws || !regionsRef.current) return;
       const d = ws.getDuration();
       setDuration(d);
       const fixedRegion = clampFixedDurationRegion({
@@ -114,7 +122,12 @@ export default function AudioTrimmer({ file, maxDurationSec, onTrimmed }: Props)
     });
 
     return () => {
-      ws.destroy();
+      cancelled = true;
+      try {
+        ws.destroy();
+      } catch {
+        // wavesurfer aborts the in-flight fetch via AbortController; ignore.
+      }
       wsRef.current = null;
       regionsRef.current = null;
       regionRef.current = null;
