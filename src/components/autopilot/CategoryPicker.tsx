@@ -116,12 +116,20 @@ export function CategoryPicker(props: CategoryPickerProps) {
         ) : null}
       </div>
 
-      {insufficientPool ? (
+      {poolEmpty ? (
         <div className="banner warn">
-          Selected category has no cached clips yet. The first run will populate the pool from live
-          search before rendering.
+          Selected category has no cached clips yet. The first run will populate the pool from
+          live search before rendering.
         </div>
       ) : null}
+      {poolUnderfilled ? (
+        <div className="banner bad">
+          Pool too small: {exactCount} cached clip{exactCount === 1 ? "" : "s"} for{" "}
+          {selected?.name}, but this template needs {needed}. Enable Randomize, broaden the
+          subcategory, or wait for the live search to backfill.
+        </div>
+      ) : null}
+
     </div>
   );
 }
