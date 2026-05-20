@@ -83,6 +83,13 @@ export const lyricsApi = {
   transcribe(templateId: string, force = false) {
     return call<{ template: LyricTemplate }>("kanvas-lyrics-transcribe", { templateId, force });
   },
+  patchRenderDefaults(templateId: string, renderDefaults: RemixRenderDefaults) {
+    return call<{ template: LyricTemplate }>("kanvas-lyrics-template", {
+      action: "patchRenderDefaults",
+      templateId,
+      renderDefaults,
+    });
+  },
 };
 
 export async function uploadToBucket(
