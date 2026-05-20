@@ -190,10 +190,10 @@ export default function MarkersPanel({ active, template, engine, onChange }: Pro
       </div>
 
       <div className="lyr-controls">
-        <button className="lyr-btn" onClick={togglePlay} disabled={!engine.isReady}>
+        <button className="lyr-btn" onClick={togglePlay}>
           {engine.isPlaying ? <Pause size={14} /> : <Play size={14} />}
         </button>
-        <button className="lyr-btn" onClick={restart} disabled={!engine.isReady}>
+        <button className="lyr-btn" onClick={restart}>
           <RotateCcw size={14} />
         </button>
         <span className="lyr-tag">
