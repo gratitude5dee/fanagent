@@ -108,6 +108,12 @@ export function useAudioEngine(): AudioEngine {
     (url: string | null) => {
       const a = audioRef.current;
       if (!a) return;
+      // Skip no-op re-loads so the engine doesn't bounce isReady back to false
+      // every render of the parent.
+      if (url && a.src === url) {
+        if (a.readyState >= 1) setIsReady(true);
+        return;
+      }
       stopRaf();
       setIsReady(false);
       setIsPlaying(false);
@@ -119,12 +125,8 @@ export function useAudioEngine(): AudioEngine {
         a.load();
         return;
       }
-      if (a.src !== url) {
-        a.src = url;
-        a.load();
-      } else {
-        setIsReady(true);
-      }
+      a.src = url;
+      a.load();
     },
     [stopRaf],
   );
@@ -134,6 +136,20 @@ export function useAudioEngine(): AudioEngine {
     if (!a) return;
     const { start, end } = loopRef.current;
     if (end > start && (a.currentTime < start || a.currentTime >= end)) a.currentTime = start;
+    // If metadata isn't ready yet (user tapped Play before canplay fired),
+    // wait briefly so the call doesn't silently no-op.
+    if (a.readyState < 2) {
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          a.removeEventListener("canplay", done);
+          a.removeEventListener("loadedmetadata", done);
+          resolve();
+        };
+        a.addEventListener("canplay", done, { once: true });
+        a.addEventListener("loadedmetadata", done, { once: true });
+        setTimeout(done, 2500);
+      });
+    }
     try {
       await a.play();
     } catch (e) {
