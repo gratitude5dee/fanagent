@@ -81,11 +81,13 @@ describe("FanAgent lyric template handoff", () => {
 
   it("keeps lyrics frontend calls compatible with envelope-shaped edge responses", () => {
     const source = readFileSync("src/lib/lyrics/api.ts", "utf8");
+    const invokeHelper = readFileSync("src/lib/fanagent/invokeFunction.ts", "utf8");
 
-    expect(source).toContain("type FunctionEnvelope<T>");
-    expect(source).toContain("function unwrapFunctionData<T>");
-    expect(source).toContain("if (data) return unwrapFunctionData<T>(data)");
-    expect(source).toContain("return unwrapFunctionData<T>(data)");
+    expect(source).toContain('import { invokeEdgeFunction } from "@/lib/fanagent/invokeFunction"');
+    expect(source).toContain("return invokeEdgeFunction<T>(fn, body)");
+    expect(invokeHelper).toContain("type FunctionEnvelope<T>");
+    expect(invokeHelper).toContain("function unwrapEnvelope<T>");
+    expect(invokeHelper).toContain("supabase.functions.invoke<T>");
   });
 
   it("keeps Kanvas lyrics edge functions on the shared envelope contract", () => {

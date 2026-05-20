@@ -30,16 +30,21 @@ export const requiredSchemaChecks: Array<{
 export function missingSchemaChecks(
   schema: FanAgentSchemaDiagnostics | null | undefined,
 ): string[] {
-  if (!schema) return requiredSchemaChecks.map((check) => check.label);
+  if (!schema) return [];
   return requiredSchemaChecks
-    .filter((check) => schema[check.key] !== true)
+    .filter((check) => schema[check.key] === false)
     .map((check) => check.label);
 }
 
 export function isFanAgentSchemaReady(
   schema: FanAgentSchemaDiagnostics | null | undefined,
 ): boolean {
-  return missingSchemaChecks(schema).length === 0 && (schema?.errors?.length ?? 0) === 0;
+  // Treat unknown / not-yet-loaded diagnostics as ready so a slow or transient
+  // diagnostics fetch never blocks the launch button. Hard failures (explicit
+  // `false` checks or non-transient errors surfaced in `errors`) still block.
+  if (!schema) return true;
+  if (missingSchemaChecks(schema).length > 0) return false;
+  return (schema.errors?.length ?? 0) === 0;
 }
 
 export function schemaDiagnosticsSummary(

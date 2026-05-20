@@ -13,7 +13,7 @@ import {
   RotateCcw,
   Sparkles,
 } from "lucide-react";
-import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
+import { SUPABASE_URL } from "@/integrations/supabase/client";
 import { CampaignStep } from "@/components/autopilot/CampaignStep";
 import { ConnectStep } from "@/components/autopilot/ConnectStep";
 import { LyricsStep } from "@/components/autopilot/LyricsStep";
@@ -135,30 +135,10 @@ type Segment = {
   reused?: boolean | null;
 };
 
-type FunctionEnvelope<T> = {
-  success: boolean;
-  code?: string;
-  message?: string;
-  data: T | null;
-  error?: string | null;
-};
-
-function unwrapFunctionData<T>(value: unknown): T {
-  if (typeof value !== "object" || value === null || !("success" in value)) return value as T;
-  const envelope = value as FunctionEnvelope<T>;
-  if (envelope.success) return envelope.data as T;
-  throw new Error(envelope.error || envelope.message || envelope.code || "Function failed");
-}
+import { invokeEdgeFunction } from "@/lib/fanagent/invokeFunction";
 
 async function callCampaign<T>(action: string, body?: Record<string, unknown>): Promise<T> {
-  const { data, error } = await supabase.functions.invoke<T>("fanpage-campaign", {
-    body: { action, ...(body ?? {}) },
-  });
-  if (error) {
-    if (data) return unwrapFunctionData<T>(data);
-    throw new Error(error.message);
-  }
-  return unwrapFunctionData<T>(data);
+  return invokeEdgeFunction<T>("fanpage-campaign", { action, ...(body ?? {}) });
 }
 
 function tiktokConnectUrl(accountId: string): string {
@@ -427,7 +407,11 @@ export default function AutopilotPanel() {
   async function startCampaign() {
     if (!trimmedAudio) throw new Error("Trim your audio clip first.");
     if (!account) throw new Error("No account.");
-    if (!schemaReady) throw new Error("Database queue schema is not ready.");
+    if (diagnostics && !schemaReady) {
+      throw new Error(
+        `Database queue schema is not ready: ${schemaDiagnosticsSummary(diagnostics.schema)}`,
+      );
+    }
     if (!registeredAudioClip) {
       throw new Error("Wait for the audio clip to finish registering before launching.");
     }

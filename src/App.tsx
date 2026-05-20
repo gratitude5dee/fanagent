@@ -50,30 +50,10 @@ async function fileToBase64(file: File): Promise<string> {
   return btoa(binary);
 }
 
-type FunctionEnvelope<T> = {
-  success: boolean;
-  code?: string;
-  message?: string;
-  data: T | null;
-  error?: string | null;
-};
-
-function unwrapFunctionData<T>(value: unknown): T {
-  if (typeof value !== "object" || value === null || !("success" in value)) return value as T;
-  const envelope = value as FunctionEnvelope<T>;
-  if (envelope.success) return envelope.data as T;
-  throw new Error(envelope.error || envelope.message || envelope.code || "Function failed");
-}
+import { invokeEdgeFunction } from "@/lib/fanagent/invokeFunction";
 
 async function invokeFunction<T>(name: string, body?: Record<string, unknown>): Promise<T> {
-  const { data, error } = await supabase.functions.invoke<T>(name, { body: body ?? {} });
-
-  if (error) {
-    if (data) return unwrapFunctionData<T>(data);
-    throw new Error(error.message);
-  }
-
-  return unwrapFunctionData<T>(data);
+  return invokeEdgeFunction<T>(name, body);
 }
 
 export default function App() {
