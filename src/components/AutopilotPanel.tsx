@@ -337,6 +337,18 @@ export default function AutopilotPanel({
   );
   const schemaReady = isFanAgentSchemaReady(diagnostics?.schema);
   const sourceOptions = useMemo(() => buildSourceOptions(diagnostics?.env), [diagnostics?.env]);
+  const selectedCategory = useMemo(
+    () => categories.find((c) => c.id === categoryId) ?? null,
+    [categories, categoryId],
+  );
+  const derivedSourceMode: SourceMode = useMemo(() => {
+    if (randomize) return "stock";
+    if (!selectedCategory) return sourceMode;
+    return coerceSelectableSourceMode(categoryToSourceMode(selectedCategory), diagnostics?.env);
+  }, [randomize, selectedCategory, sourceMode, diagnostics?.env]);
+  useEffect(() => {
+    if (derivedSourceMode !== sourceMode) setSourceMode(derivedSourceMode);
+  }, [derivedSourceMode, sourceMode]);
   const trimmedAudioKey = useMemo(
     () =>
       trimmedAudio
