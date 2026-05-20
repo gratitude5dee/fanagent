@@ -119,12 +119,8 @@ export function UploadStep({
             Could not register this audio clip: {audioClipError ?? "Registration failed."}
           </div>
         ) : null}
-        {!schemaReady ? (
-          <div className="banner bad">
-            Database queue schema is not ready. Generation is blocked until the live migration is
-            applied.
-          </div>
-        ) : null}
+        {/* Schema readiness banner removed — surfaced in AutopilotPanel diagnostics row. */}
+
         {!isConnected ? (
           <div className="banner warn">
             TikTok is not connected. Videos can still generate; auto-posting will wait until OAuth
