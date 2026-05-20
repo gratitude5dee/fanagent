@@ -680,7 +680,11 @@ export default function AutopilotPanel({
             originalFileName: trimmedAudio.originalFileName,
           }
         : undefined,
-      sourceMode,
+      sourceMode: derivedSourceMode,
+      categoryId: randomize ? null : (categoryId || null),
+      subcategorySlug: randomize ? null : (subcategorySlug || null),
+      randomize,
+      autoRender,
       durationSeconds: duration,
       dedupeStrategy,
       postCount,
