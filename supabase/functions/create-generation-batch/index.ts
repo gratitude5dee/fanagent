@@ -139,6 +139,10 @@ function validatePayload(body: CreateBatchRequest) {
       disableComment: false,
       ...(body.publishDefaults ?? {}),
     },
+    categoryId: body.categoryId ?? null,
+    subcategorySlug: body.subcategorySlug ?? null,
+    randomize: body.randomize === true,
+    autoRender: body.autoRender === true,
   };
 }
 
