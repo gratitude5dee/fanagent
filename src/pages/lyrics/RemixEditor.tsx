@@ -4,6 +4,7 @@ import { ChevronLeft, Play, Pause, Sparkles, Wand2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { invokeEdgeFunction } from "@/lib/fanagent/invokeFunction";
 import { lyricsApi } from "@/lib/lyrics/api";
+import { useTrimmedAudioUrl } from "@/lib/lyrics/useTrimmedAudioUrl";
 import type { LyricTemplate, RemixRenderDefaults } from "@/lib/lyrics/types";
 import { appRoutes } from "@/lib/routes";
 
