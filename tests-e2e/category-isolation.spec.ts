@@ -109,7 +109,8 @@ test.describe("category isolation e2e", () => {
           .eq("status", "ready")
           .order("updated_at", { ascending: false })
           .limit(1);
-        if (rows.data?.[0]) ready = rows.data[0] as typeof ready;
+        const row = rows.data?.[0] as { id: string; provenance: unknown[] } | undefined;
+        if (row) ready = row;
         else await new Promise((r) => setTimeout(r, 3000));
       }
       expect(ready, "library item never reached ready").toBeTruthy();
@@ -128,7 +129,8 @@ test.describe("category isolation e2e", () => {
         expect(row.subcategory_slug).toBe("sports_edits_basketball");
       }
     } finally {
-      await cleanupAccount(client, accountId);
+      await cleanupAccount(accountId, client);
     }
+
   });
 });
