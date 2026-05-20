@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, Pause, Pencil, Play, RotateCcw, Type, Wand2 } from "lucide-react";
 import type { LyricBlock, LyricTemplate, TranscribeStatus } from "@/lib/lyrics/types";
+import type { AudioEngine } from "@/lib/lyrics/useAudioEngine";
 
 type Props = {
   template: LyricTemplate | null;
-  audioUrl: string | null;
-  audioElRef: React.RefObject<HTMLAudioElement | null>;
+  engine: AudioEngine;
   onDone: (blocks: LyricBlock[]) => Promise<void>;
   onRetry: () => Promise<void>;
 };
@@ -29,38 +29,18 @@ const STATUS_LABEL: Record<TranscribeStatus, string> = {
   failed: "Transcription failed",
 };
 
-export default function LyricsPanel({ template, audioUrl, audioElRef, onDone, onRetry }: Props) {
+export default function LyricsPanel({ template, engine, onDone, onRetry }: Props) {
   const status = statusToTranscribe(template);
   const [blocks, setBlocks] = useState<LyricBlock[]>(template?.lyric_blocks ?? []);
   const [editingWord, setEditingWord] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
-  const [time, setTime] = useState(0);
-  const [playing, setPlaying] = useState(false);
 
   useEffect(() => {
     setBlocks(template?.lyric_blocks ?? []);
   }, [template?.id, template?.lyric_blocks]);
 
-  useEffect(() => {
-    const a = audioElRef.current;
-    if (!a) return;
-    const t = () => setTime(a.currentTime);
-    a.addEventListener("timeupdate", t);
-    return () => a.removeEventListener("timeupdate", t);
-  }, [audioElRef, audioUrl]);
-
-  function togglePlay() {
-    const a = audioElRef.current;
-    if (!a) return;
-    if (a.paused) {
-      a.play();
-      setPlaying(true);
-    } else {
-      a.pause();
-      setPlaying(false);
-    }
-  }
+  const time = engine.currentTime;
 
   function manualEntry() {
     const block: LyricBlock = {
@@ -152,8 +132,12 @@ export default function LyricsPanel({ template, audioUrl, audioElRef, onDone, on
       {blocks.length > 0 ? (
         <>
           <div className="lyr-mini-player">
-            <button className="lyr-btn" onClick={togglePlay}>
-              {playing ? <Pause size={14} /> : <Play size={14} />}
+            <button
+              className="lyr-btn"
+              onClick={() => engine.toggle()}
+              disabled={!engine.isReady}
+            >
+              {engine.isPlaying ? <Pause size={14} /> : <Play size={14} />}
             </button>
             <span>{time.toFixed(2)}s</span>
             <span className="lyr-tag">

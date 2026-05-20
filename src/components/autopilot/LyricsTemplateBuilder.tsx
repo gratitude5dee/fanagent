@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useState } from "react";
 import { ChevronLeft, HelpCircle, Loader2, Save, Sparkles } from "lucide-react";
 import AudioPanel from "@/pages/lyrics/panels/AudioPanel";
 import LyricsPanel from "@/pages/lyrics/panels/LyricsPanel";
 import MarkersPanel from "@/pages/lyrics/panels/MarkersPanel";
-import { supabase } from "@/integrations/supabase/client";
 import { lyricsApi } from "@/lib/lyrics/api";
+import { useAudioEngine } from "@/lib/lyrics/useAudioEngine";
+import { useTrimmedAudioUrl } from "@/lib/lyrics/useTrimmedAudioUrl";
 import type { LyricBlock, LyricTemplate } from "@/lib/lyrics/types";
 import { statusToStep, type WizardStep } from "@/lib/lyrics/types";
 
@@ -18,7 +19,7 @@ export interface LyricsTemplateBuilderProps {
 type State = {
   templateId: string | null;
   template: LyricTemplate | null;
-  trimmedAudioUrl: string | null;
+  previewUrl: string | null; // URL.createObjectURL for raw upload preview (step 1)
   loading: boolean;
   saving: boolean;
   error: string | null;
@@ -30,7 +31,7 @@ type Action =
   | { type: "loading"; loading: boolean }
   | { type: "saving"; saving: boolean }
   | { type: "error"; error: string | null }
-  | { type: "set_audio_url"; url: string | null }
+  | { type: "set_preview"; url: string | null }
   | { type: "patch"; patch: Partial<LyricTemplate> };
 
 function reducer(state: State, action: Action): State {
@@ -39,7 +40,7 @@ function reducer(state: State, action: Action): State {
       return {
         templateId: action.templateId,
         template: null,
-        trimmedAudioUrl: null,
+        previewUrl: null,
         loading: !!action.templateId,
         saving: false,
         error: null,
@@ -52,8 +53,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, saving: action.saving };
     case "error":
       return { ...state, error: action.error };
-    case "set_audio_url":
-      return { ...state, trimmedAudioUrl: action.url };
+    case "set_preview":
+      return { ...state, previewUrl: action.url };
     case "patch":
       return state.template
         ? { ...state, template: { ...state.template, ...action.patch } }
@@ -79,20 +80,6 @@ function audioClipIdFromTemplate(template: LyricTemplate): string | null {
   return audioClipId ?? null;
 }
 
-async function signedUrlForTemplate(template: LyricTemplate): Promise<string | null> {
-  if (!template.trimmed_audio_asset_id) return null;
-  const { data: asset } = await supabase
-    .from("project_assets")
-    .select("storage_bucket,storage_path")
-    .eq("id", template.trimmed_audio_asset_id)
-    .maybeSingle();
-  if (!asset) return null;
-  const { data: signed } = await supabase.storage
-    .from(asset.storage_bucket)
-    .createSignedUrl(asset.storage_path, 3600);
-  return signed?.signedUrl ?? null;
-}
-
 export default function LyricsTemplateBuilder({
   templateId,
   onTemplateIdChange,
@@ -102,13 +89,30 @@ export default function LyricsTemplateBuilder({
   const [state, dispatch] = useReducer(reducer, {
     templateId,
     template: null,
-    trimmedAudioUrl: null,
+    previewUrl: null,
     loading: !!templateId,
     saving: false,
     error: null,
   });
   const [step, setStep] = useState<WizardStep>(1);
-  const audioElRef = useRef<HTMLAudioElement | null>(null);
+
+  const engine = useAudioEngine();
+  const { url: trimmedAudioUrl, error: trimmedError, retry: retryTrimmed } = useTrimmedAudioUrl(
+    state.template,
+  );
+
+  // Drive the engine: trimmed audio takes precedence; otherwise raw upload preview.
+  useEffect(() => {
+    if (trimmedAudioUrl) {
+      engine.load(trimmedAudioUrl);
+      const clipSec = (state.template?.selection_duration_ms ?? 15000) / 1000;
+      engine.setLoop(0, clipSec, { loop: true });
+    } else if (state.previewUrl) {
+      engine.load(state.previewUrl);
+    } else {
+      engine.load(null);
+    }
+  }, [trimmedAudioUrl, state.previewUrl, state.template?.selection_duration_ms, engine]);
 
   useEffect(() => {
     onTemplateIdChange(state.templateId);
@@ -136,9 +140,6 @@ export default function LyricsTemplateBuilder({
 
         dispatch({ type: "set_template", template: hydratedTemplate });
         setStep(statusToStep(hydratedTemplate.status));
-        const signedUrl = await signedUrlForTemplate(hydratedTemplate);
-        if (cancelled) return;
-        if (signedUrl) dispatch({ type: "set_audio_url", url: signedUrl });
       } catch (error) {
         dispatch({ type: "error", error: error instanceof Error ? error.message : String(error) });
       } finally {
@@ -150,10 +151,15 @@ export default function LyricsTemplateBuilder({
     };
   }, [templateId]);
 
+  // Surface trimmed-url errors at the wizard level.
+  useEffect(() => {
+    if (trimmedError) dispatch({ type: "error", error: trimmedError });
+  }, [trimmedError]);
+
   const onAudioConfirmed = useCallback(
-    async (out: { template: LyricTemplate; signedUrl: string }) => {
+    async (out: { template: LyricTemplate }) => {
       dispatch({ type: "set_template", template: out.template });
-      dispatch({ type: "set_audio_url", url: out.signedUrl });
+      dispatch({ type: "set_preview", url: null });
       setStep(2);
       try {
         const { template } = await lyricsApi.transcribe(out.template.id, false);
@@ -164,6 +170,10 @@ export default function LyricsTemplateBuilder({
     },
     [],
   );
+
+  const onPreviewUrl = useCallback((url: string | null) => {
+    dispatch({ type: "set_preview", url });
+  }, []);
 
   async function onLyricsDone(blocks: LyricBlock[]) {
     if (!state.template) return;
@@ -222,7 +232,16 @@ export default function LyricsTemplateBuilder({
       <h1 className="lyr-page-title">CREATE TEMPLATE</h1>
 
       {state.loading ? <div className="lyr-banner">Loading template...</div> : null}
-      {state.error ? <div className="lyr-banner bad">{state.error}</div> : null}
+      {state.error ? (
+        <div className="lyr-banner bad">
+          {state.error}
+          {trimmedError ? (
+            <button type="button" className="lyr-btn" onClick={retryTrimmed}>
+              Retry audio
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="lyr-wizard-grid">
         <section className={`lyr-wpanel ${step === 1 ? "active" : ""}`}>
@@ -232,7 +251,9 @@ export default function LyricsTemplateBuilder({
           </header>
           <AudioPanel
             existing={state.template}
-            existingAudioUrl={state.trimmedAudioUrl}
+            engine={engine}
+            hasTrimmedAudio={!!trimmedAudioUrl}
+            onPreviewUrl={onPreviewUrl}
             onConfirmed={onAudioConfirmed}
             onError={(message) => dispatch({ type: "error", error: message })}
           />
@@ -245,8 +266,7 @@ export default function LyricsTemplateBuilder({
           </header>
           <LyricsPanel
             template={state.template}
-            audioUrl={state.trimmedAudioUrl}
-            audioElRef={audioElRef}
+            engine={engine}
             onDone={onLyricsDone}
             onRetry={async () => {
               if (!state.template) return;
@@ -271,7 +291,7 @@ export default function LyricsTemplateBuilder({
           <MarkersPanel
             active={step === 3}
             template={state.template}
-            audioUrl={state.trimmedAudioUrl}
+            engine={engine}
             onChange={onMarkersChange}
           />
         </section>
