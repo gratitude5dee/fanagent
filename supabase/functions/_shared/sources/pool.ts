@@ -101,6 +101,7 @@ export async function getCategoryBySlug(
 export async function listAllCategories(
   client?: SupabaseClient,
 ): Promise<ClipCategory[]> {
+  const supabase = client ?? (await lazyAdmin());
   const { data, error } = await supabase
     .from("clip_categories")
     .select("id,slug,name,parent_id,source_type")
