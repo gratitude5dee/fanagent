@@ -332,7 +332,7 @@ export default function AutopilotPanel() {
         cancelled = true;
       };
     }
-    if (!accountId || !schemaReady) {
+    if (!accountId) {
       setAudioClipStatus("idle");
       return () => {
         cancelled = true;
