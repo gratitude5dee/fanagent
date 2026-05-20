@@ -1002,7 +1002,10 @@ export default function AutopilotPanel({
                   onPrompt={setPrompt}
                   onPublishPrivacy={setPublishPrivacy}
                   onSeedanceResolution={setSeedanceResolution}
-                  onSourceMode={setSourceMode}
+                  onCategoryId={setCategoryId}
+                  onSubcategorySlug={setSubcategorySlug}
+                  onRandomize={setRandomize}
+                  onAutoRender={setAutoRender}
                   onSportsAllowedChannels={setSportsAllowedChannels}
                   onSportsLeague={setSportsLeague}
                   onSportsOwnerAssetUrls={setSportsOwnerAssetUrls}
