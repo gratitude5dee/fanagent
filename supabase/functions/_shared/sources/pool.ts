@@ -3,7 +3,8 @@
 // only contain basketball clips. Never widen the filter. If the pool is empty,
 // surface that to the caller — never silently substitute.
 
-import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+// Use any for the supabase client type — Deno-only npm: imports break vitest type-check.
+type SupabaseClient = any;
 import { getSupabaseAdmin } from "../supabase.ts";
 import type { SourceCandidate, SourceType } from "./types.ts";
 
