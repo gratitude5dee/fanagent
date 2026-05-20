@@ -54,6 +54,7 @@ export type LibrarySlotInput = {
   batchId: string;
   quantity: number;
   durationSec: number;
+  indexOffset?: number;
 };
 
 export type SegmentLike = {
