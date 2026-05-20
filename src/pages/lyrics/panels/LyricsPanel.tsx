@@ -219,6 +219,23 @@ export default function LyricsPanel({ template, engine, onDone, onRetry }: Props
               >
                 <header>
                   <Wand2 size={12} /> {b.label}
+                  <span style={{ flex: 1 }} />
+                  <button
+                    type="button"
+                    className="lyr-btn ghost xs"
+                    onClick={() => addWord(b.id)}
+                    title="Add word"
+                  >
+                    <Plus size={12} /> Word
+                  </button>
+                  <button
+                    type="button"
+                    className="lyr-btn ghost xs"
+                    onClick={() => deleteBlock(b.id)}
+                    title="Delete block"
+                  >
+                    <Trash2 size={12} />
+                  </button>
                 </header>
                 <div className="lyr-words">
                   {b.words.map((w) => {
@@ -232,32 +249,42 @@ export default function LyricsPanel({ template, engine, onDone, onRetry }: Props
                         defaultValue={w.text}
                         onChange={(e) => setDraft(e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter") commitWordEdit(b.id, w.id, draft || w.text);
+                          if (e.key === "Enter") commitWordEdit(b.id, w.id, draft);
                           if (e.key === "Escape") setEditingWord(null);
                         }}
-                        onBlur={() => commitWordEdit(b.id, w.id, draft || w.text)}
+                        onBlur={() => commitWordEdit(b.id, w.id, draft)}
                       />
                     ) : (
-                      <button
-                        key={w.id}
-                        ref={(el) => {
-                          if (el) wordRefs.current.set(w.id, el);
-                          else wordRefs.current.delete(w.id);
-                        }}
-                        type="button"
-                        className={`lyr-word ${active ? "active" : ""}`}
-                        onClick={(e) => {
-                          if (e.shiftKey) {
-                            engine.seek(w.startTime);
-                            return;
-                          }
-                          setDraft(w.text);
-                          setEditingWord(w.id);
-                        }}
-                        title="Click to edit · Shift+Click to seek"
-                      >
-                        {w.text}
-                      </button>
+                      <span key={w.id} className={`lyr-word-wrap ${active ? "active" : ""}`}>
+                        <button
+                          ref={(el) => {
+                            if (el) wordRefs.current.set(w.id, el);
+                            else wordRefs.current.delete(w.id);
+                          }}
+                          type="button"
+                          className={`lyr-word ${active ? "active" : ""}`}
+                          onClick={(e) => {
+                            if (e.shiftKey) {
+                              engine.seek(w.startTime);
+                              return;
+                            }
+                            setDraft(w.text);
+                            setEditingWord(w.id);
+                          }}
+                          title="Click to edit · Shift+Click to seek · clear text to delete"
+                        >
+                          {w.text}
+                        </button>
+                        <button
+                          type="button"
+                          className="lyr-word-del"
+                          onClick={() => deleteWord(b.id, w.id)}
+                          title="Delete word"
+                          aria-label="Delete word"
+                        >
+                          <X size={10} />
+                        </button>
+                      </span>
                     );
                   })}
                 </div>
