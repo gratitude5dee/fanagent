@@ -40,6 +40,10 @@ type CreateBatchRequest = {
   stockSettings?: Record<string, unknown>;
   seedanceSettings?: Record<string, unknown>;
   publishDefaults?: Record<string, unknown>;
+  categoryId?: string | null;
+  subcategorySlug?: string | null;
+  randomize?: boolean;
+  autoRender?: boolean;
 };
 
 const supportedAudio = new Set([
