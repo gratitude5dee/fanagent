@@ -111,14 +111,19 @@ export default function MarkersPanel({ active, template, engine, onChange }: Pro
     return () => window.removeEventListener("keydown", onKey);
   }, [active, togglePlay, addAtCurrent, undo, redo, deleteNearest]);
 
+  // Pick the block whose window contains the playhead; otherwise fall back to
+  // the next upcoming block (or last if past the end) so the stage is never
+  // empty while audio is loaded.
   const activeBlock: LyricBlock | null = useMemo(() => {
+    if (!blocks.length) return null;
     for (const b of blocks) {
       if (time >= b.startTime && time <= b.endTime) return b;
       for (const w of b.words) {
         if (time >= w.startTime && time <= w.endTime) return b;
       }
     }
-    return null;
+    const upcoming = blocks.find((b) => b.startTime > time);
+    return upcoming ?? blocks[blocks.length - 1];
   }, [blocks, time]);
 
   const activeWord: LyricWord | null = useMemo(() => {
