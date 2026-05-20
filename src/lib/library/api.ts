@@ -230,18 +230,45 @@ export async function getLibraryDetail(audioClipId: string): Promise<LibraryDeta
 }
 
 export async function listReadyLibraryItems(limit = 50): Promise<LibraryItem[]> {
+  // Fetch a wider window so we can exclude items that already have an
+  // active post row (status != 'skipped') and still return ~limit results.
+  const fetchLimit = Math.min(limit * 3, 250);
   const items = await supabase
     .from("video_library_items")
     .select("*")
     .eq("status", "ready")
     .order("updated_at", { ascending: false })
-    .limit(limit);
+    .limit(fetchLimit);
   if (items.error) throw items.error;
 
   const itemRows = (items.data ?? []) as Record<string, unknown>[];
+  const libraryIds = itemRows
+    .map((row) => row.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+  // A library item is only "available in the Ready lane" if it has no
+  // active post. Skipped/recovered posts don't count.
+  const claimedIds = new Set<string>();
+  if (libraryIds.length > 0) {
+    const linkedPosts = await supabase
+      .from("posts")
+      .select("library_item_id,status")
+      .in("library_item_id", libraryIds)
+      .neq("status", "skipped");
+    if (linkedPosts.error) throw linkedPosts.error;
+    for (const row of (linkedPosts.data ?? []) as Record<string, unknown>[]) {
+      const id = typeof row.library_item_id === "string" ? row.library_item_id : null;
+      if (id) claimedIds.add(id);
+    }
+  }
+
+  const availableRows = itemRows
+    .filter((row) => typeof row.id === "string" && !claimedIds.has(row.id as string))
+    .slice(0, limit);
+
   const assetIds = Array.from(
     new Set(
-      itemRows
+      availableRows
         .map((row) => row.final_asset_id)
         .filter((id): id is string => typeof id === "string" && id.length > 0),
     ),
@@ -259,13 +286,14 @@ export async function listReadyLibraryItems(limit = 50): Promise<LibraryItem[]> 
     }
   }
 
-  return itemRows.map((row) =>
+  return availableRows.map((row) =>
     coerceLibraryItem(
       row,
       typeof row.final_asset_id === "string" ? mediaById.get(row.final_asset_id) : null,
     ),
   );
 }
+
 
 export async function regenerateGenerationItems(generationItemIds: string[]): Promise<void> {
   for (const itemId of generationItemIds) {
