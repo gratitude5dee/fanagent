@@ -457,6 +457,92 @@ Deno.serve(async (req) => {
         if (error) throw error;
         return okEnvelope({ template: data });
       }
+      case "signTrimmedAudio": {
+        // Returns a fresh signed URL for the template's trimmed audio asset.
+        // Runs with service-role so it bypasses project_assets RLS (templates
+        // created under the anon sentinel user can't be read from the browser).
+        const templateId = body.templateId as string;
+        if (!templateId) {
+          return errorEnvelope("templateId is required", "TEMPLATE_ID_REQUIRED", 400);
+        }
+        const ttlSec = typeof body.ttlSec === "number" ? Math.max(60, Math.min(86400, body.ttlSec)) : 3600;
+        const admin = createClient(
+          Deno.env.get("SUPABASE_URL")!,
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+        );
+        const tpl = await admin
+          .from("kanvas_lyric_templates")
+          .select("id,trimmed_audio_asset_id,source_audio_asset_id,transcript_meta,render_defaults")
+          .eq("id", templateId)
+          .single();
+        if (tpl.error) throw tpl.error;
+
+        let assetId: string | null =
+          (tpl.data.trimmed_audio_asset_id as string | null) ??
+          (tpl.data.source_audio_asset_id as string | null);
+
+        const tryFetchAsset = async (id: string) => {
+          const r = await admin
+            .from("project_assets")
+            .select("storage_bucket,storage_path")
+            .eq("id", id)
+            .maybeSingle();
+          if (r.error) throw r.error;
+          return r.data && r.data.storage_path ? r.data : null;
+        };
+
+        let asset = assetId ? await tryFetchAsset(assetId) : null;
+
+        // Fallback: rebuild the project_asset row from the linked media_asset.
+        if (!asset) {
+          const meta = (tpl.data.transcript_meta ?? {}) as Record<string, unknown>;
+          const renderDefaults = (tpl.data.render_defaults ?? {}) as Record<string, unknown>;
+          const mediaAssetId =
+            (typeof meta.media_asset_id === "string" && meta.media_asset_id) ||
+            (typeof renderDefaults.media_asset_id === "string" && renderDefaults.media_asset_id) ||
+            null;
+          if (mediaAssetId) {
+            const ma = await admin
+              .from("media_assets")
+              .select(MEDIA_ASSET_SELECT)
+              .eq("id", mediaAssetId)
+              .single();
+            if (ma.error) throw ma.error;
+            const newAssetId = await ensureProjectAssetForMediaAsset({
+              admin,
+              asset: ma.data as MediaAssetRow,
+              userId,
+              durationMs: Math.round(Number(ma.data?.duration_seconds ?? 0) * 1000) || 15000,
+            });
+            await admin
+              .from("kanvas_lyric_templates")
+              .update({ trimmed_audio_asset_id: newAssetId })
+              .eq("id", templateId);
+            assetId = newAssetId;
+            asset = await tryFetchAsset(newAssetId);
+          }
+        }
+
+        if (!asset) {
+          return errorEnvelope(
+            "No storage object available for this template.",
+            "TEMPLATE_AUDIO_MISSING",
+            404,
+          );
+        }
+
+        const signed = await admin.storage
+          .from(asset.storage_bucket)
+          .createSignedUrl(asset.storage_path!, ttlSec);
+        if (signed.error || !signed.data?.signedUrl) {
+          throw signed.error ?? new Error("Failed to sign trimmed audio URL");
+        }
+        return okEnvelope({
+          signedUrl: signed.data.signedUrl,
+          expiresInSec: ttlSec,
+          assetId,
+        });
+      }
       default:
         return errorEnvelope(`Unknown action: ${body.action}`, "UNKNOWN_ACTION", 400);
     }
