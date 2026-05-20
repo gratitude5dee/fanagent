@@ -164,6 +164,9 @@ export function LyricsStep({
           <button className="button ghost" type="button" onClick={() => onDrawerOpen(!drawerOpen)}>
             {drawerOpen ? "Hide review" : "Review lyrics"}
           </button>
+          <Link to={appRoutes.lyricsHome} className="button ghost">
+            <ExternalLink size={14} /> Open lyrics studio
+          </Link>
           {hasGeneratedTemplateToReview ? (
             <button type="button" className="button ghost" onClick={() => openBuilder(null)}>
               <Plus size={14} /> New blank template
