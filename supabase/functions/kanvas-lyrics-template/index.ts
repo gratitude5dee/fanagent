@@ -312,10 +312,117 @@ Deno.serve(async (req) => {
         return okEnvelope({ template: data });
       }
       case "finalize": {
+        const templateId = body.templateId as string;
+        // Load template so we can bridge to an audio_clips row for downstream
+        // generation pipelines that key off audio_clip_id.
+        const tpl = await supabase
+          .from("kanvas_lyric_templates")
+          .select("*")
+          .eq("id", templateId)
+          .single();
+        if (tpl.error) throw tpl.error;
+
+        const admin = createClient(
+          Deno.env.get("SUPABASE_URL")!,
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+        );
+
+        let audioClipId: string | null = tpl.data.audio_clip_id ?? null;
+        const trimmedProjectAssetId =
+          (tpl.data.trimmed_audio_asset_id as string | null) ??
+          (tpl.data.source_audio_asset_id as string | null);
+
+        if (!audioClipId && trimmedProjectAssetId) {
+          // Look up the project_asset, then mirror it into media_assets so an
+          // audio_clip row can reference it. The existing seedance/stock
+          // pipeline keys off audio_clips + media_assets.
+          const projAsset = await admin
+            .from("project_assets")
+            .select(
+              "id,storage_bucket,storage_path,file_name,mime_type,byte_size,duration_ms,public_url,metadata",
+            )
+            .eq("id", trimmedProjectAssetId)
+            .single();
+          if (projAsset.error) throw projAsset.error;
+
+          // Reuse media_asset if it already exists for this storage path.
+          const existingMedia = await admin
+            .from("media_assets")
+            .select("id")
+            .eq("storage_bucket", projAsset.data.storage_bucket)
+            .eq("storage_path", projAsset.data.storage_path)
+            .limit(1)
+            .maybeSingle();
+          if (existingMedia.error) throw existingMedia.error;
+
+          let mediaAssetId = existingMedia.data?.id as string | undefined;
+          if (!mediaAssetId) {
+            const inserted = await admin
+              .from("media_assets")
+              .insert({
+                account_id: null,
+                kind: "audio",
+                source: "lyric_template",
+                storage_bucket: projAsset.data.storage_bucket,
+                storage_path: projAsset.data.storage_path,
+                public_url: projAsset.data.public_url ?? "",
+                file_name: projAsset.data.file_name,
+                mime_type: projAsset.data.mime_type,
+                byte_size: projAsset.data.byte_size,
+                duration_seconds: (projAsset.data.duration_ms ?? 0) / 1000,
+                metadata: {
+                  ...(projAsset.data.metadata ?? {}),
+                  bridged_from_project_asset_id: projAsset.data.id,
+                  bridged_for_lyric_template_id: templateId,
+                },
+              })
+              .select("id")
+              .single();
+            if (inserted.error) throw inserted.error;
+            mediaAssetId = String(inserted.data.id);
+          }
+
+          const durationSec = Math.max(
+            1,
+            Math.round(
+              (Number(tpl.data.selection_duration_ms ?? 0) ||
+                Number(projAsset.data.duration_ms ?? 0)) / 1000,
+            ),
+          );
+          const clipIns = await admin
+            .from("audio_clips")
+            .insert({
+              account_id: null,
+              source_asset_id: mediaAssetId,
+              trimmed_asset_id: mediaAssetId,
+              selection_start_sec: Number(tpl.data.selection_start_ms ?? 0) / 1000,
+              selection_end_sec:
+                (Number(tpl.data.selection_start_ms ?? 0) +
+                  Number(tpl.data.selection_duration_ms ?? 0)) /
+                1000,
+              duration_sec: durationSec,
+              file_name: projAsset.data.file_name,
+              transcription_status: Array.isArray(tpl.data.lyric_blocks)
+                ? "completed"
+                : "pending",
+              default_lyric_template_id: templateId,
+              lyric_template_id: templateId,
+              metadata: { created_from: "kanvas-lyrics-template:finalize" },
+            })
+            .select("id")
+            .single();
+          if (clipIns.error) throw clipIns.error;
+          audioClipId = String(clipIns.data.id);
+        }
+
         const { data, error } = await supabase
           .from("kanvas_lyric_templates")
-          .update({ status: "saved", saved_at: new Date().toISOString() })
-          .eq("id", body.templateId as string)
+          .update({
+            status: "saved",
+            saved_at: new Date().toISOString(),
+            audio_clip_id: audioClipId,
+          })
+          .eq("id", templateId)
           .select("*")
           .single();
         if (error) throw error;
@@ -325,6 +432,25 @@ Deno.serve(async (req) => {
         const { data, error } = await supabase
           .from("kanvas_lyric_templates")
           .update({ status: "archived", archived_at: new Date().toISOString() })
+          .eq("id", body.templateId as string)
+          .select("*")
+          .single();
+        if (error) throw error;
+        return okEnvelope({ template: data });
+      }
+      case "patchRenderDefaults": {
+        const renderDefaults = (body.renderDefaults as Record<string, unknown>) ?? {};
+        // Merge into existing render_defaults to avoid clobbering keys.
+        const current = await supabase
+          .from("kanvas_lyric_templates")
+          .select("render_defaults")
+          .eq("id", body.templateId as string)
+          .single();
+        if (current.error) throw current.error;
+        const merged = { ...(current.data.render_defaults ?? {}), ...renderDefaults };
+        const { data, error } = await supabase
+          .from("kanvas_lyric_templates")
+          .update({ render_defaults: merged })
           .eq("id", body.templateId as string)
           .select("*")
           .single();

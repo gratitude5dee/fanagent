@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ChevronLeft, FileMusic, Plus } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Archive, ChevronLeft, ExternalLink, FileMusic, Plus } from "lucide-react";
 import LyricsTemplateBuilder from "@/components/autopilot/LyricsTemplateBuilder";
 import { lyricsApi } from "@/lib/lyrics/api";
+import { appRoutes } from "@/lib/routes";
 import type { LyricTemplate, LyricTemplateSummary, TemplateStatus } from "@/lib/lyrics/types";
 
 type LyricsStepProps = {
@@ -162,6 +164,9 @@ export function LyricsStep({
           <button className="button ghost" type="button" onClick={() => onDrawerOpen(!drawerOpen)}>
             {drawerOpen ? "Hide review" : "Review lyrics"}
           </button>
+          <Link to={appRoutes.lyricsHome} className="button ghost">
+            <ExternalLink size={14} /> Open lyrics studio
+          </Link>
           {hasGeneratedTemplateToReview ? (
             <button type="button" className="button ghost" onClick={() => openBuilder(null)}>
               <Plus size={14} /> New blank template

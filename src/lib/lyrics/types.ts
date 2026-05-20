@@ -54,6 +54,19 @@ export type TemplateStatus =
   | "failed"
   | "archived";
 
+export interface RemixRenderDefaults {
+  lyricStyleId?: string;
+  scale?: number;
+  aspectRatio?: "9:16" | "1:1" | "16:9";
+  sourceMode?: "stock" | "seedance" | "library" | "mixed" | "gmi_seedance";
+  prompt?: string;
+  quantity?: number;
+  cadenceMinutes?: number;
+  hashtags?: string[];
+  noCuts?: boolean;
+  [key: string]: unknown;
+}
+
 export interface LyricTemplate {
   id: string;
   user_id: string;
@@ -61,6 +74,7 @@ export interface LyricTemplate {
   status: TemplateStatus;
   source_audio_asset_id: string | null;
   trimmed_audio_asset_id: string | null;
+  audio_clip_id: string | null;
   selection_start_ms: number;
   selection_duration_ms: number;
   total_duration_ms: number;
@@ -68,7 +82,7 @@ export interface LyricTemplate {
   lyric_blocks: LyricBlock[];
   cut_markers: number[]; // ms
   transcript_meta: Record<string, unknown>;
-  render_defaults: Record<string, unknown>;
+  render_defaults: RemixRenderDefaults;
   error_message: string | null;
   saved_at: string | null;
   archived_at: string | null;
