@@ -1,45 +1,76 @@
-## Goal
+# Fix plan
 
-Refactor the fal.ai integration in `supabase/functions/_shared/fal.ts` to expose every `fal-ai/ffmpeg-api/*` endpoint we need, and use the right one for each pipeline step instead of overloading `compose` for everything.
+## What I found
 
-## Endpoints to wrap
+Two separate problems are showing up:
 
-In `_shared/fal.ts`, replace the current ad-hoc `falRun` usage with a typed helper per endpoint, all hitting `https://fal.run/<model>` (sync) with the existing `Authorization: Key ${FAL_KEY}` header:
+1. **Home page / Autopilot error**
+   - The current browser network snapshot shows `fanpage-campaign` itself returning **200 OK** on home page load for `action: "list"`.
+   - That means the visible message **“Failed to send a request to the Edge Function”** is likely coming from:
+     - a deeper child call during campaign launch, or
+     - the frontend’s generic `supabase.functions.invoke()` error handling, not the top-level list request.
+   - The UI currently blocks launch on `schemaReady`, and that value is derived from the **diagnostics endpoint**, which is doing many time-bounded schema/storage checks. A transient diagnostics failure can therefore make the UI say **“Database queue schema is not ready”** even when the queue tables likely exist.
 
-1. `mergeVideos(urls)` → `fal-ai/ffmpeg-api/merge-videos`
-2. `compose(tracks, opts?)` → `fal-ai/ffmpeg-api/compose` (multi-track timeline; keep current shape)
-3. `mergeAudioVideo(videoUrl, audioUrl)` → `fal-ai/ffmpeg-api/merge-audio-video`
-4. `extractFrame(videoUrl, position?)` → `fal-ai/ffmpeg-api/extract-frame` (for thumbnails)
-5. `getMediaMetadata(fileUrl)` → `fal-ai/ffmpeg-api/metadata`
-6. `mergeAudios(urls)` → `fal-ai/ffmpeg-api/merge-audios`
-7. `loudnorm(audioUrl, opts?)` → `fal-ai/ffmpeg-api/loudnorm`
-8. `waveform(audioUrl, opts?)` → `fal-ai/ffmpeg-api/waveform`
+2. **Runtime loop**
+   - The runtime stack clearly identifies a React loop:
+     - `LyricsWizard.tsx:96` → `onMarkersChange`
+     - `MarkersPanel.tsx:25-35` effect calling `onChange`
+   - `MarkersPanel` fires `onChange(markers)` in an effect, which updates parent state, which re-renders the child, which can keep retriggering the effect. That is the direct cause of the **Maximum update depth exceeded** error.
 
-Each helper returns a normalized `{ url, raw }` (or `{ data }` for metadata/waveform). Keep existing `generateSeedanceClip`, `stitchClipsWithAudio`, `composeWithSubtitles` exports but reimplement them on top of the new primitives so callers don't break.
+## Proposed implementation
 
-We will keep using the REST `fal.run` sync endpoint (already works in Deno). We will NOT pull in `@fal-ai/client` — the snippets in the user message are reference for the input shapes, not a runtime requirement; the npm client doesn't run cleanly in Supabase edge runtime.
+### 1) Fix the React update loop in the lyrics flow
+- Update `src/pages/lyrics/panels/MarkersPanel.tsx` so it does **not** call `onChange` from a passive sync effect on every render cycle.
+- Change marker propagation to happen only on **user-driven edits**:
+  - add marker
+  - delete marker
+  - drag marker commit
+  - undo/redo
+- Keep the existing local state sync from `template.cut_markers`, but guard it so it only updates when the incoming markers are actually different.
 
-## Wire into pipeline
+### 2) Make the Autopilot preflight less fragile
+- Update `src/components/AutopilotPanel.tsx` so launch gating is based on **hard failures only**, not transient diagnostics noise.
+- Treat diagnostics as:
+  - **informational** for warnings/timeouts
+  - **blocking** only when the schema check conclusively reports missing required tables/columns
+- Avoid using an initially-null diagnostics result as a hard block if the campaign create path itself is valid.
 
-- `stitch-segments/index.ts`:
-  - When there's a single segment URL and no markers and no audio overlay needed → keep passthrough.
-  - When stitching pure video clips with no audio mix → use `mergeVideos`.
-  - When overlaying the batch audio on the stitched video → call `mergeVideos` first, then `mergeAudioVideo`, instead of building a `compose` timeline. Fall back to `compose` only when per-segment durations differ from the source clip lengths (marker-driven trims).
-- `render-karaoke/index.ts`: keep `composeWithSubtitles` (compose is the only endpoint that supports a subtitles track).
-- New optional helper: after `render-karaoke` succeeds, call `extractFrame(finalUrl, "middle")` and store the PNG as the post thumbnail on `media_assets.metadata.thumbnail_url`. (Behind a flag; don't block the pipeline if it fails.)
+### 3) Improve edge-function error surfacing on the homepage
+- Update the frontend function wrappers in:
+  - `src/components/AutopilotPanel.tsx`
+  - `src/App.tsx`
+  - `src/lib/fanagent/audioClip.ts`
+  - `src/lib/lyrics/api.ts`
+- Normalize Supabase function errors so the UI shows the **real server/body error** when available instead of the generic **“Failed to send a request to the Edge Function”** message.
+- Add a small helper to unwrap `FunctionsFetchError` / aborted fetch cases and preserve useful context for users.
 
-## Files to touch
+### 4) Verify the create path used by campaign launch
+- Review `supabase/functions/fanpage-campaign/index.ts` → `create` → `create-generation-batch` path.
+- Confirm whether the current launch payload from `AutopilotPanel` matches `create-generation-batch` expectations (`audioClipId`, `duration`, `lyricTemplateId`, `stockSettings`, `publishDefaults`).
+- If needed, tighten validation or error translation in `fanpage-campaign` so child-function failures come back as actionable envelopes instead of transport-looking failures.
 
-- `supabase/functions/_shared/fal.ts` — add the 8 helpers, refactor existing exports to reuse them.
-- `supabase/functions/stitch-segments/index.ts` — branch to `mergeVideos` + `mergeAudioVideo` when possible.
-- `supabase/functions/render-karaoke/index.ts` — optional thumbnail via `extractFrame`.
+### 5) Validate the actual schema blocker separately from diagnostics
+- Audit whether `generation_batches.settings`, queue columns on `generation_items`, and related tables are truly present.
+- If the schema is genuinely incomplete, I’ll identify the exact missing structure and prepare the required migration step separately.
+- If the schema is already present, I’ll remove the false-negative gating coming from diagnostics timeouts/transient checks.
 
-No DB schema, secrets, or frontend changes. `FAL_KEY` is already configured.
+## Files likely to change
+- `src/pages/lyrics/panels/MarkersPanel.tsx`
+- `src/pages/lyrics/LyricsWizard.tsx`
+- `src/components/AutopilotPanel.tsx`
+- `src/App.tsx`
+- `src/lib/fanagent/audioClip.ts`
+- `src/lib/lyrics/api.ts`
+- possibly `supabase/functions/fanpage-campaign/index.ts`
 
-## Validation
+## Technical notes
+- The runtime loop root cause is already identified from the stack trace; that one is ready to fix directly.
+- The homepage error is probably **not** the `fanpage-campaign list` request on mount, because the captured request succeeded.
+- The most likely failure point is the **launch flow** after trimming/registering/transcribing audio, combined with fragile diagnostics-based blocking and generic frontend error handling.
 
-1. Deploy `stitch-segments`, `render-karaoke`.
-2. Run `pick-stock-clip` → `stitch-segments` → `render-karaoke` for one stuck `generation_items` row via `curl_edge_functions` and confirm:
-   - `stitch-segments` returns a playable URL.
-   - `render-karaoke` produces a `rendered_video` `media_asset` and the item moves to `ready`.
-3. Tail `edge_function_logs` for either function to confirm the new fal calls succeed (HTTP 200, non-empty `video_url`).
+## Result
+After implementation, the app should:
+- stop throwing the maximum update depth error,
+- stop falsely reporting schema-not-ready on transient diagnostics issues,
+- show the real edge-function failure reason when launch actually fails,
+- and make the Autopilot homepage much easier to debug going forward.

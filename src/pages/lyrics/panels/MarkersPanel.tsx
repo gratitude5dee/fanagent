@@ -21,18 +21,25 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
   const trackRef = useRef<HTMLDivElement | null>(null);
   const undoRef = useRef(new UndoStack<number[]>());
   const dragRef = useRef<{ idx: number } | null>(null);
+  const onChangeRef = useRef(onChange);
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
 
   const duration = (template?.selection_duration_ms ?? 15000) / 1000;
   const peaks = template?.waveform_peaks ?? [];
   const blocks = (template?.lyric_blocks ?? []) as LyricBlock[];
 
+  // Sync local markers from server template only when the incoming list
+  // actually differs. Avoids a setState/onChange/parent-patch loop.
   useEffect(() => {
-    setMarkers((template?.cut_markers ?? []).map((m) => m / 1000));
-  }, [template?.id]);
-
-  useEffect(() => {
-    onChange(markers.map((m) => Math.round(m * 1000)));
-  }, [markers, onChange]);
+    const next = (template?.cut_markers ?? []).map((m) => m / 1000);
+    setMarkers((prev) => {
+      if (prev.length === next.length && prev.every((v, i) => v === next[i])) return prev;
+      return next;
+    });
+  }, [template?.id, template?.cut_markers]);
 
   useEffect(() => {
     const a = audioRef.current;
@@ -42,12 +49,20 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
     return () => a.removeEventListener("timeupdate", t);
   }, [audioUrl]);
 
+  // Commit user-driven changes to parent. Marker list is small, so a content
+  // diff is fine and breaks the render loop when parent re-emits an equivalent
+  // template after persisting.
+  const commit = useCallback((next: number[]) => {
+    onChangeRef.current(next.map((m) => Math.round(m * 1000)));
+  }, []);
+
   const update = useCallback(
     (next: number[]) => {
       undoRef.current.push(markers);
       setMarkers(next);
+      commit(next);
     },
-    [markers],
+    [markers, commit],
   );
 
   const togglePlay = useCallback(() => {
