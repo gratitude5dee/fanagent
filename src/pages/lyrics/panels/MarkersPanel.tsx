@@ -2,22 +2,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pause, Play, Redo2, RotateCcw, Scissors, Trash2, Undo2 } from "lucide-react";
 import { addMarker, deleteAt, moveMarker, UndoStack } from "@/lib/lyrics/markers";
 import type { LyricBlock, LyricTemplate, LyricWord } from "@/lib/lyrics/types";
+import type { AudioEngine } from "@/lib/lyrics/useAudioEngine";
 
 type Props = {
   active: boolean;
   template: LyricTemplate | null;
-  audioUrl: string | null;
+  engine: AudioEngine;
   onChange: (markers: number[]) => void;
 };
 
-export default function MarkersPanel({ active, template, audioUrl, onChange }: Props) {
+export default function MarkersPanel({ active, template, engine, onChange }: Props) {
   const [markers, setMarkers] = useState<number[]>(() =>
     (template?.cut_markers ?? []).map((m) => m / 1000),
   );
-  const [time, setTime] = useState(0);
-  const [playing, setPlaying] = useState(false);
   const [zoom, setZoom] = useState(1);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const undoRef = useRef(new UndoStack<number[]>());
   const dragRef = useRef<{ idx: number } | null>(null);
@@ -30,9 +28,8 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
   const duration = (template?.selection_duration_ms ?? 15000) / 1000;
   const peaks = template?.waveform_peaks ?? [];
   const blocks = (template?.lyric_blocks ?? []) as LyricBlock[];
+  const time = engine.currentTime;
 
-  // Sync local markers from server template only when the incoming list
-  // actually differs. Avoids a setState/onChange/parent-patch loop.
   useEffect(() => {
     const next = (template?.cut_markers ?? []).map((m) => m / 1000);
     setMarkers((prev) => {
@@ -41,17 +38,6 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
     });
   }, [template?.id, template?.cut_markers]);
 
-  useEffect(() => {
-    const a = audioRef.current;
-    if (!a) return;
-    const t = () => setTime(a.currentTime);
-    a.addEventListener("timeupdate", t);
-    return () => a.removeEventListener("timeupdate", t);
-  }, [audioUrl]);
-
-  // Commit user-driven changes to parent. Marker list is small, so a content
-  // diff is fine and breaks the render loop when parent re-emits an equivalent
-  // template after persisting.
   const commit = useCallback((next: number[]) => {
     onChangeRef.current(next.map((m) => Math.round(m * 1000)));
   }, []);
@@ -66,23 +52,12 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
   );
 
   const togglePlay = useCallback(() => {
-    const a = audioRef.current;
-    if (!a) return;
-    if (a.paused) {
-      a.play();
-      setPlaying(true);
-    } else {
-      a.pause();
-      setPlaying(false);
-    }
-  }, []);
+    void engine.toggle();
+  }, [engine]);
 
   const restart = useCallback(() => {
-    const a = audioRef.current;
-    if (!a) return;
-    a.currentTime = 0;
-    setTime(0);
-  }, []);
+    engine.seek(0);
+  }, [engine]);
 
   const addAtCurrent = useCallback(() => {
     update(addMarker(markers, time));
@@ -108,7 +83,6 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
     }
   }, [markers, commit]);
 
-  // Keyboard shortcuts
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
@@ -169,8 +143,6 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
 
   return (
     <div className="lyr-markers">
-      {audioUrl ? <audio ref={audioRef} src={audioUrl} preload="metadata" /> : null}
-
       <div className="lyr-stage">
         {flashCut ? <span className="lyr-cut-flash">CUT</span> : null}
         {activeWord ? (
@@ -185,17 +157,18 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
       </div>
 
       <div className="lyr-controls">
-        <button className="lyr-btn" onClick={togglePlay}>
-          {playing ? <Pause size={14} /> : <Play size={14} />}
+        <button className="lyr-btn" onClick={togglePlay} disabled={!engine.isReady}>
+          {engine.isPlaying ? <Pause size={14} /> : <Play size={14} />}
         </button>
-        <button className="lyr-btn" onClick={restart}>
+        <button className="lyr-btn" onClick={restart} disabled={!engine.isReady}>
           <RotateCcw size={14} />
         </button>
         <span className="lyr-tag">
           {time.toFixed(2)}s / {duration.toFixed(0)}s
+          {!engine.isReady ? " · loading…" : ""}
         </span>
         <div className="lyr-progress">
-          <span style={{ width: `${(time / duration) * 100}%` }} />
+          <span style={{ width: `${duration > 0 ? (time / duration) * 100 : 0}%` }} />
         </div>
       </div>
 
@@ -214,7 +187,10 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
                 <span key={i} style={{ height: `${Math.max(8, v * 100)}%` }} />
               ))}
           </div>
-          <div className="lyr-playhead" style={{ left: `${(time / duration) * 100}%` }} />
+          <div
+            className="lyr-playhead"
+            style={{ left: `${duration > 0 ? (time / duration) * 100 : 0}%` }}
+          />
           {markers.map((m, i) => (
             <button
               key={i}
@@ -232,7 +208,6 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
               onPointerUp={() => {
                 if (dragRef.current?.idx === i) {
                   dragRef.current = null;
-                  // commit through update path so undo captures it and parent is notified
                   undoRef.current.push(markers);
                   commit(markers);
                 }

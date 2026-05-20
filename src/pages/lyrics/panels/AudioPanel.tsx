@@ -3,18 +3,28 @@ import { CheckCircle2, Loader2, Music, Pause, Play, UploadCloud } from "lucide-r
 import { decodePeaks, fallbackPeaks, sliceToWav, validateAudioFile } from "@/lib/lyrics/audio";
 import { lyricsApi, secToMs, uploadToBucket } from "@/lib/lyrics/api";
 import type { ClipDuration, LyricTemplate } from "@/lib/lyrics/types";
+import type { AudioEngine } from "@/lib/lyrics/useAudioEngine";
 import { supabase } from "@/integrations/supabase/client";
 
 const DURATIONS: ClipDuration[] = [15, 30, 45, 60];
 
 type Props = {
   existing: LyricTemplate | null;
-  existingAudioUrl: string | null;
-  onConfirmed: (out: { template: LyricTemplate; signedUrl: string }) => void;
+  engine: AudioEngine;
+  hasTrimmedAudio: boolean;
+  onPreviewUrl: (url: string | null) => void;
+  onConfirmed: (out: { template: LyricTemplate }) => void;
   onError: (msg: string) => void;
 };
 
-export default function AudioPanel({ existing, existingAudioUrl, onConfirmed, onError }: Props) {
+export default function AudioPanel({
+  existing,
+  engine,
+  hasTrimmedAudio,
+  onPreviewUrl,
+  onConfirmed,
+  onError,
+}: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [duration, setDuration] = useState<ClipDuration>(15);
   const [start, setStart] = useState(0);
@@ -22,15 +32,13 @@ export default function AudioPanel({ existing, existingAudioUrl, onConfirmed, on
   const [peaks, setPeaks] = useState<number[]>([]);
   const [total, setTotal] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [playing, setPlaying] = useState(false);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const blobUrlRef = useRef<string | null>(null);
   const dragRef = useRef<{ pointer: number; start: number } | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
 
   const confirmed = !!existing?.trimmed_audio_asset_id;
 
-  // Load existing template's peaks for visual continuity
+  // Restore peaks / selection metadata from a resumed template.
   useEffect(() => {
     if (existing && existing.waveform_peaks?.length) {
       setPeaks(existing.waveform_peaks);
@@ -41,9 +49,20 @@ export default function AudioPanel({ existing, existingAudioUrl, onConfirmed, on
     }
   }, [existing]);
 
+  // Update engine loop window when the user adjusts selection (only while we
+  // have a raw file preview; once confirmed the parent drives the loop).
   useEffect(() => {
-    if (existingAudioUrl) setAudioUrl(existingAudioUrl);
-  }, [existingAudioUrl]);
+    if (!hasTrimmedAudio && file) {
+      engine.setLoop(start, start + duration, { loop: true });
+    }
+  }, [start, duration, file, hasTrimmedAudio, engine]);
+
+  // Release blob URLs on unmount / new file.
+  useEffect(() => {
+    return () => {
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+    };
+  }, []);
 
   async function handleFile(f: File) {
     const err = validateAudioFile(f);
@@ -54,8 +73,10 @@ export default function AudioPanel({ existing, existingAudioUrl, onConfirmed, on
     setFile(f);
     setBusy(true);
     try {
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
       const url = URL.createObjectURL(f);
-      setAudioUrl(url);
+      blobUrlRef.current = url;
+      onPreviewUrl(url);
       try {
         const { peaks: p, durationSec } = await decodePeaks(f);
         setPeaks(p);
@@ -85,34 +106,11 @@ export default function AudioPanel({ existing, existingAudioUrl, onConfirmed, on
   function onSelectionMove(e: React.PointerEvent) {
     if (!dragRef.current) return;
     const t = pointerToTime(e.clientX);
-    const center = t;
-    const next = Math.max(0, Math.min(total - duration, center - duration / 2));
+    const next = Math.max(0, Math.min(total - duration, t - duration / 2));
     setStart(next);
   }
   function onSelectionUp() {
     dragRef.current = null;
-  }
-
-  function preview() {
-    const audio = audioRef.current;
-    if (!audio) return;
-    if (playing) {
-      audio.pause();
-      setPlaying(false);
-      return;
-    }
-    audio.currentTime = start;
-    audio.play().catch(() => {});
-    setPlaying(true);
-    const tick = () => {
-      if (!audioRef.current) return;
-      if (audioRef.current.currentTime >= start + duration) {
-        audioRef.current.currentTime = start;
-      }
-      if (!audioRef.current.paused) requestAnimationFrame(tick);
-      else setPlaying(false);
-    };
-    requestAnimationFrame(tick);
   }
 
   async function confirm() {
@@ -128,9 +126,7 @@ export default function AudioPanel({ existing, existingAudioUrl, onConfirmed, on
     }
     setBusy(true);
     try {
-      // 1. Slice client-side to WAV
       const trimmed = await sliceToWav(file, start, start + duration);
-      // 2. Create template row first to get id
       const { template } = await lyricsApi.create({
         title: file.name.replace(/\.[^.]+$/, ""),
         selectionStartMs: secToMs(start),
@@ -138,10 +134,8 @@ export default function AudioPanel({ existing, existingAudioUrl, onConfirmed, on
         totalDurationMs: secToMs(total),
         waveformPeaks: peaks,
       });
-      // 3. Upload to storage under user/template id
       const path = `lyric-templates/${userId}/${template.id}/clip-${Date.now()}.wav`;
       await uploadToBucket("audio-uploads", path, trimmed, "audio/wav");
-      // 4. Register asset
       const reg = await lyricsApi.registerAudio({
         storagePath: path,
         mimeType: "audio/wav",
@@ -150,12 +144,11 @@ export default function AudioPanel({ existing, existingAudioUrl, onConfirmed, on
         durationMs: secToMs(duration),
         kind: "audio_trimmed",
       });
-      // 5. Patch template
       const patched = await lyricsApi.patch(template.id, {
         trimmed_audio_asset_id: reg.id,
         status: "audio_ready",
       });
-      onConfirmed({ template: patched.template, signedUrl: reg.signedUrl });
+      onConfirmed({ template: patched.template });
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -163,17 +156,18 @@ export default function AudioPanel({ existing, existingAudioUrl, onConfirmed, on
     }
   }
 
-  const display = useMemo(() => {
-    const data = peaks.length ? peaks : fallbackPeaks("preview");
-    return data;
-  }, [peaks]);
+  const display = useMemo(
+    () => (peaks.length ? peaks : fallbackPeaks("preview")),
+    [peaks],
+  );
 
   const selLeft = total > 0 ? `${(start / total) * 100}%` : "0%";
   const selWidth = total > 0 ? `${(duration / total) * 100}%` : "0%";
+  const hasAnyAudio = !!file || hasTrimmedAudio;
 
   return (
     <div className="lyr-audio">
-      {!file && !audioUrl ? (
+      {!hasAnyAudio ? (
         <label className="lyr-drop">
           <input
             type="file"
@@ -187,9 +181,7 @@ export default function AudioPanel({ existing, existingAudioUrl, onConfirmed, on
         </label>
       ) : null}
 
-      {audioUrl ? <audio ref={audioRef} src={audioUrl} preload="metadata" /> : null}
-
-      {file || audioUrl ? (
+      {hasAnyAudio ? (
         <div
           className="lyr-wave-card"
           style={{ transform: `scaleX(${zoom})`, transformOrigin: "left" }}
@@ -213,7 +205,7 @@ export default function AudioPanel({ existing, existingAudioUrl, onConfirmed, on
         </div>
       ) : null}
 
-      {file || audioUrl ? (
+      {hasAnyAudio ? (
         <>
           <div className="lyr-row">
             <div className="lyr-duration-buttons">
@@ -229,8 +221,14 @@ export default function AudioPanel({ existing, existingAudioUrl, onConfirmed, on
                 </button>
               ))}
             </div>
-            <button type="button" className="lyr-btn" onClick={preview}>
-              {playing ? <Pause size={14} /> : <Play size={14} />} Preview
+            <button
+              type="button"
+              className="lyr-btn"
+              onClick={() => engine.toggle()}
+              disabled={!engine.isReady}
+            >
+              {engine.isPlaying ? <Pause size={14} /> : <Play size={14} />}{" "}
+              {engine.isReady ? "Preview" : "Loading…"}
             </button>
           </div>
           <div className="lyr-row">
@@ -249,15 +247,21 @@ export default function AudioPanel({ existing, existingAudioUrl, onConfirmed, on
               <Music size={12} /> {file?.name ?? existing?.title}
             </span>
           </div>
-          <button
-            type="button"
-            className="lyr-btn primary lg"
-            disabled={busy || confirmed || !file}
-            onClick={confirm}
-          >
-            {busy ? <Loader2 className="spin" size={14} /> : <CheckCircle2 size={14} />}
-            {confirmed ? "Audio confirmed" : "Confirm selection"}
-          </button>
+          {!confirmed ? (
+            <button
+              type="button"
+              className="lyr-btn primary lg"
+              disabled={busy || !file}
+              onClick={confirm}
+            >
+              {busy ? <Loader2 className="spin" size={14} /> : <CheckCircle2 size={14} />}
+              Confirm selection
+            </button>
+          ) : (
+            <div className="lyr-tag" style={{ alignSelf: "flex-start" }}>
+              <CheckCircle2 size={14} /> Audio confirmed
+            </div>
+          )}
         </>
       ) : null}
     </div>
