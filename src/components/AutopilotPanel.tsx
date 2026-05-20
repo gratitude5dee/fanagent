@@ -30,10 +30,16 @@ import {
   type RegisteredAudioClipSummary,
 } from "@/lib/fanagent/audioClip";
 import {
-  buildSourceOptions,
   coerceSelectableSourceMode,
   type SourceMode,
 } from "@/lib/fanagent/sourceMode";
+import {
+  categoryToSourceMode,
+  fetchClipCategories,
+  fetchPoolCounts,
+  type CategoryNode,
+  type PoolCountIndex,
+} from "@/lib/fanagent/categories";
 import { lyricsApi } from "@/lib/lyrics/api";
 import type { LyricTemplate, LyricTemplateSummary } from "@/lib/lyrics/types";
 
@@ -304,6 +310,13 @@ export default function AutopilotPanel({
   const [audioClipError, setAudioClipError] = useState<string | null>(null);
   const [autoOpenTemplateRequest, setAutoOpenTemplateRequest] = useState(0);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  const [categories, setCategories] = useState<CategoryNode[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
+  const [poolCounts, setPoolCounts] = useState<PoolCountIndex | null>(null);
+  const [categoryId, setCategoryId] = useState<string>("");
+  const [subcategorySlug, setSubcategorySlug] = useState<string>("");
+  const [randomize, setRandomize] = useState(false);
+  const [autoRender, setAutoRender] = useState(false);
 
   const templateById = useMemo(
     () => new Map(lyricTemplates.map((t) => [t.id, t])),
@@ -322,7 +335,18 @@ export default function AutopilotPanel({
     [data],
   );
   const schemaReady = isFanAgentSchemaReady(diagnostics?.schema);
-  const sourceOptions = useMemo(() => buildSourceOptions(diagnostics?.env), [diagnostics?.env]);
+  const selectedCategory = useMemo(
+    () => categories.find((c) => c.id === categoryId) ?? null,
+    [categories, categoryId],
+  );
+  const derivedSourceMode: SourceMode = useMemo(() => {
+    if (randomize) return "stock";
+    if (!selectedCategory) return sourceMode;
+    return coerceSelectableSourceMode(categoryToSourceMode(selectedCategory), diagnostics?.env);
+  }, [randomize, selectedCategory, sourceMode, diagnostics?.env]);
+  useEffect(() => {
+    if (derivedSourceMode !== sourceMode) setSourceMode(derivedSourceMode);
+  }, [derivedSourceMode, sourceMode]);
   const trimmedAudioKey = useMemo(
     () =>
       trimmedAudio
@@ -420,6 +444,47 @@ export default function AutopilotPanel({
     }, 15_000);
     return () => clearInterval(t);
   }, []);
+
+  // Load clip categories once (static seed). Default to the first parent.
+  useEffect(() => {
+    let cancelled = false;
+    setCategoriesLoading(true);
+    fetchClipCategories()
+      .then((rows) => {
+        if (cancelled) return;
+        setCategories(rows);
+        setCategoryId((current) => current || rows[0]?.id || "");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setMessage(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setCategoriesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Refresh pool counts on cadence + whenever account changes.
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const idx = await fetchPoolCounts(accountId || null);
+        if (!cancelled) setPoolCounts(idx);
+      } catch {
+        // pool counts are advisory — failure should not block the picker
+      }
+    }
+    load();
+    const t = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [accountId]);
 
   useEffect(() => {
     if (initialTab) setTab(initialTab);
@@ -613,7 +678,11 @@ export default function AutopilotPanel({
             originalFileName: trimmedAudio.originalFileName,
           }
         : undefined,
-      sourceMode,
+      sourceMode: derivedSourceMode,
+      categoryId: randomize ? null : (categoryId || null),
+      subcategorySlug: randomize ? null : (subcategorySlug || null),
+      randomize,
+      autoRender,
       durationSeconds: duration,
       dedupeStrategy,
       postCount,
@@ -904,7 +973,13 @@ export default function AutopilotPanel({
                   schemaReady={schemaReady}
                   seedanceResolution={seedanceResolution}
                   sourceMode={sourceMode}
-                  sourceOptions={sourceOptions}
+                  categories={categories}
+                  categoriesLoading={categoriesLoading}
+                  poolCounts={poolCounts}
+                  categoryId={categoryId}
+                  subcategorySlug={subcategorySlug}
+                  randomize={randomize}
+                  autoRender={autoRender}
                   sportsAllowedChannels={sportsAllowedChannels}
                   sportsLeague={sportsLeague}
                   sportsOwnerAssetUrls={sportsOwnerAssetUrls}
@@ -929,7 +1004,10 @@ export default function AutopilotPanel({
                   onPrompt={setPrompt}
                   onPublishPrivacy={setPublishPrivacy}
                   onSeedanceResolution={setSeedanceResolution}
-                  onSourceMode={setSourceMode}
+                  onCategoryId={setCategoryId}
+                  onSubcategorySlug={setSubcategorySlug}
+                  onRandomize={setRandomize}
+                  onAutoRender={setAutoRender}
                   onSportsAllowedChannels={setSportsAllowedChannels}
                   onSportsLeague={setSportsLeague}
                   onSportsOwnerAssetUrls={setSportsOwnerAssetUrls}

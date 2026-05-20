@@ -40,6 +40,10 @@ type CreateBatchRequest = {
   stockSettings?: Record<string, unknown>;
   seedanceSettings?: Record<string, unknown>;
   publishDefaults?: Record<string, unknown>;
+  categoryId?: string | null;
+  subcategorySlug?: string | null;
+  randomize?: boolean;
+  autoRender?: boolean;
 };
 
 const supportedAudio = new Set([
@@ -135,6 +139,10 @@ function validatePayload(body: CreateBatchRequest) {
       disableComment: false,
       ...(body.publishDefaults ?? {}),
     },
+    categoryId: body.categoryId ?? null,
+    subcategorySlug: body.subcategorySlug ?? null,
+    randomize: body.randomize === true,
+    autoRender: body.autoRender === true,
   };
 }
 
@@ -312,6 +320,10 @@ Deno.serve(async (request) => {
           clipSelection: input.clipSelection,
         }),
         publish_defaults: input.publishDefaults,
+        category_id: input.categoryId,
+        subcategory_slug: input.subcategorySlug,
+        randomize: input.randomize,
+        auto_render: input.autoRender,
       })
       .select("*")
       .single();

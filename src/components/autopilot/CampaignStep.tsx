@@ -1,6 +1,8 @@
 import { CalendarClock, Info, Loader2 } from "lucide-react";
 import type { Duration } from "./UploadStep";
-import type { SourceMode, SourceOption } from "@/lib/fanagent/sourceMode";
+import type { SourceMode } from "@/lib/fanagent/sourceMode";
+import { CategoryPicker } from "./CategoryPicker";
+import type { CategoryNode, PoolCountIndex } from "@/lib/fanagent/categories";
 
 type StockProviders = {
   library: boolean;
@@ -21,7 +23,13 @@ type CampaignStepProps = {
   schemaReady: boolean;
   seedanceResolution: "480p" | "720p" | "1080p";
   sourceMode: SourceMode;
-  sourceOptions: SourceOption[];
+  categories: CategoryNode[];
+  poolCounts: PoolCountIndex | null;
+  categoriesLoading: boolean;
+  categoryId: string;
+  subcategorySlug: string;
+  randomize: boolean;
+  autoRender: boolean;
   sportsAllowedChannels: string;
   sportsLeague: string;
   sportsOwnerAssetUrls: string;
@@ -43,7 +51,10 @@ type CampaignStepProps = {
   onPrompt: (value: string) => void;
   onPublishPrivacy: (value: string) => void;
   onSeedanceResolution: (value: "480p" | "720p" | "1080p") => void;
-  onSourceMode: (value: SourceMode) => void;
+  onCategoryId: (value: string) => void;
+  onSubcategorySlug: (value: string) => void;
+  onRandomize: (value: boolean) => void;
+  onAutoRender: (value: boolean) => void;
   onSportsAllowedChannels: (value: string) => void;
   onSportsLeague: (value: string) => void;
   onSportsOwnerAssetUrls: (value: string) => void;
@@ -77,21 +88,20 @@ export function CampaignStep(props: CampaignStepProps) {
             onChange={(e) => props.onPrompt(e.target.value)}
           />
         </label>
+        <CategoryPicker
+          categories={props.categories}
+          poolCounts={props.poolCounts}
+          loading={props.categoriesLoading}
+          categoryId={props.categoryId}
+          subcategorySlug={props.subcategorySlug}
+          randomize={props.randomize}
+          autoRender={props.autoRender}
+          onCategoryId={props.onCategoryId}
+          onSubcategorySlug={props.onSubcategorySlug}
+          onRandomize={props.onRandomize}
+          onAutoRender={props.onAutoRender}
+        />
         <div className="split">
-          <label>
-            Source
-            <select
-              value={props.sourceMode}
-              onChange={(e) => props.onSourceMode(e.target.value as SourceMode)}
-            >
-              {props.sourceOptions.map((option) => (
-                <option key={option.value} value={option.value} disabled={option.disabled}>
-                  {option.label}
-                  {option.disabled && option.reason ? ` - ${option.reason}` : ""}
-                </option>
-              ))}
-            </select>
-          </label>
           <label>
             Posts to queue
             <input
@@ -102,6 +112,7 @@ export function CampaignStep(props: CampaignStepProps) {
               onChange={(e) => props.onPostCount(Number(e.target.value))}
             />
           </label>
+          <div />
         </div>
         <div className="split schedule-split">
           <label>
