@@ -1,76 +1,52 @@
-# Fix plan
+## Problem
 
-## What I found
+The UI still blocks with **"Database queue schema is not ready. Generation is blocked until the live migration is applied."** even though the live `fanpage-campaign` `diagnostics` endpoint reports every required table/column as ready (verified by direct curl — all `schema.*` flags `true`, `errors: []`, `warnings: []`).
 
-Two separate problems are showing up:
+Two things keep tripping the block in the browser:
 
-1. **Home page / Autopilot error**
-   - The current browser network snapshot shows `fanpage-campaign` itself returning **200 OK** on home page load for `action: "list"`.
-   - That means the visible message **“Failed to send a request to the Edge Function”** is likely coming from:
-     - a deeper child call during campaign launch, or
-     - the frontend’s generic `supabase.functions.invoke()` error handling, not the top-level list request.
-   - The UI currently blocks launch on `schemaReady`, and that value is derived from the **diagnostics endpoint**, which is doing many time-bounded schema/storage checks. A transient diagnostics failure can therefore make the UI say **“Database queue schema is not ready”** even when the queue tables likely exist.
+1. The diagnostics call sometimes never lands (the runtime "signal is aborted without reason" we saw points to a fetch being aborted by React StrictMode double-mount / HMR), so `diagnostics` stays `null` after the first attempt and is never retried. Combined with stale bundles, the previous gate (`isFanAgentSchemaReady(null) === false`) re-appears.
+2. Even when diagnostics succeeds, any single schema check that races into a transient timeout flips `schema.audioClips` (or sibling) to `false`, which the UI still treats as a hard block — even though the server already classifies that case as a transient *warning*, not an error.
 
-2. **Runtime loop**
-   - The runtime stack clearly identifies a React loop:
-     - `LyricsWizard.tsx:96` → `onMarkersChange`
-     - `MarkersPanel.tsx:25-35` effect calling `onChange`
-   - `MarkersPanel` fires `onChange(markers)` in an effect, which updates parent state, which re-renders the child, which can keep retriggering the effect. That is the direct cause of the **Maximum update depth exceeded** error.
+The schema is, in fact, ready. The banner is purely a stale client-side gate.
 
-## Proposed implementation
+## Plan
 
-### 1) Fix the React update loop in the lyrics flow
-- Update `src/pages/lyrics/panels/MarkersPanel.tsx` so it does **not** call `onChange` from a passive sync effect on every render cycle.
-- Change marker propagation to happen only on **user-driven edits**:
-  - add marker
-  - delete marker
-  - drag marker commit
-  - undo/redo
-- Keep the existing local state sync from `template.cut_markers`, but guard it so it only updates when the incoming markers are actually different.
+### 1. Stop blocking the UI on `schemaReady`
 
-### 2) Make the Autopilot preflight less fragile
-- Update `src/components/AutopilotPanel.tsx` so launch gating is based on **hard failures only**, not transient diagnostics noise.
-- Treat diagnostics as:
-  - **informational** for warnings/timeouts
-  - **blocking** only when the schema check conclusively reports missing required tables/columns
-- Avoid using an initially-null diagnostics result as a hard block if the campaign create path itself is valid.
+`src/components/autopilot/UploadStep.tsx`
+- Remove the red `Database queue schema is not ready…` banner entirely. The same information is already surfaced (and kept fresh) in the `AutopilotPanel` diagnostics row with a colored dot + summary.
 
-### 3) Improve edge-function error surfacing on the homepage
-- Update the frontend function wrappers in:
-  - `src/components/AutopilotPanel.tsx`
-  - `src/App.tsx`
-  - `src/lib/fanagent/audioClip.ts`
-  - `src/lib/lyrics/api.ts`
-- Normalize Supabase function errors so the UI shows the **real server/body error** when available instead of the generic **“Failed to send a request to the Edge Function”** message.
-- Add a small helper to unwrap `FunctionsFetchError` / aborted fetch cases and preserve useful context for users.
+`src/components/autopilot/CampaignStep.tsx`
+- Drop `!props.schemaReady` from the **Generate library** button's `disabled` expression. Keep the other preconditions (`trimmedAudioReady`, `lyricTemplateReady`, `busy`).
 
-### 4) Verify the create path used by campaign launch
-- Review `supabase/functions/fanpage-campaign/index.ts` → `create` → `create-generation-batch` path.
-- Confirm whether the current launch payload from `AutopilotPanel` matches `create-generation-batch` expectations (`audioClipId`, `duration`, `lyricTemplateId`, `stockSettings`, `publishDefaults`).
-- If needed, tighten validation or error translation in `fanpage-campaign` so child-function failures come back as actionable envelopes instead of transport-looking failures.
+`src/components/AutopilotPanel.tsx`
+- `startCampaign`: remove the `if (diagnostics && !schemaReady) throw …` precondition.
+- `registerAndTranscribeClip` effect: change the early return condition from `!accountId || !schemaReady` to just `!accountId`. The audio-clip registration call (`audio-clip-register`) will surface a real server error if a table is genuinely missing — we no longer need to pre-block it from the client.
+- Keep the diagnostics dot + tooltip in the status row so the operator can still see live schema health, but it is informational only.
 
-### 5) Validate the actual schema blocker separately from diagnostics
-- Audit whether `generation_batches.settings`, queue columns on `generation_items`, and related tables are truly present.
-- If the schema is genuinely incomplete, I’ll identify the exact missing structure and prepare the required migration step separately.
-- If the schema is already present, I’ll remove the false-negative gating coming from diagnostics timeouts/transient checks.
+### 2. Harden `isFanAgentSchemaReady` against transient flips
 
-## Files likely to change
-- `src/pages/lyrics/panels/MarkersPanel.tsx`
-- `src/pages/lyrics/LyricsWizard.tsx`
+`src/lib/fanagent/diagnostics.ts`
+- Currently a single `false` boolean (e.g. a transient timeout on `audio_clips`) is treated as "not ready". Tighten it so it only returns `false` when the server also reports a hard `errors[]` entry. If every flag is `true` *or* the only problem is in `warnings[]`, treat the schema as ready.
+- This matches the server's intent: `checkSchema` already separates transient retries (warnings) from real failures (errors).
+
+### 3. Auto-recover from a missed diagnostics call
+
+`src/components/AutopilotPanel.tsx`
+- Add `refreshDiagnostics` to the 15 s polling interval that already drives `refresh()` (currently only `list` is re-polled). This way a single aborted/timed-out diagnostics call self-heals within 15 s instead of staying `null` until the user manually navigates away.
+- Make `refreshDiagnostics` swallow `request aborted` errors silently (don't `setMessage`) so a StrictMode-aborted fetch doesn't surface a toast.
+
+### 4. Verification
+
+- `bunx vitest run tests/diagnostics.test.ts` — update assertions so `isFanAgentSchemaReady` returns `true` when only `warnings` are present and `false` only when `errors` are non-empty.
+- Manual: hard refresh the home page, confirm the red banner is gone, confirm the **Launch** button is enabled, confirm the diagnostics row still shows `ready` with a green dot.
+
+## Files touched
+
+- `src/components/autopilot/UploadStep.tsx`
+- `src/components/autopilot/CampaignStep.tsx`
 - `src/components/AutopilotPanel.tsx`
-- `src/App.tsx`
-- `src/lib/fanagent/audioClip.ts`
-- `src/lib/lyrics/api.ts`
-- possibly `supabase/functions/fanpage-campaign/index.ts`
+- `src/lib/fanagent/diagnostics.ts`
+- `tests/diagnostics.test.ts`
 
-## Technical notes
-- The runtime loop root cause is already identified from the stack trace; that one is ready to fix directly.
-- The homepage error is probably **not** the `fanpage-campaign list` request on mount, because the captured request succeeded.
-- The most likely failure point is the **launch flow** after trimming/registering/transcribing audio, combined with fragile diagnostics-based blocking and generic frontend error handling.
-
-## Result
-After implementation, the app should:
-- stop throwing the maximum update depth error,
-- stop falsely reporting schema-not-ready on transient diagnostics issues,
-- show the real edge-function failure reason when launch actually fails,
-- and make the Autopilot homepage much easier to debug going forward.
+No edge-function, migration, or backend changes are required — the database schema is already correct.

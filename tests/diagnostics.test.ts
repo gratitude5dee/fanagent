@@ -20,7 +20,7 @@ const readySchema = {
 };
 
 describe("FanAgent diagnostics schema readiness", () => {
-  it("requires the audio clip and video library schema surfaces before launch", () => {
+  it("treats a fully-checked schema as ready and reports missing tables for diagnostics", () => {
     expect(isFanAgentSchemaReady(readySchema)).toBe(true);
     expect(
       missingSchemaChecks({
@@ -30,6 +30,27 @@ describe("FanAgent diagnostics schema readiness", () => {
       }),
     ).toEqual(["audio_clips", "video_library_items"]);
   });
+
+  it("only blocks readiness when the server reports a hard error, not on transient per-table flips", () => {
+    // Transient timeout → per-table boolean may be false but errors[] stays empty.
+    expect(
+      isFanAgentSchemaReady({
+        ...readySchema,
+        audioClips: false,
+        errors: [],
+        warnings: ["audio_clips timed out after 10000ms"],
+      }),
+    ).toBe(true);
+    // Hard non-transient failure → errors[] populated.
+    expect(
+      isFanAgentSchemaReady({
+        ...readySchema,
+        audioClips: false,
+        errors: ["Could not find the table 'public.audio_clips' in the schema cache"],
+      }),
+    ).toBe(false);
+  });
+
 
   it("summarizes explicit schema cache errors ahead of derived missing labels", () => {
     expect(

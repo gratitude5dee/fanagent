@@ -294,16 +294,24 @@ export default function AutopilotPanel() {
       const next = await callCampaign<Diagnostics>("diagnostics");
       setDiagnostics(next);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      // Swallow transport-level aborts (StrictMode double-mount, HMR) — they
+      // self-heal on the next polling tick. Only surface real failures.
+      if (/aborted|AbortError|signal is aborted/i.test(message)) return;
+      setMessage(message);
     }
   }
 
   useEffect(() => {
     refresh();
     refreshDiagnostics();
-    const t = setInterval(refresh, 15_000);
+    const t = setInterval(() => {
+      refresh();
+      refreshDiagnostics();
+    }, 15_000);
     return () => clearInterval(t);
   }, []);
+
 
   useEffect(() => {
     if (trimmedAudio && !lyricTemplateId) setLyricsDrawerOpen(true);
@@ -324,7 +332,7 @@ export default function AutopilotPanel() {
         cancelled = true;
       };
     }
-    if (!accountId || !schemaReady) {
+    if (!accountId) {
       setAudioClipStatus("idle");
       return () => {
         cancelled = true;
@@ -384,7 +392,7 @@ export default function AutopilotPanel() {
     return () => {
       cancelled = true;
     };
-  }, [accountId, schemaReady, trimmedAudio, trimmedAudioKey]);
+  }, [accountId, trimmedAudio, trimmedAudioKey]);
 
   useEffect(() => {
     setSourceMode((current) => coerceSelectableSourceMode(current, diagnostics?.env));
@@ -407,11 +415,10 @@ export default function AutopilotPanel() {
   async function startCampaign() {
     if (!trimmedAudio) throw new Error("Trim your audio clip first.");
     if (!account) throw new Error("No account.");
-    if (diagnostics && !schemaReady) {
-      throw new Error(
-        `Database queue schema is not ready: ${schemaDiagnosticsSummary(diagnostics.schema)}`,
-      );
-    }
+    // Schema readiness is informational only — surfaced in the diagnostics
+    // panel. The server will return a specific error if a table is actually
+    // missing, so we don't pre-block the launch here.
+
     if (!registeredAudioClip) {
       throw new Error("Wait for the audio clip to finish registering before launching.");
     }

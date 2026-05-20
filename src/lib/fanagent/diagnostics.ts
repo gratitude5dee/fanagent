@@ -40,12 +40,14 @@ export function isFanAgentSchemaReady(
   schema: FanAgentSchemaDiagnostics | null | undefined,
 ): boolean {
   // Treat unknown / not-yet-loaded diagnostics as ready so a slow or transient
-  // diagnostics fetch never blocks the launch button. Hard failures (explicit
-  // `false` checks or non-transient errors surfaced in `errors`) still block.
+  // diagnostics fetch never blocks the UI. Only hard errors reported by the
+  // server (errors[] array, populated by checkSchema for non-transient
+  // failures) mark the schema as unready. Per-table booleans flipping to
+  // `false` due to a transient timeout are surfaced as warnings, not blockers.
   if (!schema) return true;
-  if (missingSchemaChecks(schema).length > 0) return false;
   return (schema.errors?.length ?? 0) === 0;
 }
+
 
 export function schemaDiagnosticsSummary(
   schema: FanAgentSchemaDiagnostics | null | undefined,
