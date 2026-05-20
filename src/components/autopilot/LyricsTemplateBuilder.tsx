@@ -102,18 +102,23 @@ export default function LyricsTemplateBuilder({
   );
 
   // Drive the engine: trimmed audio takes precedence; otherwise raw upload preview.
+  // IMPORTANT: do NOT include `engine` in deps — its identity changes every
+  // playback tick (currentTime updates), which would cause this effect to
+  // re-run constantly and pin the playhead back to 0.
+  const engineLoad = engine.load;
+  const engineSetLoop = engine.setLoop;
   useEffect(() => {
     if (trimmedAudioUrl) {
-      engine.load(trimmedAudioUrl);
+      engineLoad(trimmedAudioUrl);
       const clipSec = (state.template?.selection_duration_ms ?? 15000) / 1000;
-      engine.setLoop(0, clipSec, { loop: true });
-      engine.seek(0);
+      engineSetLoop(0, clipSec, { loop: true });
     } else if (state.previewUrl) {
-      engine.load(state.previewUrl);
+      engineLoad(state.previewUrl);
     } else {
-      engine.load(null);
+      engineLoad(null);
     }
-  }, [trimmedAudioUrl, state.previewUrl, state.template?.selection_duration_ms, engine]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trimmedAudioUrl, state.previewUrl, state.template?.selection_duration_ms]);
 
   useEffect(() => {
     onTemplateIdChange(state.templateId);
