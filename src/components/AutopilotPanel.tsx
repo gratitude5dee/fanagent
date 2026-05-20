@@ -980,6 +980,8 @@ export default function AutopilotPanel({
                   subcategorySlug={subcategorySlug}
                   randomize={randomize}
                   autoRender={autoRender}
+                  requiredShots={selectedTemplate?.cut_marker_count ?? 1}
+
                   sportsAllowedChannels={sportsAllowedChannels}
                   sportsLeague={sportsLeague}
                   sportsOwnerAssetUrls={sportsOwnerAssetUrls}
