@@ -30,7 +30,6 @@ import {
   type RegisteredAudioClipSummary,
 } from "@/lib/fanagent/audioClip";
 import {
-  buildSourceOptions,
   coerceSelectableSourceMode,
   type SourceMode,
 } from "@/lib/fanagent/sourceMode";
