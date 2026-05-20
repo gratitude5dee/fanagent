@@ -31,7 +31,6 @@ export default function RemixEditor() {
   const [template, setTemplate] = useState<LyricTemplate | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
   const [accountId, setAccountId] = useState<string>("");
   const [draft, setDraft] = useState<RemixRenderDefaults>(DEFAULT_DEFAULTS);
@@ -42,7 +41,9 @@ export default function RemixEditor() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const firstLoad = useRef(true);
 
-  // Load template + audio + accounts
+  const { url: audioUrl, error: audioError } = useTrimmedAudioUrl(template);
+
+  // Load template + accounts
   useEffect(() => {
     if (!templateId) return;
     let cancelled = false;
@@ -59,25 +60,6 @@ export default function RemixEditor() {
         const accountRows = (accRes.data ?? []) as AccountOption[];
         setAccounts(accountRows);
         if (accountRows[0]) setAccountId(accountRows[0].id);
-
-        const assetId = tplRes.template.trimmed_audio_asset_id;
-        if (assetId) {
-          const asset = await supabase
-            .from("project_assets")
-            .select("storage_bucket,storage_path,public_url")
-            .eq("id", assetId)
-            .maybeSingle();
-          if (!cancelled && asset.data) {
-            if (asset.data.public_url) {
-              setAudioUrl(asset.data.public_url);
-            } else {
-              const signed = await supabase.storage
-                .from(asset.data.storage_bucket)
-                .createSignedUrl(asset.data.storage_path, 60 * 60);
-              if (!cancelled && signed.data?.signedUrl) setAudioUrl(signed.data.signedUrl);
-            }
-          }
-        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -88,6 +70,10 @@ export default function RemixEditor() {
       cancelled = true;
     };
   }, [templateId]);
+
+  useEffect(() => {
+    if (audioError) setError(audioError);
+  }, [audioError]);
 
   // Debounced persist of render defaults
   useEffect(() => {
