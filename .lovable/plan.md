@@ -1,49 +1,48 @@
 ## Goal
-Make saved lyric templates carry their audio end-to-end, remove the fallback that asks for a new upload when reusing a template, and restore fully functional synced playback in the Lyrics and Cut Markers steps.
+Make the lyric template wizard reliable end-to-end so saved templates keep their audio, lyrics generation consistently reaches a usable state, and the Lyrics/Cut Markers panels stay in sync with playback.
 
-## What I’ll implement
+## What’s actually broken
+- Some older template rows are missing `trimmed_audio_asset_id`, which triggers the “please upload file” fallback even when the template already has lyrics.
+- The backend contract is inconsistent across template creation/reopen flows: the newest template signs audio correctly, but legacy/incomplete templates are not always self-healed before the UI renders.
+- The lyrics step does not robustly recover from `audio_ready` / `lyrics_processing` / `failed` states when reopening a template, so generation can appear stuck.
+- The cut markers step depends on the shared audio engine and lyric blocks being hydrated in the right order; when either is stale, playback/highlighting looks broken.
 
-### 1. Repair template audio persistence
-- Update the lyrics audio upload/register flow to use one consistent storage contract for template audio instead of the current mixed `audio-uploads` / `lyric-templates/...` path.
-- Align the client and edge function with the intended template asset model so a template always ends with a durable trimmed audio asset reference.
-- Ensure template creation stores enough source/trimmed asset metadata for later retrieval, reopening, and remix generation.
-- Harden the template edge function so `get`, `patch`, `finalize`, and `signTrimmedAudio` continue to work even for older or partially-created rows.
+## Implementation plan
+### 1) Harden template audio recovery
+- Update the lyric template fetch/reopen path so any template missing `trimmed_audio_asset_id` is repaired from linked metadata before the wizard tries to render playback.
+- Make the edge function’s `get`/`signTrimmedAudio` paths use the same repair rules, so the browser never has to guess whether audio exists.
+- Keep the current signed-URL approach and remove any remaining UI assumptions that a missing `trimmed_audio_asset_id` means the user must re-upload.
 
-### 2. Restore wizard playback + sync
-- Keep one shared audio engine for the 3-step wizard and make sure it always loads the correct clip on first open and on template reload.
-- Reset and clamp playback correctly when switching templates, confirming audio, reopening saved templates, or retrying signed URLs.
-- Make the Lyrics panel reliably follow playback with active-word highlighting, active-line emphasis, seeking from words, and synced progress.
-- Make the Cut Markers panel show the current lyric line instead of a static placeholder, with live word-state changes tied to the playhead.
-- Preserve marker editing behavior while making scrubbing, restart, play/pause, undo/redo, and delete-nearest operate against the same active clip.
+### 2) Make lyrics generation stateful and recoverable
+- Update the wizard to explicitly handle these states on load: `draft`, `audio_ready`, `lyrics_processing`, `failed`, `lyrics_ready`, `saved`.
+- If a template is `audio_ready` with valid trimmed audio but no lyric blocks, trigger transcription instead of leaving the panel in a passive waiting state.
+- If transcription is already in progress, poll/refetch the template until it reaches `lyrics_ready` or `failed` so the UI updates without a manual reload.
+- Surface backend failure messages cleanly inside the lyrics panel and keep manual entry as the fallback.
 
-### 3. Unify remix template reuse
-- Change Remix to resolve audio through the same signed template-audio path as the wizard instead of direct browser-side `project_assets` reads.
-- Make generation launch from a saved template without needing fresh audio input by ensuring the finalized template always exposes an `audio_clip_id` or equivalent reusable audio reference.
-- Remove the conditions that cause saved-template reuse to fall back to “upload file first” behavior.
+### 3) Stabilize synced playback in Lyrics + Cut Markers
+- Unify active-word/active-line resolution so both panels use the same playhead interpretation and the same fallback behavior before the first word and between lines.
+- Ensure the audio engine resets and loop bounds are applied consistently when opening a saved template, switching steps, retrying transcription, or replaying from the start.
+- Make the marker stage render the current/next lyric line deterministically even at `t=0` and during scrubbing.
 
-### 4. Validate the broken paths
-- Verify these flows after implementation:
-  - create new template → confirm audio → transcribe → markers → save
-  - reopen template from landing → audio plays immediately
-  - saved template → remix page loads audio without prompting for upload
-  - lyrics highlight and marker stage stay synced during playback
+### 4) Fix cut marker editing flow
+- Make marker changes persist reliably and reflect immediately after add/move/delete/undo/redo.
+- Verify marker dragging commits the moved value, not stale pre-drag state.
+- Keep the karaoke preview and playhead aligned while scrubbing so users can place cuts against the visible lyric timing.
 
-## Files likely to change
-- `src/pages/lyrics/panels/AudioPanel.tsx`
-- `src/pages/lyrics/panels/LyricsPanel.tsx`
-- `src/pages/lyrics/panels/MarkersPanel.tsx`
-- `src/components/autopilot/LyricsTemplateBuilder.tsx`
-- `src/pages/lyrics/RemixEditor.tsx`
-- `src/lib/lyrics/api.ts`
-- `src/lib/lyrics/useTrimmedAudioUrl.ts`
-- `supabase/functions/kanvas-lyrics-audio-register/index.ts`
-- `supabase/functions/kanvas-lyrics-template/index.ts`
-- `src/styles.css`
+### 5) Validate against the live contract
+- Test a brand-new template flow: upload → confirm audio → generate lyrics → preview synced highlighting → add markers → save.
+- Test reopening the newest template and an older broken template to confirm audio no longer asks for re-upload.
+- Verify the Remix page still loads template audio via signed URL after the wizard fixes.
 
 ## Technical details
-- The current implementation is off-contract in a few places:
-  - trimmed template audio is uploaded to `audio-uploads` with a `lyric-templates/...` path instead of the intended user-scoped template audio path
-  - the register function currently accepts that looser shape, which makes retrieval and ownership assumptions inconsistent
-  - remix still loads template audio by querying `project_assets` from the browser, which is fragile under RLS and mismatched ownership
-- I’ll fix this by making the template asset flow internally consistent rather than layering more fallbacks on top.
-- I won’t expand scope into redesigning the full `/kanvas/*` route architecture yet; this pass will focus on getting the current lyrics/template/remix surfaces fully functional.
+- Likely files: `src/components/autopilot/LyricsTemplateBuilder.tsx`, `src/pages/lyrics/panels/AudioPanel.tsx`, `src/pages/lyrics/panels/LyricsPanel.tsx`, `src/pages/lyrics/panels/MarkersPanel.tsx`, `src/lib/lyrics/useAudioEngine.ts`, `src/lib/lyrics/useTrimmedAudioUrl.ts`, `src/lib/lyrics/api.ts`, `supabase/functions/kanvas-lyrics-template/index.ts`, `supabase/functions/kanvas-lyrics-transcribe/index.ts`.
+- No database migration is currently indicated; this looks like contract/state repair rather than schema failure.
+- I’ll validate using live edge-function calls plus targeted UI behavior checks before calling it fixed.
+
+<presentation-actions>
+  <presentation-open-history>View History</presentation-open-history>
+</presentation-actions>
+
+<presentation-actions>
+<presentation-link url="https://docs.lovable.dev/tips-tricks/troubleshooting">Troubleshooting docs</presentation-link>
+</presentation-actions>
