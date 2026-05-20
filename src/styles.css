@@ -2179,3 +2179,46 @@ video {
   background: var(--lyr-rose);
   border-radius: 2px;
 }
+
+/* Karaoke / active line styling */
+.lyr-block.active {
+  border-color: rgba(249, 115, 22, 0.45);
+  box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.18), 0 0 24px rgba(249, 115, 22, 0.12);
+}
+.lyr-karaoke-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px 14px;
+  padding: 16px 24px;
+  text-align: center;
+}
+.lyr-karaoke-line .word {
+  font-weight: 900;
+  text-transform: uppercase;
+  font-size: clamp(20px, 4.5vw, 44px);
+  letter-spacing: -0.01em;
+  line-height: 1.05;
+  transition: color 120ms ease, transform 160ms ease, text-shadow 160ms ease;
+}
+.lyr-karaoke-line .word.past {
+  color: rgba(255, 255, 255, 0.35);
+}
+.lyr-karaoke-line .word.upcoming {
+  color: rgba(255, 255, 255, 0.55);
+}
+.lyr-karaoke-line .word.active {
+  color: #facc15;
+  text-shadow: 0 0 18px rgba(250, 204, 21, 0.55);
+  animation: lyrWordPop 180ms ease-out;
+}
+@keyframes lyrWordPop {
+  from { transform: scale(0.86); opacity: 0.6; }
+  to   { transform: scale(1);    opacity: 1; }
+}
+.lyr-progress.clickable {
+  cursor: pointer;
+  height: 6px;
+  padding: 4px 0;
+  background-clip: content-box;
+}
