@@ -133,7 +133,7 @@ function applyFilters(
  * source-candidate-search; this resolver only sees what's already ingested.
  */
 export async function selectClipPool(req: PoolRequest): Promise<SourceCandidate[]> {
-  const supabase = getSupabaseAdmin();
+  const supabase = await lazyAdmin();
 
   if (req.randomize) {
     return stratifiedSampleAcrossCategories(req);
@@ -174,7 +174,7 @@ export async function selectClipPool(req: PoolRequest): Promise<SourceCandidate[
 export async function stratifiedSampleAcrossCategories(
   req: PoolRequest,
 ): Promise<SourceCandidate[]> {
-  const supabase = getSupabaseAdmin();
+  const supabase = await lazyAdmin();
   const limit = req.limit ?? 500;
 
   // Get all parent categories with available clips for this account.
