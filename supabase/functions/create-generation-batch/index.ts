@@ -239,12 +239,27 @@ Deno.serve(async (request) => {
 
     if (batch.error) throw batch.error;
 
+    // Compute the next library_index offset for this audio clip so re-launches
+    // with the same clip stack onto fresh slots instead of colliding.
+    const existingMax = await supabase
+      .from("video_library_items")
+      .select("library_index")
+      .eq("audio_clip_id", String(audioClip.id))
+      .order("library_index", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const indexOffset =
+      existingMax.data && typeof existingMax.data.library_index === "number"
+        ? Number(existingMax.data.library_index) + 1
+        : 0;
+
     const libraryRows = buildLibrarySlotRows({
       accountId: input.accountId,
       audioClipId: String(audioClip.id),
       batchId: batch.data.id,
       quantity: input.count,
       durationSec: input.durationSeconds,
+      indexOffset,
     });
     const insertedLibraryItems = await supabase
       .from("video_library_items")
@@ -252,7 +267,7 @@ Deno.serve(async (request) => {
       .select("*");
     if (insertedLibraryItems.error) throw insertedLibraryItems.error;
     const libraryItemsByIndex = new Map(
-      (insertedLibraryItems.data ?? []).map((row) => [Number(row.library_index), row]),
+      (insertedLibraryItems.data ?? []).map((row, idx) => [idx, row]),
     );
 
     const schedule = buildSchedule(input.startAt, input.count, input.cadenceMinutes);

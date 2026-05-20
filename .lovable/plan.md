@@ -1,52 +1,42 @@
-## Problem
+## Root causes
 
-The UI still blocks with **"Database queue schema is not ready. Generation is blocked until the live migration is applied."** even though the live `fanpage-campaign` `diagnostics` endpoint reports every required table/column as ready (verified by direct curl — all `schema.*` flags `true`, `errors: []`, `warnings: []`).
+### 1. `duplicate key … video_library_items_audio_clip_id_library_index_key` (the 500)
 
-Two things keep tripping the block in the browser:
+`video_library_items` has a unique constraint on `(audio_clip_id, library_index)`. When the user launches a new campaign reusing an existing `audio_clip_id` (e.g., same trimmed clip from a previous failed/canceled run), `create-generation-batch` inserts library rows with `library_index` starting at 0, which collide with the rows already attached to that clip.
 
-1. The diagnostics call sometimes never lands (the runtime "signal is aborted without reason" we saw points to a fetch being aborted by React StrictMode double-mount / HMR), so `diagnostics` stays `null` after the first attempt and is never retried. Combined with stale bundles, the previous gate (`isFanAgentSchemaReady(null) === false`) re-appears.
-2. Even when diagnostics succeeds, any single schema check that races into a transient timeout flips `schema.audioClips` (or sibling) to `false`, which the UI still treats as a hard block — even though the server already classifies that case as a transient *warning*, not an error.
+The constraint should be scoped per batch, not per audio clip — `library_index` is a slot index within a batch.
 
-The schema is, in fact, ready. The banner is purely a stale client-side gate.
+### 2. `signal is aborted without reason` + `WaveSurfer is not initialized` in `AudioTrimmer.tsx`
 
-## Plan
+React 18 StrictMode double-invokes effects in dev. The setup effect calls `ws.load(url)` (async fetch). The first cleanup runs `ws.destroy()` mid-fetch → unhandled `AbortError`. On the second mount, the same instance's `ready` handler can fire after destroy → `addRegion` throws "WaveSurfer is not initialized".
 
-### 1. Stop blocking the UI on `schemaReady`
+## Fix plan
 
-`src/components/autopilot/UploadStep.tsx`
-- Remove the red `Database queue schema is not ready…` banner entirely. The same information is already surfaced (and kept fresh) in the `AutopilotPanel` diagnostics row with a colored dot + summary.
+### Migration (resolves the 500 blocking the home page)
 
-`src/components/autopilot/CampaignStep.tsx`
-- Drop `!props.schemaReady` from the **Generate library** button's `disabled` expression. Keep the other preconditions (`trimmedAudioReady`, `lyricTemplateReady`, `busy`).
+1. Drop `video_library_items_audio_clip_id_library_index_key`.
+2. Add `UNIQUE (batch_id, library_index)` (partial: `WHERE batch_id IS NOT NULL`) so the slot index is unique per batch.
+3. Add supporting index `(audio_clip_id)` for the existing lookups that previously relied on the dropped composite.
 
-`src/components/AutopilotPanel.tsx`
-- `startCampaign`: remove the `if (diagnostics && !schemaReady) throw …` precondition.
-- `registerAndTranscribeClip` effect: change the early return condition from `!accountId || !schemaReady` to just `!accountId`. The audio-clip registration call (`audio-clip-register`) will surface a real server error if a table is genuinely missing — we no longer need to pre-block it from the client.
-- Keep the diagnostics dot + tooltip in the status row so the operator can still see live schema health, but it is informational only.
+### Code changes
 
-### 2. Harden `isFanAgentSchemaReady` against transient flips
+- `src/components/autopilot/AudioTrimmer.tsx`
+  - Add a `cancelled` flag captured by closure; on cleanup set it before `destroy()`.
+  - In the `ready` handler, bail early if `cancelled` or `wsRef.current !== ws`.
+  - Wrap `ws.destroy()` in `try/catch` to swallow `AbortError` from the in-flight `load()` fetch.
+  - Guard `addRegion` with `if (!regionsRef.current) return`.
 
-`src/lib/fanagent/diagnostics.ts`
-- Currently a single `false` boolean (e.g. a transient timeout on `audio_clips`) is treated as "not ready". Tighten it so it only returns `false` when the server also reports a hard `errors[]` entry. If every flag is `true` *or* the only problem is in `warnings[]`, treat the schema as ready.
-- This matches the server's intent: `checkSchema` already separates transient retries (warnings) from real failures (errors).
+- `supabase/functions/create-generation-batch/index.ts`
+  - Defensive: when reusing an existing `audioClipId`, compute the next `library_index` start as `max(library_index)+1` for that clip (belt-and-suspenders even after the constraint change), so re-launches stack rather than collide. Keeps backward compatibility with any rows created before the migration.
 
-### 3. Auto-recover from a missed diagnostics call
+### Verification
 
-`src/components/AutopilotPanel.tsx`
-- Add `refreshDiagnostics` to the 15 s polling interval that already drives `refresh()` (currently only `list` is re-polled). This way a single aborted/timed-out diagnostics call self-heals within 15 s instead of staying `null` until the user manually navigates away.
-- Make `refreshDiagnostics` swallow `request aborted` errors silently (don't `setMessage`) so a StrictMode-aborted fetch doesn't surface a toast.
+- Re-run "Launch campaign" with the previously-failing audio clip → expect success.
+- Open Autopilot Step 1 in dev/StrictMode → no `AbortError` / `WaveSurfer is not initialized` in console.
+- Run `bunx vitest run` for affected tests.
 
-### 4. Verification
+### Files touched
 
-- `bunx vitest run tests/diagnostics.test.ts` — update assertions so `isFanAgentSchemaReady` returns `true` when only `warnings` are present and `false` only when `errors` are non-empty.
-- Manual: hard refresh the home page, confirm the red banner is gone, confirm the **Launch** button is enabled, confirm the diagnostics row still shows `ready` with a green dot.
-
-## Files touched
-
-- `src/components/autopilot/UploadStep.tsx`
-- `src/components/autopilot/CampaignStep.tsx`
-- `src/components/AutopilotPanel.tsx`
-- `src/lib/fanagent/diagnostics.ts`
-- `tests/diagnostics.test.ts`
-
-No edge-function, migration, or backend changes are required — the database schema is already correct.
+- new migration (drop + recreate unique constraint, add index)
+- `supabase/functions/create-generation-batch/index.ts`
+- `src/components/autopilot/AudioTrimmer.tsx`

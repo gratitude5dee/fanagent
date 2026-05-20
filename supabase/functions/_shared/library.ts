@@ -54,6 +54,7 @@ export type LibrarySlotInput = {
   batchId: string;
   quantity: number;
   durationSec: number;
+  indexOffset?: number;
 };
 
 export type SegmentLike = {
@@ -239,11 +240,12 @@ function createBlock(index: number, words: LyricBlockWord[]): LyricBlock {
 
 export function buildLibrarySlotRows(input: LibrarySlotInput): Array<Record<string, unknown>> {
   const quantity = Math.max(1, Math.min(Math.floor(input.quantity), 250));
-  return Array.from({ length: quantity }, (_, libraryIndex) => ({
+  const offset = Math.max(0, Math.floor(input.indexOffset ?? 0));
+  return Array.from({ length: quantity }, (_, i) => ({
     account_id: input.accountId,
     audio_clip_id: input.audioClipId,
     batch_id: input.batchId,
-    library_index: libraryIndex,
+    library_index: offset + i,
     status: "not_ready",
     duration_sec: input.durationSec,
   }));
