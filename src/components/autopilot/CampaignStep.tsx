@@ -30,6 +30,8 @@ type CampaignStepProps = {
   subcategorySlug: string;
   randomize: boolean;
   autoRender: boolean;
+  requiredShots?: number;
+
   sportsAllowedChannels: string;
   sportsLeague: string;
   sportsOwnerAssetUrls: string;
