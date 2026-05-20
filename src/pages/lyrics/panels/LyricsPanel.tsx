@@ -153,7 +153,6 @@ export default function LyricsPanel({ template, engine, onDone, onRetry }: Props
             <button
               className="lyr-btn"
               onClick={() => engine.toggle()}
-              disabled={!engine.isReady}
               title={engine.isPlaying ? "Pause" : "Play"}
             >
               {engine.isPlaying ? <Pause size={14} /> : <Play size={14} />}
@@ -161,6 +160,7 @@ export default function LyricsPanel({ template, engine, onDone, onRetry }: Props
             <span>{time.toFixed(2)}s</span>
             <span className="lyr-tag">
               {totalWords} words · {blocks.length} blocks
+              {!engine.isReady ? " · loading…" : ""}
             </span>
           </div>
           <div

@@ -107,6 +107,7 @@ export default function LyricsTemplateBuilder({
       engine.load(trimmedAudioUrl);
       const clipSec = (state.template?.selection_duration_ms ?? 15000) / 1000;
       engine.setLoop(0, clipSec, { loop: true });
+      engine.seek(0);
     } else if (state.previewUrl) {
       engine.load(state.previewUrl);
     } else {

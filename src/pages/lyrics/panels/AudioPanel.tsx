@@ -225,7 +225,6 @@ export default function AudioPanel({
               type="button"
               className="lyr-btn"
               onClick={() => engine.toggle()}
-              disabled={!engine.isReady}
             >
               {engine.isPlaying ? <Pause size={14} /> : <Play size={14} />}{" "}
               {engine.isReady ? "Preview" : "Loading…"}

@@ -1,55 +1,49 @@
-# Sync Audio Playback with Lyric Highlighting
+## Goal
+Make saved lyric templates carry their audio end-to-end, remove the fallback that asks for a new upload when reusing a template, and restore fully functional synced playback in the Lyrics and Cut Markers steps.
 
-## Problem
+## What I’ll implement
 
-In the Create Template wizard:
+### 1. Repair template audio persistence
+- Update the lyrics audio upload/register flow to use one consistent storage contract for template audio instead of the current mixed `audio-uploads` / `lyric-templates/...` path.
+- Align the client and edge function with the intended template asset model so a template always ends with a durable trimmed audio asset reference.
+- Ensure template creation stores enough source/trimmed asset metadata for later retrieval, reopening, and remix generation.
+- Harden the template edge function so `get`, `patch`, `finalize`, and `signTrimmedAudio` continue to work even for older or partially-created rows.
 
-1. **Lyrics panel (step 2)** — Words are not visibly highlighted as the audio plays. The CSS `.lyr-word.active` exists and word timings are stored correctly (clip‑relative seconds, e.g. `start=0.079s end=0.28s` for the first word, last word ending at ~29.9s for a 30s clip), but the highlight does not move because the mini‑player isn't reliably driving `engine.currentTime` and there is no scroll‑into‑view on the active word.
-2. **Cut Markers panel (step 3)** — The stage area shows only a single isolated word ("activeWord"). It should display the full current lyric line with the playing word accented, like the Remotion `LyricRemixComposition` does, kept in sync with audio.
-3. Both panels share one `AudioEngine`. When the user presses play in either panel, the highlight should track across both.
+### 2. Restore wizard playback + sync
+- Keep one shared audio engine for the 3-step wizard and make sure it always loads the correct clip on first open and on template reload.
+- Reset and clamp playback correctly when switching templates, confirming audio, reopening saved templates, or retrying signed URLs.
+- Make the Lyrics panel reliably follow playback with active-word highlighting, active-line emphasis, seeking from words, and synced progress.
+- Make the Cut Markers panel show the current lyric line instead of a static placeholder, with live word-state changes tied to the playhead.
+- Preserve marker editing behavior while making scrubbing, restart, play/pause, undo/redo, and delete-nearest operate against the same active clip.
 
-DB sanity check confirmed `lyric_blocks[].words[].startTime/endTime` are seconds in the clip's local timeline, so they line up with `engine.currentTime` (which is already clip‑relative because `setLoop(0, clipSec)` is applied after `useTrimmedAudioUrl` resolves).
+### 3. Unify remix template reuse
+- Change Remix to resolve audio through the same signed template-audio path as the wizard instead of direct browser-side `project_assets` reads.
+- Make generation launch from a saved template without needing fresh audio input by ensuring the finalized template always exposes an `audio_clip_id` or equivalent reusable audio reference.
+- Remove the conditions that cause saved-template reuse to fall back to “upload file first” behavior.
 
-## Changes
+### 4. Validate the broken paths
+- Verify these flows after implementation:
+  - create new template → confirm audio → transcribe → markers → save
+  - reopen template from landing → audio plays immediately
+  - saved template → remix page loads audio without prompting for upload
+  - lyrics highlight and marker stage stay synced during playback
 
-### 1. `src/pages/lyrics/panels/LyricsPanel.tsx`
-- Add `activeBlockId` derivation alongside `activeWordId`.
-- Apply `lyr-block.active` class to the block containing the active word and `scrollIntoView({ block: 'nearest', behavior: 'smooth' })` via a ref keyed by `activeWordId` (rAF‑throttled to avoid scroll spam).
-- Add a click handler on each non‑editing word: shift‑click seeks via `engine.seek(word.startTime)` so the user can scrub to a word. Plain click keeps the current "edit" behaviour.
-- Make the mini‑player play button call `engine.toggle()` and reflect `engine.isPlaying`; also show a thin progress bar bound to `engine.currentTime / clipDuration`.
+## Files likely to change
+- `src/pages/lyrics/panels/AudioPanel.tsx`
+- `src/pages/lyrics/panels/LyricsPanel.tsx`
+- `src/pages/lyrics/panels/MarkersPanel.tsx`
+- `src/components/autopilot/LyricsTemplateBuilder.tsx`
+- `src/pages/lyrics/RemixEditor.tsx`
+- `src/lib/lyrics/api.ts`
+- `src/lib/lyrics/useTrimmedAudioUrl.ts`
+- `supabase/functions/kanvas-lyrics-audio-register/index.ts`
+- `supabase/functions/kanvas-lyrics-template/index.ts`
+- `src/styles.css`
 
-### 2. `src/pages/lyrics/panels/MarkersPanel.tsx`
-- Replace the single‑word stage with a **karaoke line view**:
-  - Derive the active block (line) using `engine.currentTime`.
-  - Render the full line's words inline; the currently active word gets an accent style (`text-shadow`/color), upcoming words are dim, past words are slightly faded.
-  - Add a subtle scale‑in animation on word change (CSS keyframe), echoing the Remix composition's `interpolate(... [0.86,1])` enter pose.
-- Keep the existing `lyr-caption-ribbon` (prev / cur / next) but compute it from the active line's word list, not the global flatMap, so navigation stays within the current line.
-- Make the existing scrub `.lyr-progress` clickable: clicking/dragging seeks the engine.
-- Ensure restart button seeks to `0` AND starts playback when previously playing (preserve play state).
-
-### 3. `src/components/autopilot/LyricsTemplateBuilder.tsx`
-- After the trimmed URL loads, additionally call `engine.seek(0)` so the playhead resets when switching templates.
-- Guard against double `engine.load(url)` for identical URLs (the hook already short‑circuits, but ensure `setLoop` only runs once when ready). No functional regression; just stabilizes the play head.
-
-### 4. `src/styles.css`
-- Add styles for:
-  - `.lyr-block.active` (subtle border / glow on the current line).
-  - `.lyr-karaoke-line` — flex row with `.word`, `.word.active` (accent), `.word.past` (faded), `.word.upcoming` (dim).
-  - `@keyframes lyrWordPop` for the active word scale‑in.
-  - `.lyr-progress.clickable` cursor + larger hit area.
-
-## Technical Details
-
-- `engine.currentTime` is already clip‑relative seconds (the loop starts at 0). Word timings are clip‑relative seconds. No unit conversion needed.
-- The active‑word lookup stays O(words) per frame; the rAF in `useAudioEngine` already drives the re‑render via `setCurrentTime`. No additional polling.
-- ScrollIntoView is rAF‑gated by tracking the last scrolled word id in a ref to avoid jitter.
-- Karaoke line view receives `nowSec = engine.currentTime` and applies classes purely by comparison against `word.startTime/endTime`; no extra state.
-- No DB schema or edge function changes. Reuses the existing `signTrimmedAudio` action and `useTrimmedAudioUrl` flow that was fixed in the prior turn.
-
-## Acceptance
-
-- Press Play in the Lyrics panel → words light up `.active` in time with the audio; the active block scrolls into view if off‑screen.
-- Press Play in the Cut Markers panel → the stage shows the full current line with the active word visibly accented and a pop animation on change; the caption ribbon updates within the same line.
-- Shift‑clicking a word in the Lyrics panel seeks the audio to that word.
-- Clicking the progress bar in the Markers panel seeks the audio.
-- Switching templates resets the playhead to 0 and the highlight clears.
+## Technical details
+- The current implementation is off-contract in a few places:
+  - trimmed template audio is uploaded to `audio-uploads` with a `lyric-templates/...` path instead of the intended user-scoped template audio path
+  - the register function currently accepts that looser shape, which makes retrieval and ownership assumptions inconsistent
+  - remix still loads template audio by querying `project_assets` from the browser, which is fragile under RLS and mismatched ownership
+- I’ll fix this by making the template asset flow internally consistent rather than layering more fallbacks on top.
+- I won’t expand scope into redesigning the full `/kanvas/*` route architecture yet; this pass will focus on getting the current lyrics/template/remix surfaces fully functional.
