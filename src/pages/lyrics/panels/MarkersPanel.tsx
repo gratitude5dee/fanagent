@@ -160,34 +160,36 @@ export default function MarkersPanel({ active, template, engine, onChange }: Pro
 
   return (
     <div className="lyr-markers">
-      <div className="lyr-stage">
-        {flashCut ? <span className="lyr-cut-flash">CUT</span> : null}
-        {lineWords.length > 0 ? (
-          <div className="lyr-karaoke-line">
-            {lineWords.map((w) => {
-              const cls =
-                time > w.endTime
-                  ? "past"
-                  : time < w.startTime
-                  ? "upcoming"
-                  : "active";
-              return (
-                <span key={w.id} className={`word ${cls}`}>
-                  {w.text}
-                </span>
-              );
-            })}
-          </div>
-        ) : (
-          <span className="lyr-stage-word">—</span>
-        )}
+      <div className="lyr-stage-frame">
+        <div className="lyr-stage">
+          {flashCut ? <span className="lyr-cut-flash">CUT</span> : null}
+          {lineWords.length > 0 ? (
+            <div className="lyr-karaoke-line">
+              {lineWords.map((w) => {
+                const cls =
+                  time > w.endTime
+                    ? "past"
+                    : time < w.startTime
+                    ? "upcoming"
+                    : "active";
+                return (
+                  <span key={w.id} className={`word ${cls}`}>
+                    {w.text}
+                  </span>
+                );
+              })}
+            </div>
+          ) : (
+            <span className="lyr-stage-word">—</span>
+          )}
+        </div>
+        <div className="lyr-caption-ribbon">
+          <span className="prev">{prevWord?.text ?? ""}</span>
+          <span className="cur">{activeWord?.text ?? "—"}</span>
+          <span className="next">{nextWord?.text ?? ""}</span>
+        </div>
       </div>
 
-      <div className="lyr-caption-ribbon">
-        <span className="prev">{prevWord?.text ?? ""}</span>
-        <span className="cur">{activeWord?.text ?? "—"}</span>
-        <span className="next">{nextWord?.text ?? ""}</span>
-      </div>
 
       <div className="lyr-controls">
         <button className="lyr-btn" onClick={togglePlay}>
