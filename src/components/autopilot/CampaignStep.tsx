@@ -306,9 +306,9 @@ export function CampaignStep(props: CampaignStepProps) {
           disabled={
             props.busy ||
             !props.trimmedAudioReady ||
-            !props.lyricTemplateReady ||
-            !props.schemaReady
+            !props.lyricTemplateReady
           }
+
           type="submit"
         >
           {props.busy ? <Loader2 className="spin" size={16} /> : <CalendarClock size={16} />}{" "}
