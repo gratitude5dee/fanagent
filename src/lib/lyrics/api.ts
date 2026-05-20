@@ -1,29 +1,10 @@
 // Edge function wrappers. All numeric values cross the boundary in milliseconds.
 import { supabase } from "@/integrations/supabase/client";
+import { invokeEdgeFunction } from "@/lib/fanagent/invokeFunction";
 import type { LyricBlock, LyricTemplate, TemplateStatus } from "./types";
 
-type FunctionEnvelope<T> = {
-  success: boolean;
-  code?: string;
-  message?: string;
-  data: T | null;
-  error?: string | null;
-};
-
-function unwrapFunctionData<T>(value: unknown): T {
-  if (typeof value !== "object" || value === null || !("success" in value)) return value as T;
-  const envelope = value as FunctionEnvelope<T>;
-  if (envelope.success) return envelope.data as T;
-  throw new Error(envelope.error || envelope.message || envelope.code || "Function failed");
-}
-
 async function call<T>(fn: string, body: Record<string, unknown>): Promise<T> {
-  const { data, error } = await supabase.functions.invoke<unknown>(fn, { body });
-  if (error) {
-    if (data) return unwrapFunctionData<T>(data);
-    throw new Error(error.message);
-  }
-  return unwrapFunctionData<T>(data);
+  return invokeEdgeFunction<T>(fn, body);
 }
 
 export const lyricsApi = {
