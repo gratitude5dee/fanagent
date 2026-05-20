@@ -33,6 +33,9 @@ verify_jwt = false
 [functions.library-bulk-schedule]
 verify_jwt = false
 
+[functions.library-remix]
+verify_jwt = false
+
 [functions.source-candidate-search]
 verify_jwt = false
 
