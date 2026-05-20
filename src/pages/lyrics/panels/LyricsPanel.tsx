@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Pause, Pencil, Play, RotateCcw, Type, Wand2 } from "lucide-react";
+import { Loader2, Pause, Pencil, Play, Plus, RotateCcw, Trash2, Type, Wand2, X } from "lucide-react";
 import type { LyricBlock, LyricTemplate, TranscribeStatus } from "@/lib/lyrics/types";
 import type { AudioEngine } from "@/lib/lyrics/useAudioEngine";
 
