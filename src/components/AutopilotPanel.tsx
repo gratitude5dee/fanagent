@@ -335,7 +335,6 @@ export default function AutopilotPanel({
     [data],
   );
   const schemaReady = isFanAgentSchemaReady(diagnostics?.schema);
-  const sourceOptions = useMemo(() => buildSourceOptions(diagnostics?.env), [diagnostics?.env]);
   const selectedCategory = useMemo(
     () => categories.find((c) => c.id === categoryId) ?? null,
     [categories, categoryId],
