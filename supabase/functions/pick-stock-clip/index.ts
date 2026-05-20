@@ -11,6 +11,10 @@ import { optionalEnv } from "../_shared/env.ts";
 import { createSegmentVisualPlan, normalizeSourceMode } from "../_shared/generation.ts";
 import { candidateDedupeKeys, selectUnique } from "../_shared/sources/dedupe.ts";
 import { filterByDuration, filterPortrait } from "../_shared/sources/filters.ts";
+import {
+  assertCandidateInCategory,
+  selectClipPool,
+} from "../_shared/sources/pool.ts";
 import { getSourceAdapter, normalizeSourceType } from "../_shared/sources/registry.ts";
 import type {
   DedupeStrategy,
@@ -104,6 +108,8 @@ async function searchCandidates(input: {
   tolerancePreferredSec: number;
   toleranceFallbackSec: number;
   portraitOnly: boolean;
+  categoryId?: string | null;
+  subcategorySlug?: string | null;
 }): Promise<SourceCandidate[]> {
   const response = await invokeChild("source-candidate-search", {
     audioClipId: input.audioClipId,
@@ -111,6 +117,8 @@ async function searchCandidates(input: {
     tolerancePreferredSec: input.tolerancePreferredSec,
     toleranceFallbackSec: input.toleranceFallbackSec,
     portraitOnly: input.portraitOnly,
+    categoryId: input.categoryId ?? null,
+    subcategorySlug: input.subcategorySlug ?? null,
     segments: [input.segment],
   });
   const json = (await response.json().catch(() => ({}))) as CandidateSearchEnvelope;
