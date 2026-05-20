@@ -34,6 +34,13 @@ import {
   coerceSelectableSourceMode,
   type SourceMode,
 } from "@/lib/fanagent/sourceMode";
+import {
+  categoryToSourceMode,
+  fetchClipCategories,
+  fetchPoolCounts,
+  type CategoryNode,
+  type PoolCountIndex,
+} from "@/lib/fanagent/categories";
 import { lyricsApi } from "@/lib/lyrics/api";
 import type { LyricTemplate, LyricTemplateSummary } from "@/lib/lyrics/types";
 
