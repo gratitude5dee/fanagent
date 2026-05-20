@@ -415,11 +415,10 @@ export default function AutopilotPanel() {
   async function startCampaign() {
     if (!trimmedAudio) throw new Error("Trim your audio clip first.");
     if (!account) throw new Error("No account.");
-    if (diagnostics && !schemaReady) {
-      throw new Error(
-        `Database queue schema is not ready: ${schemaDiagnosticsSummary(diagnostics.schema)}`,
-      );
-    }
+    // Schema readiness is informational only — surfaced in the diagnostics
+    // panel. The server will return a specific error if a table is actually
+    // missing, so we don't pre-block the launch here.
+
     if (!registeredAudioClip) {
       throw new Error("Wait for the audio clip to finish registering before launching.");
     }
