@@ -145,5 +145,39 @@ export function useStudioData(): UseStudioDataResult {
     refresh();
   }, [refresh]);
 
+  // Supabase Realtime: when video_library_items flip to ready (or a post
+  // claims/releases a library item) push a fresh snapshot so the Studio
+  // Ready lane and calendar stay live without polling.
+  useEffect(() => {
+    let pending: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRefresh = () => {
+      if (pending) return;
+      pending = setTimeout(() => {
+        pending = null;
+        refresh().catch(() => {});
+      }, 400);
+    };
+
+    const channel = supabase
+      .channel("studio-ready-lane")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "video_library_items" },
+        scheduleRefresh,
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "posts" },
+        scheduleRefresh,
+      )
+      .subscribe();
+
+    return () => {
+      if (pending) clearTimeout(pending);
+      supabase.removeChannel(channel);
+    };
+  }, [refresh]);
+
+
   return { data, refresh, busy, error };
 }
