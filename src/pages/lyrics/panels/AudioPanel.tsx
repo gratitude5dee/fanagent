@@ -51,11 +51,14 @@ export default function AudioPanel({
 
   // Update engine loop window when the user adjusts selection (only while we
   // have a raw file preview; once confirmed the parent drives the loop).
+  // Exclude `engine` from deps — its identity changes every playback tick.
+  const engineSetLoop = engine.setLoop;
   useEffect(() => {
     if (!hasTrimmedAudio && file) {
-      engine.setLoop(start, start + duration, { loop: true });
+      engineSetLoop(start, start + duration, { loop: true });
     }
-  }, [start, duration, file, hasTrimmedAudio, engine]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [start, duration, file, hasTrimmedAudio]);
 
   // Release blob URLs on unmount / new file.
   useEffect(() => {
