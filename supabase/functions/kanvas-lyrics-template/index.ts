@@ -332,10 +332,39 @@ Deno.serve(async (req) => {
           (tpl.data.trimmed_audio_asset_id as string | null) ??
           (tpl.data.source_audio_asset_id as string | null);
 
+        // Resolve an account_id required by audio_clips / media_assets NOT NULL.
+        async function resolveAccountId(): Promise<string | null> {
+          const fromDefaults =
+            (tpl.data.render_defaults as Record<string, unknown> | null)?.account_id;
+          if (typeof fromDefaults === "string" && fromDefaults) return fromDefaults;
+          const primary = await admin
+            .from("accounts")
+            .select("id")
+            .eq("is_primary", true)
+            .order("created_at", { ascending: true })
+            .limit(1)
+            .maybeSingle();
+          if (primary.data?.id) return String(primary.data.id);
+          const any = await admin
+            .from("accounts")
+            .select("id")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          return any.data?.id ? String(any.data.id) : null;
+        }
+
+        let resolvedAccountId: string | null = null;
+
         if (!audioClipId && trimmedProjectAssetId) {
-          // Look up the project_asset, then mirror it into media_assets so an
-          // audio_clip row can reference it. The existing seedance/stock
-          // pipeline keys off audio_clips + media_assets.
+          resolvedAccountId = await resolveAccountId();
+          if (!resolvedAccountId) {
+            return errorEnvelope(
+              "No account is configured. Connect a TikTok account before saving a lyric template.",
+              "KANVAS_LYRICS_TEMPLATE_NO_ACCOUNT",
+              400,
+            );
+          }
           const projAsset = await admin
             .from("project_assets")
             .select(
@@ -345,7 +374,6 @@ Deno.serve(async (req) => {
             .single();
           if (projAsset.error) throw projAsset.error;
 
-          // Reuse media_asset if it already exists for this storage path.
           const existingMedia = await admin
             .from("media_assets")
             .select("id")
@@ -360,7 +388,7 @@ Deno.serve(async (req) => {
             const inserted = await admin
               .from("media_assets")
               .insert({
-                account_id: null,
+                account_id: resolvedAccountId,
                 kind: "audio",
                 source: "lyric_template",
                 storage_bucket: projAsset.data.storage_bucket,
@@ -392,7 +420,7 @@ Deno.serve(async (req) => {
           const clipIns = await admin
             .from("audio_clips")
             .insert({
-              account_id: null,
+              account_id: resolvedAccountId,
               source_asset_id: mediaAssetId,
               trimmed_asset_id: mediaAssetId,
               selection_start_sec: Number(tpl.data.selection_start_ms ?? 0) / 1000,
@@ -415,12 +443,18 @@ Deno.serve(async (req) => {
           audioClipId = String(clipIns.data.id);
         }
 
+        const mergedDefaults = {
+          ...((tpl.data.render_defaults as Record<string, unknown>) ?? {}),
+          ...(resolvedAccountId ? { account_id: resolvedAccountId } : {}),
+        };
+
         const { data, error } = await supabase
           .from("kanvas_lyric_templates")
           .update({
             status: "saved",
             saved_at: new Date().toISOString(),
             audio_clip_id: audioClipId,
+            render_defaults: mergedDefaults,
           })
           .eq("id", templateId)
           .select("*")
