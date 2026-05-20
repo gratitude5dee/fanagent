@@ -146,7 +146,7 @@ function validatePayload(body: CreateBatchRequest) {
     categoryId: body.categoryId ?? null,
     subcategorySlug: body.subcategorySlug ?? null,
     randomize: body.randomize === true,
-    autoRender: body.autoRender === true,
+    autoRender,
   };
 }
 
