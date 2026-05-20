@@ -1,6 +1,6 @@
 // Shared single-HTMLAudioElement engine for the lyric template wizard.
 // Times are clip-relative seconds; loop window clamps playback.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 export interface AudioEngine {
@@ -193,5 +193,8 @@ export function useAudioEngine(): AudioEngine {
     [],
   );
 
-  return { isReady, isPlaying, currentTime, duration, load, play, pause, toggle, seek, setLoop };
+  return useMemo(
+    () => ({ isReady, isPlaying, currentTime, duration, load, play, pause, toggle, seek, setLoop }),
+    [isReady, isPlaying, currentTime, duration, load, play, pause, toggle, seek, setLoop],
+  );
 }
