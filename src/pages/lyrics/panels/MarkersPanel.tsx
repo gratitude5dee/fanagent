@@ -56,7 +56,9 @@ export default function MarkersPanel({ active, template, engine, onChange }: Pro
   }, [engine]);
 
   const restart = useCallback(() => {
+    const wasPlaying = engine.isPlaying;
     engine.seek(0);
+    if (wasPlaying) void engine.play();
   }, [engine]);
 
   const addAtCurrent = useCallback(() => {
@@ -109,19 +111,29 @@ export default function MarkersPanel({ active, template, engine, onChange }: Pro
     return () => window.removeEventListener("keydown", onKey);
   }, [active, togglePlay, addAtCurrent, undo, redo, deleteNearest]);
 
-  const activeWord: LyricWord | null = useMemo(() => {
+  const activeBlock: LyricBlock | null = useMemo(() => {
     for (const b of blocks) {
+      if (time >= b.startTime && time <= b.endTime) return b;
       for (const w of b.words) {
-        if (time >= w.startTime && time <= w.endTime) return w;
+        if (time >= w.startTime && time <= w.endTime) return b;
       }
     }
     return null;
   }, [blocks, time]);
 
-  const allWords = useMemo<LyricWord[]>(() => blocks.flatMap((b) => b.words), [blocks]);
-  const idx = activeWord ? allWords.findIndex((w) => w.id === activeWord.id) : -1;
-  const prevWord = idx > 0 ? allWords[idx - 1] : null;
-  const nextWord = idx >= 0 && idx < allWords.length - 1 ? allWords[idx + 1] : null;
+  const activeWord: LyricWord | null = useMemo(() => {
+    if (!activeBlock) return null;
+    for (const w of activeBlock.words) {
+      if (time >= w.startTime && time <= w.endTime) return w;
+    }
+    return null;
+  }, [activeBlock, time]);
+
+  const lineWords = activeBlock?.words ?? [];
+  const idxInLine = activeWord ? lineWords.findIndex((w) => w.id === activeWord.id) : -1;
+  const prevWord = idxInLine > 0 ? lineWords[idxInLine - 1] : null;
+  const nextWord =
+    idxInLine >= 0 && idxInLine < lineWords.length - 1 ? lineWords[idxInLine + 1] : null;
 
   const flashCut = markers.some((m) => Math.abs(m - time) < 0.18);
 
@@ -145,9 +157,25 @@ export default function MarkersPanel({ active, template, engine, onChange }: Pro
     <div className="lyr-markers">
       <div className="lyr-stage">
         {flashCut ? <span className="lyr-cut-flash">CUT</span> : null}
-        {activeWord ? (
-          <span className="lyr-stage-word">{activeWord.text.toUpperCase()}</span>
-        ) : null}
+        {lineWords.length > 0 ? (
+          <div className="lyr-karaoke-line">
+            {lineWords.map((w) => {
+              const cls =
+                time > w.endTime
+                  ? "past"
+                  : time < w.startTime
+                  ? "upcoming"
+                  : "active";
+              return (
+                <span key={w.id} className={`word ${cls}`}>
+                  {w.text}
+                </span>
+              );
+            })}
+          </div>
+        ) : (
+          <span className="lyr-stage-word">—</span>
+        )}
       </div>
 
       <div className="lyr-caption-ribbon">
@@ -167,7 +195,16 @@ export default function MarkersPanel({ active, template, engine, onChange }: Pro
           {time.toFixed(2)}s / {duration.toFixed(0)}s
           {!engine.isReady ? " · loading…" : ""}
         </span>
-        <div className="lyr-progress">
+        <div
+          className="lyr-progress clickable"
+          onClick={(e) => engine.seek(pointerToTime(e.clientX))}
+          onPointerDown={(e) => {
+            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            if (e.buttons === 1) engine.seek(pointerToTime(e.clientX));
+          }}
+        >
           <span style={{ width: `${duration > 0 ? (time / duration) * 100 : 0}%` }} />
         </div>
       </div>

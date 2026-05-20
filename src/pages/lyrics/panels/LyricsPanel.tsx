@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Pause, Pencil, Play, RotateCcw, Type, Wand2 } from "lucide-react";
 import type { LyricBlock, LyricTemplate, TranscribeStatus } from "@/lib/lyrics/types";
 import type { AudioEngine } from "@/lib/lyrics/useAudioEngine";
@@ -35,19 +35,22 @@ export default function LyricsPanel({ template, engine, onDone, onRetry }: Props
   const [editingWord, setEditingWord] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const wordRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const lastScrolledRef = useRef<string | null>(null);
 
   useEffect(() => {
     setBlocks(template?.lyric_blocks ?? []);
   }, [template?.id, template?.lyric_blocks]);
 
   const time = engine.currentTime;
+  const clipDur = (template?.selection_duration_ms ?? 15000) / 1000;
 
   function manualEntry() {
     const block: LyricBlock = {
       id: crypto.randomUUID(),
       label: "Verse",
       startTime: 0,
-      endTime: (template?.selection_duration_ms ?? 15000) / 1000,
+      endTime: clipDur,
       words: [
         {
           id: crypto.randomUUID(),
@@ -84,14 +87,27 @@ export default function LyricsPanel({ template, engine, onDone, onRetry }: Props
   }
 
   const totalWords = useMemo(() => blocks.reduce((s, b) => s + b.words.length, 0), [blocks]);
-  const activeWordId = useMemo(() => {
+
+  const { activeWordId, activeBlockId } = useMemo(() => {
     for (const b of blocks) {
       for (const w of b.words) {
-        if (time >= w.startTime && time <= w.endTime) return w.id;
+        if (time >= w.startTime && time <= w.endTime) {
+          return { activeWordId: w.id, activeBlockId: b.id };
+        }
       }
     }
-    return null;
+    return { activeWordId: null as string | null, activeBlockId: null as string | null };
   }, [blocks, time]);
+
+  // Auto-scroll active word into view (throttled by id change).
+  useEffect(() => {
+    if (!activeWordId || activeWordId === lastScrolledRef.current) return;
+    lastScrolledRef.current = activeWordId;
+    const el = wordRefs.current.get(activeWordId);
+    if (el) {
+      requestAnimationFrame(() => el.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+    }
+  }, [activeWordId]);
 
   const locked = !template?.trimmed_audio_asset_id;
 
@@ -102,6 +118,8 @@ export default function LyricsPanel({ template, engine, onDone, onRetry }: Props
       </div>
     );
   }
+
+  const progressPct = clipDur > 0 ? Math.min(100, (time / clipDur) * 100) : 0;
 
   return (
     <div className="lyr-lyrics">
@@ -136,6 +154,7 @@ export default function LyricsPanel({ template, engine, onDone, onRetry }: Props
               className="lyr-btn"
               onClick={() => engine.toggle()}
               disabled={!engine.isReady}
+              title={engine.isPlaying ? "Pause" : "Play"}
             >
               {engine.isPlaying ? <Pause size={14} /> : <Play size={14} />}
             </button>
@@ -144,9 +163,22 @@ export default function LyricsPanel({ template, engine, onDone, onRetry }: Props
               {totalWords} words · {blocks.length} blocks
             </span>
           </div>
+          <div
+            className="lyr-progress clickable"
+            onClick={(e) => {
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              const pct = (e.clientX - rect.left) / rect.width;
+              engine.seek(Math.max(0, Math.min(clipDur, pct * clipDur)));
+            }}
+          >
+            <span style={{ width: `${progressPct}%` }} />
+          </div>
           <div className="lyr-blocks">
             {blocks.map((b) => (
-              <div key={b.id} className="lyr-block">
+              <div
+                key={b.id}
+                className={`lyr-block ${activeBlockId === b.id ? "active" : ""}`}
+              >
                 <header>
                   <Wand2 size={12} /> {b.label}
                 </header>
@@ -170,12 +202,21 @@ export default function LyricsPanel({ template, engine, onDone, onRetry }: Props
                     ) : (
                       <button
                         key={w.id}
+                        ref={(el) => {
+                          if (el) wordRefs.current.set(w.id, el);
+                          else wordRefs.current.delete(w.id);
+                        }}
                         type="button"
                         className={`lyr-word ${active ? "active" : ""}`}
-                        onClick={() => {
+                        onClick={(e) => {
+                          if (e.shiftKey) {
+                            engine.seek(w.startTime);
+                            return;
+                          }
                           setDraft(w.text);
                           setEditingWord(w.id);
                         }}
+                        title="Click to edit · Shift+Click to seek"
                       >
                         {w.text}
                       </button>
