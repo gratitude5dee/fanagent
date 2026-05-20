@@ -1,48 +1,73 @@
 ## Goal
-Make the lyric template wizard reliable end-to-end so saved templates keep their audio, lyrics generation consistently reaches a usable state, and the Lyrics/Cut Markers panels stay in sync with playback.
 
-## What’s actually broken
-- Some older template rows are missing `trimmed_audio_asset_id`, which triggers the “please upload file” fallback even when the template already has lyrics.
-- The backend contract is inconsistent across template creation/reopen flows: the newest template signs audio correctly, but legacy/incomplete templates are not always self-healed before the UI renders.
-- The lyrics step does not robustly recover from `audio_ready` / `lyrics_processing` / `failed` states when reopening a template, so generation can appear stuck.
-- The cut markers step depends on the shared audio engine and lyric blocks being hydrated in the right order; when either is stale, playback/highlighting looks broken.
+Fix three blockers in the Lyrics Template wizard:
 
-## Implementation plan
-### 1) Harden template audio recovery
-- Update the lyric template fetch/reopen path so any template missing `trimmed_audio_asset_id` is repaired from linked metadata before the wizard tries to render playback.
-- Make the edge function’s `get`/`signTrimmedAudio` paths use the same repair rules, so the browser never has to guess whether audio exists.
-- Keep the current signed-URL approach and remove any remaining UI assumptions that a missing `trimmed_audio_asset_id` means the user must re-upload.
+1. Saving a template crashes with `account_id` NOT NULL on `audio_clips` (and `media_assets`).
+2. The Lyrics step doesn't let you delete words (only inline-edit).
+3. The Cut Markers preview stage is a generic rectangle — it needs to be a true 9:16 frame so what you see matches what the campaign renderer will produce.
 
-### 2) Make lyrics generation stateful and recoverable
-- Update the wizard to explicitly handle these states on load: `draft`, `audio_ready`, `lyrics_processing`, `failed`, `lyrics_ready`, `saved`.
-- If a template is `audio_ready` with valid trimmed audio but no lyric blocks, trigger transcription instead of leaving the panel in a passive waiting state.
-- If transcription is already in progress, poll/refetch the template until it reaches `lyrics_ready` or `failed` so the UI updates without a manual reload.
-- Surface backend failure messages cleanly inside the lyrics panel and keep manual entry as the fallback.
+---
 
-### 3) Stabilize synced playback in Lyrics + Cut Markers
-- Unify active-word/active-line resolution so both panels use the same playhead interpretation and the same fallback behavior before the first word and between lines.
-- Ensure the audio engine resets and loop bounds are applied consistently when opening a saved template, switching steps, retrying transcription, or replaying from the start.
-- Make the marker stage render the current/next lyric line deterministically even at `t=0` and during scrubbing.
+## 1. Fix `account_id` violation in `kanvas-lyrics-template` finalize
 
-### 4) Fix cut marker editing flow
-- Make marker changes persist reliably and reflect immediately after add/move/delete/undo/redo.
-- Verify marker dragging commits the moved value, not stale pre-drag state.
-- Keep the karaoke preview and playhead aligned while scrubbing so users can place cuts against the visible lyric timing.
+**Root cause:** `supabase/functions/kanvas-lyrics-template/index.ts` lines 363 and 395 insert into `media_assets` and `audio_clips` with `account_id: null`. `audio_clips.account_id` is `NOT NULL` (and is required for the downstream campaign pipeline that joins clips → batches → posts).
 
-### 5) Validate against the live contract
-- Test a brand-new template flow: upload → confirm audio → generate lyrics → preview synced highlighting → add markers → save.
-- Test reopening the newest template and an older broken template to confirm audio no longer asks for re-upload.
-- Verify the Remix page still loads template audio via signed URL after the wizard fixes.
+**Fix:** Resolve an account id once per finalize call before the bridging inserts:
 
-## Technical details
-- Likely files: `src/components/autopilot/LyricsTemplateBuilder.tsx`, `src/pages/lyrics/panels/AudioPanel.tsx`, `src/pages/lyrics/panels/LyricsPanel.tsx`, `src/pages/lyrics/panels/MarkersPanel.tsx`, `src/lib/lyrics/useAudioEngine.ts`, `src/lib/lyrics/useTrimmedAudioUrl.ts`, `src/lib/lyrics/api.ts`, `supabase/functions/kanvas-lyrics-template/index.ts`, `supabase/functions/kanvas-lyrics-transcribe/index.ts`.
-- No database migration is currently indicated; this looks like contract/state repair rather than schema failure.
-- I’ll validate using live edge-function calls plus targeted UI behavior checks before calling it fixed.
+- Use the admin client to find a usable `accounts` row:
+  1. If `tpl.data` carries an artist via `render_defaults` or metadata, use accounts for that artist.
+  2. Otherwise pick the primary account: `accounts where is_primary = true` ordered by `created_at asc`, limit 1.
+  3. If still none, fall back to the most recent account row.
+- If still none exists, return a `KANVAS_LYRICS_TEMPLATE_NO_ACCOUNT` 400 with a clear message instead of letting Postgres reject the row.
+- Pass the resolved `accountId` into both the `media_assets` insert (line 360) and the `audio_clips` insert (line 392).
 
-<presentation-actions>
-  <presentation-open-history>View History</presentation-open-history>
-</presentation-actions>
+Also write the same `account_id` onto the `kanvas_lyric_templates.render_defaults.account_id` so the campaign step can pick it up without re-resolving.
 
-<presentation-actions>
-<presentation-link url="https://docs.lovable.dev/tips-tricks/troubleshooting">Troubleshooting docs</presentation-link>
-</presentation-actions>
+No schema migration needed (column already exists and accepts any uuid).
+
+## 2. Lyrics step: edit + delete words/blocks
+
+In `src/pages/lyrics/panels/LyricsPanel.tsx`:
+
+- Inline word editor:
+  - Empty submit (Enter on empty input, or blur with empty text) deletes the word from the block.
+  - Add a small `×` button on each word (visible on hover) that removes only that word.
+- Block-level controls in the block header:
+  - `Add word` (appends a word at end with `startTime = lastWord.endTime`, `endTime = +0.4s`, clamped to clip duration).
+  - `Delete block` (removes the entire block; if last block remains empty, the panel re-shows the "Type lyrics manually instead" CTA).
+- Keep the seek-on-shift-click behavior.
+- Block auto-cleanup: when a block ends up with zero words, drop it from `blocks` before persisting in `done()`.
+- No changes to API/types — `LyricBlock` already supports arbitrary `words[]`.
+
+## 3. Cut Markers: 9:16 preview stage
+
+In `src/pages/lyrics/panels/MarkersPanel.tsx` + `src/styles.css`:
+
+- Wrap the existing `.lyr-stage` content in a 9:16 frame:
+  - New class `.lyr-stage-frame` with `aspect-ratio: 9 / 16`, centered, `max-height: 60vh` (so it fits within the wizard), and a subtle outline/inner shadow to communicate "this is the export canvas".
+  - Reposition the CUT flash absolutely inside the frame (top-right) and keep the active karaoke line centered, using clamp-based font sizing tuned to 9:16.
+- Caption ribbon (prev / cur / next) stays below the frame as a strip — unchanged contract, just restyled to sit under the 9:16 canvas.
+- Marker track, controls, and waveform remain full-width below the stage.
+
+No changes to data shape, audio engine, or marker math.
+
+---
+
+## Acceptance
+
+- Create a template from a fresh upload → "SAVE TEMPLATE" succeeds (no 500). New row in `audio_clips` has a non-null `account_id`.
+- In the Lyrics step you can: click a word to edit, submit empty to delete, click `×` to delete, `Add word` to append, `Delete block` to remove a whole block.
+- In the Cut Markers step the karaoke preview is rendered inside a vertical 9:16 frame; the CUT flash, active word, and surrounding context all sit inside the frame; the marker track / controls remain below.
+- Existing templates open without re-uploading audio (regression check from previous fix).
+
+---
+
+## Technical notes (for the engineer)
+
+- Files changed:
+  - `supabase/functions/kanvas-lyrics-template/index.ts` (account_id resolution helper + use it in the two inserts; persist on `render_defaults`).
+  - `src/pages/lyrics/panels/LyricsPanel.tsx` (word delete + block add/delete UI; empty-cleanup on done).
+  - `src/pages/lyrics/panels/MarkersPanel.tsx` (wrap stage in `.lyr-stage-frame`).
+  - `src/styles.css` (new `.lyr-stage-frame` + adjustments to `.lyr-stage`, `.lyr-karaoke-line`, `.lyr-cut-flash`).
+- No DB migration. No edge functions other than `kanvas-lyrics-template` are touched.
+- No changes to `useAudioEngine`, `useTrimmedAudioUrl`, or `RemixEditor`.

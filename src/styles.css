@@ -2070,6 +2070,24 @@ video {
   flex-direction: column;
   gap: 12px;
 }
+.lyr-stage-frame {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.lyr-stage-frame > .lyr-stage {
+  aspect-ratio: 9 / 16;
+  width: auto;
+  height: min(60vh, 560px);
+  max-width: 100%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.lyr-stage-frame > .lyr-caption-ribbon {
+  width: min(60vh * (9 / 16), 100%);
+  max-width: 100%;
+}
 .lyr-stage {
   aspect-ratio: 16/9;
   background: #000;
@@ -2079,7 +2097,54 @@ video {
   justify-content: center;
   position: relative;
   overflow: hidden;
+  padding: 16px;
 }
+.lyr-karaoke-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  justify-content: center;
+  align-items: baseline;
+  max-width: 90%;
+  text-align: center;
+}
+.lyr-karaoke-line .word {
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  font-size: clamp(20px, 4.5vh, 40px);
+  line-height: 1.1;
+  transition: color 120ms linear, transform 120ms linear;
+}
+.lyr-karaoke-line .word.past { color: rgba(255,255,255,0.45); }
+.lyr-karaoke-line .word.upcoming { color: rgba(255,255,255,0.75); }
+.lyr-karaoke-line .word.active {
+  color: #facc15;
+  text-shadow: 0 0 24px rgba(250, 204, 21, 0.55);
+  transform: translateY(-1px);
+}
+.lyr-word-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 6px;
+}
+.lyr-word-wrap.active { background: rgba(249, 115, 22, 0.12); }
+.lyr-word-del {
+  background: transparent;
+  border: 0;
+  color: rgba(255,255,255,0.45);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 100ms linear, color 100ms linear, background 100ms linear;
+}
+.lyr-word-wrap:hover .lyr-word-del { opacity: 1; }
+.lyr-word-del:hover { color: var(--lyr-rose, #f43f5e); background: rgba(244,63,94,0.12); }
+.lyr-btn.xs { padding: 2px 6px; font-size: 11px; }
 .lyr-stage-word {
   color: #facc15;
   font-size: clamp(28px, 6vw, 56px);
