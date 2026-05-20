@@ -430,9 +430,10 @@ Deno.serve(async (req) => {
                 1000,
               duration_sec: durationSec,
               file_name: projAsset.data.file_name,
-              transcription_status: Array.isArray(tpl.data.lyric_blocks)
-                ? "completed"
-                : "pending",
+              transcription_status:
+                Array.isArray(tpl.data.lyric_blocks) && tpl.data.lyric_blocks.length > 0
+                  ? "ready"
+                  : "pending",
               default_lyric_template_id: templateId,
               lyric_template_id: templateId,
               metadata: { created_from: "kanvas-lyrics-template:finalize" },
