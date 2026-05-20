@@ -88,21 +88,20 @@ export function CampaignStep(props: CampaignStepProps) {
             onChange={(e) => props.onPrompt(e.target.value)}
           />
         </label>
+        <CategoryPicker
+          categories={props.categories}
+          poolCounts={props.poolCounts}
+          loading={props.categoriesLoading}
+          categoryId={props.categoryId}
+          subcategorySlug={props.subcategorySlug}
+          randomize={props.randomize}
+          autoRender={props.autoRender}
+          onCategoryId={props.onCategoryId}
+          onSubcategorySlug={props.onSubcategorySlug}
+          onRandomize={props.onRandomize}
+          onAutoRender={props.onAutoRender}
+        />
         <div className="split">
-          <label>
-            Source
-            <select
-              value={props.sourceMode}
-              onChange={(e) => props.onSourceMode(e.target.value as SourceMode)}
-            >
-              {props.sourceOptions.map((option) => (
-                <option key={option.value} value={option.value} disabled={option.disabled}>
-                  {option.label}
-                  {option.disabled && option.reason ? ` - ${option.reason}` : ""}
-                </option>
-              ))}
-            </select>
-          </label>
           <label>
             Posts to queue
             <input
@@ -113,6 +112,7 @@ export function CampaignStep(props: CampaignStepProps) {
               onChange={(e) => props.onPostCount(Number(e.target.value))}
             />
           </label>
+          <div />
         </div>
         <div className="split schedule-split">
           <label>
