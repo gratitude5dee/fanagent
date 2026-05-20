@@ -150,6 +150,7 @@ export type Database = {
           duration_sec: number
           file_name: string | null
           id: string
+          lyric_template_id: string | null
           metadata: Json
           perceptual_hash: string | null
           selection_end_sec: number
@@ -166,6 +167,7 @@ export type Database = {
           duration_sec: number
           file_name?: string | null
           id?: string
+          lyric_template_id?: string | null
           metadata?: Json
           perceptual_hash?: string | null
           selection_end_sec: number
@@ -182,6 +184,7 @@ export type Database = {
           duration_sec?: number
           file_name?: string | null
           id?: string
+          lyric_template_id?: string | null
           metadata?: Json
           perceptual_hash?: string | null
           selection_end_sec?: number
@@ -551,6 +554,7 @@ export type Database = {
       kanvas_lyric_templates: {
         Row: {
           archived_at: string | null
+          audio_clip_id: string | null
           created_at: string
           cut_markers: Json
           error_message: string | null
@@ -572,6 +576,7 @@ export type Database = {
         }
         Insert: {
           archived_at?: string | null
+          audio_clip_id?: string | null
           created_at?: string
           cut_markers?: Json
           error_message?: string | null
@@ -593,6 +598,7 @@ export type Database = {
         }
         Update: {
           archived_at?: string | null
+          audio_clip_id?: string | null
           created_at?: string
           cut_markers?: Json
           error_message?: string | null
