@@ -193,5 +193,8 @@ export function useAudioEngine(): AudioEngine {
     [],
   );
 
-  return { isReady, isPlaying, currentTime, duration, load, play, pause, toggle, seek, setLoop };
+  return useMemo(
+    () => ({ isReady, isPlaying, currentTime, duration, load, play, pause, toggle, seek, setLoop }),
+    [isReady, isPlaying, currentTime, duration, load, play, pause, toggle, seek, setLoop],
+  );
 }
