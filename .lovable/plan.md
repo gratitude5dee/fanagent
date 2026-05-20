@@ -1,37 +1,34 @@
-## Plan
+# Cancel all generation jobs / active campaigns
 
-1. Update the `kanvas-lyrics-template` finalize bridge so it only writes valid `audio_clips.transcription_status` values.
-   - Replace the invalid `"completed"` value with the status that matches the existing pipeline contract.
-   - Use the project’s existing semantics: `ready` when the bridged clip already has usable lyrics/transcript data for downstream generation, otherwise `pending`.
-   - Keep the current `account_id`, `media_assets`, and `audio_clips` bridging logic intact.
+There are 30+ `generation_batches` still active (mix of `pending`, `generating`, `paused`). The dashboard pause UI only sets `paused_at`; workers still hold leases and many `generation_items` remain in active states. To truly stop everything, we need to mark batches as cancelled, abort their child `generation_items`, and skip any unpublished `posts` they spawned.
 
-2. Make the status decision explicit and resilient.
-   - Derive the inserted clip state from template data instead of a loose `Array.isArray(...)` check alone.
-   - Treat a template with actual lyric blocks as generation-ready; otherwise leave it pending so the normal transcription/manual flow can still run.
-   - Preserve metadata indicating the row was created by `kanvas-lyrics-template:finalize`.
+## Scope
 
-3. Validate the edge-function behavior against the current database contract.
-   - Confirm the function now aligns with the DB constraint: allowed values are `pending`, `running`, `ready`, `failed`, and `manual`.
-   - Re-check recent logs after the change to ensure the 500 disappears.
-   - Verify the saved template can finalize successfully and returns an `audio_clip_id` for the downstream campaign/video-generation pipeline.
+A single SQL migration that:
 
-## Technical details
+1. **Pause + cancel batches** — for every `generation_batches` row not already `complete`/`failed`/`cancelled`:
+   - Set `status = 'cancelled'`
+   - Set `paused_at = now()` (if null)
+   - Set `completed_at = now()`
+   - Append a note to `settings.cancellation` for audit
+2. **Abort in-flight generation_items** — for items belonging to those batches whose `status` is in (`pending`, `planning`, `transcribing`, `sourcing`, `picking_stock`, `generating`, `rendering`, `stitched`, `ready`):
+   - Set `status = 'failed'`
+   - Set `error_message = 'cancelled by user'`
+   - Clear `locked_at`, `locked_by`
+   - Append a `cancelled` entry to `stage_events`
+3. **Skip unpublished posts** — for `posts` linked to those batches where `status NOT IN ('posted','skipped')` and `publish_status IS NULL OR publish_status <> 'success'`:
+   - Set `status = 'skipped'`, `publish_status = null`, `error_message = 'cancelled by user'`
+4. **Mark library items not-ready** — for `video_library_items` linked to those batches whose `status` is `building`/`not_ready`/`ready` but never `scheduled`/`posted`:
+   - Leave `ready` items alone (already usable assets), but set any `building`/`not_ready` row to `cancelled` via `metadata.cancelled_at` flag so the worker doesn't pick them up.
 
-- **Root cause:** `supabase/functions/kanvas-lyrics-template/index.ts` inserts `transcription_status: "completed"`, but `public.audio_clips` only permits:
-  - `pending`
-  - `running`
-  - `ready`
-  - `failed`
-  - `manual`
+No code/UI changes; this is a one-shot data cleanup. Workers (`fanpage-generate-due`, `process-generation-due`, `fanpage-publish-due`) already respect `paused_at`/non-active statuses, so they will stop touching these rows immediately.
 
-- **Why this fix is correct:**
-  - The rest of the codebase already treats `ready` as the terminal success state for transcription.
-  - `audio-clip-transcribe` upgrades clips from `running` to `ready`.
-  - `audio-clip-register` and `create-generation-batch` create clips as `pending`.
-  - No other valid flow uses `completed` for `audio_clips.transcription_status`.
+## Confirm before I run
 
-- **Files to change:**
-  - `supabase/functions/kanvas-lyrics-template/index.ts`
+A few choices to confirm:
 
-- **No migration needed:**
-  - This is a code/data-contract mismatch, not a schema problem.
+1. **Scope** — cancel **all** non-terminal batches across **all accounts**? (Alternative: only your currently logged-in account, or only the ones created today.)
+2. **Ready library items** — keep already-rendered videos in the library so you can still schedule/post them manually? (Recommended: yes.)
+3. **Unpublished scheduled posts** — skip them all, even ones scheduled for the future? (Recommended: yes, since they belong to cancelled batches.)
+
+Reply with answers (or "yes to all defaults") and I'll run the migration.
