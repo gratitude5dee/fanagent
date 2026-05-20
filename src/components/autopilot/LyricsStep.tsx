@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ChevronLeft, FileMusic, Plus } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Archive, ChevronLeft, ExternalLink, FileMusic, Plus } from "lucide-react";
 import LyricsTemplateBuilder from "@/components/autopilot/LyricsTemplateBuilder";
 import { lyricsApi } from "@/lib/lyrics/api";
+import { appRoutes } from "@/lib/routes";
 import type { LyricTemplate, LyricTemplateSummary, TemplateStatus } from "@/lib/lyrics/types";
 
 type LyricsStepProps = {
