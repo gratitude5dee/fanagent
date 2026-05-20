@@ -311,6 +311,13 @@ export default function AutopilotPanel({
   const [audioClipError, setAudioClipError] = useState<string | null>(null);
   const [autoOpenTemplateRequest, setAutoOpenTemplateRequest] = useState(0);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  const [categories, setCategories] = useState<CategoryNode[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
+  const [poolCounts, setPoolCounts] = useState<PoolCountIndex | null>(null);
+  const [categoryId, setCategoryId] = useState<string>("");
+  const [subcategorySlug, setSubcategorySlug] = useState<string>("");
+  const [randomize, setRandomize] = useState(false);
+  const [autoRender, setAutoRender] = useState(false);
 
   const templateById = useMemo(
     () => new Map(lyricTemplates.map((t) => [t.id, t])),
