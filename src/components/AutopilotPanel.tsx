@@ -971,7 +971,13 @@ export default function AutopilotPanel({
                   schemaReady={schemaReady}
                   seedanceResolution={seedanceResolution}
                   sourceMode={sourceMode}
-                  sourceOptions={sourceOptions}
+                  categories={categories}
+                  categoriesLoading={categoriesLoading}
+                  poolCounts={poolCounts}
+                  categoryId={categoryId}
+                  subcategorySlug={subcategorySlug}
+                  randomize={randomize}
+                  autoRender={autoRender}
                   sportsAllowedChannels={sportsAllowedChannels}
                   sportsLeague={sportsLeague}
                   sportsOwnerAssetUrls={sportsOwnerAssetUrls}
