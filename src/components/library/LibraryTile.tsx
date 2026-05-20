@@ -96,7 +96,16 @@ export default function LibraryTile({
           </div>
           <span className={`status-pill ${tone}`}>{item.status.replace("_", " ")}</span>
         </div>
+        {item.status === "failed" ? (
+          <div className="banner bad" style={{ marginTop: 4 }}>
+            Render failed
+            {typeof item.metadata?.error === "string" && item.metadata.error
+              ? `: ${String(item.metadata.error).slice(0, 220)}`
+              : ". Click Regenerate to retry."}
+          </div>
+        ) : null}
         <p>{item.default_caption || "Caption pending"}</p>
+
         <div className="library-segments">
           {item.segments.slice(0, 4).map((segment, index) => (
             <button
