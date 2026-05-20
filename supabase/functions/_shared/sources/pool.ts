@@ -5,7 +5,12 @@
 
 // Use any for the supabase client type — Deno-only npm: imports break vitest type-check.
 type SupabaseClient = any;
-import { getSupabaseAdmin } from "../supabase.ts";
+// Lazy supabase import keeps pure helpers importable from vitest without
+// dragging in Deno-only npm: modules.
+async function lazyAdmin(): Promise<SupabaseClient> {
+  const mod = await import("../supabase.ts");
+  return mod.getSupabaseAdmin();
+}
 import type { SourceCandidate, SourceType } from "./types.ts";
 
 export type ClipCategory = {
