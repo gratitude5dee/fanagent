@@ -98,11 +98,13 @@ export function CampaignStep(props: CampaignStepProps) {
           subcategorySlug={props.subcategorySlug}
           randomize={props.randomize}
           autoRender={props.autoRender}
+          requiredShots={props.requiredShots}
           onCategoryId={props.onCategoryId}
           onSubcategorySlug={props.onSubcategorySlug}
           onRandomize={props.onRandomize}
           onAutoRender={props.onAutoRender}
         />
+
         <div className="split">
           <label>
             Posts to queue
