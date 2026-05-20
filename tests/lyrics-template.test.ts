@@ -77,6 +77,10 @@ describe("FanAgent lyric template handoff", () => {
     expect(source).toContain('case "createFromAudioClip"');
     expect(source).toContain("default_lyric_template_id");
     expect(source).toContain("transcriptToKanvasLyricBlocks");
+    expect(source).toContain("ensureProjectAssetForMediaAsset");
+    expect(source).toContain('.from("project_assets")');
+    expect(source).toContain("trimmed_audio_asset_id: projectAssetId");
+    expect(source).toContain("if (!input.template.trimmed_audio_asset_id)");
   });
 
   it("keeps lyrics frontend calls compatible with envelope-shaped edge responses", () => {

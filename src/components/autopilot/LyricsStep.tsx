@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Archive, ChevronLeft, FileMusic, Plus } from "lucide-react";
 import LyricsTemplateBuilder from "@/components/autopilot/LyricsTemplateBuilder";
 import { lyricsApi } from "@/lib/lyrics/api";
@@ -11,6 +11,7 @@ type LyricsStepProps = {
   onDrawerOpen: (open: boolean) => void;
   onTemplate: (templateId: string) => void;
   onTemplatesChanged: () => Promise<void> | void;
+  autoOpenTemplateRequest?: number;
 };
 
 function statusPill(status: TemplateStatus): { label: string; tone: string } {
@@ -51,10 +52,16 @@ export function LyricsStep({
   onDrawerOpen,
   onTemplate,
   onTemplatesChanged,
+  autoOpenTemplateRequest = 0,
 }: LyricsStepProps) {
   const [builderTemplateId, setBuilderTemplateId] = useState<string | null>(null);
   const [builderOpen, setBuilderOpen] = useState(false);
   const [busyArchiveId, setBusyArchiveId] = useState<string | null>(null);
+  const handledAutoOpenRequest = useRef(0);
+  const selectedTemplate = useMemo(
+    () => lyricTemplates.find((template) => template.id === lyricTemplateId) ?? null,
+    [lyricTemplateId, lyricTemplates],
+  );
   const activeTemplate = useMemo(
     () => lyricTemplates.find((template) => template.id === builderTemplateId) ?? null,
     [builderTemplateId, lyricTemplates],
@@ -62,6 +69,8 @@ export function LyricsStep({
   const recentTemplates = lyricTemplates
     .filter((template) => template.status !== "archived")
     .slice(0, 6);
+  const hasGeneratedTemplateToReview =
+    !!lyricTemplateId && (!selectedTemplate || selectedTemplate.status !== "saved");
 
   function openBuilder(templateId: string | null) {
     setBuilderTemplateId(templateId);
@@ -89,6 +98,14 @@ export function LyricsStep({
     await onTemplatesChanged();
     closeBuilder();
   }
+
+  useEffect(() => {
+    if (!autoOpenTemplateRequest || autoOpenTemplateRequest === handledAutoOpenRequest.current) {
+      return;
+    }
+    handledAutoOpenRequest.current = autoOpenTemplateRequest;
+    if (lyricTemplateId) openBuilder(lyricTemplateId);
+  }, [autoOpenTemplateRequest, lyricTemplateId]);
 
   if (builderOpen) {
     return (
@@ -121,9 +138,19 @@ export function LyricsStep({
       </div>
       <div className="stack">
         <div className="action-row">
-          <button type="button" className="button primary" onClick={() => openBuilder(null)}>
-            <Plus size={14} /> New template
-          </button>
+          {hasGeneratedTemplateToReview ? (
+            <button
+              type="button"
+              className="button primary"
+              onClick={() => openBuilder(lyricTemplateId)}
+            >
+              <FileMusic size={14} /> Review generated template
+            </button>
+          ) : (
+            <button type="button" className="button primary" onClick={() => openBuilder(null)}>
+              <Plus size={14} /> New template
+            </button>
+          )}
           <button
             type="button"
             className="button ghost"
@@ -135,6 +162,11 @@ export function LyricsStep({
           <button className="button ghost" type="button" onClick={() => onDrawerOpen(!drawerOpen)}>
             {drawerOpen ? "Hide review" : "Review lyrics"}
           </button>
+          {hasGeneratedTemplateToReview ? (
+            <button type="button" className="button ghost" onClick={() => openBuilder(null)}>
+              <Plus size={14} /> New blank template
+            </button>
+          ) : null}
         </div>
         <label>
           Lyrics template

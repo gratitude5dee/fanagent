@@ -257,6 +257,7 @@ export default function AutopilotPanel({
   );
   const [audioClipStatus, setAudioClipStatus] = useState<AudioClipStatus>("idle");
   const [audioClipError, setAudioClipError] = useState<string | null>(null);
+  const [autoOpenTemplateRequest, setAutoOpenTemplateRequest] = useState(0);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
 
   const templateById = useMemo(
@@ -265,6 +266,7 @@ export default function AutopilotPanel({
   );
   const lyricTemplateIdRef = useRef(lyricTemplateId);
   const lyricsStepRef = useRef<HTMLDivElement | null>(null);
+  const campaignLyricsStepRef = useRef<HTMLDivElement | null>(null);
 
   const account = data?.account ?? null;
   const accountId = account?.id ?? "";
@@ -394,7 +396,17 @@ export default function AutopilotPanel({
               });
               if (cancelled) return;
               setLyricTemplateId(template.template.id);
+              setLyricsDrawerOpen(true);
               await refresh();
+              if (cancelled) return;
+              setAutoOpenTemplateRequest((request) => request + 1);
+              window.requestAnimationFrame(() => {
+                campaignLyricsStepRef.current?.scrollIntoView({
+                  block: "center",
+                  behavior: "smooth",
+                });
+                campaignLyricsStepRef.current?.focus({ preventScroll: true });
+              });
             } catch (templateError) {
               if (cancelled) return;
               setAudioClipError(
@@ -721,6 +733,7 @@ export default function AutopilotPanel({
             onDrawerOpen={setLyricsDrawerOpen}
             onTemplate={setLyricTemplateId}
             onTemplatesChanged={refreshLyricTemplates}
+            autoOpenTemplateRequest={0}
           />
         </div>
       ) : null}
@@ -754,14 +767,17 @@ export default function AutopilotPanel({
                   onDuration={setDuration}
                   onTrimmedAudio={setTrimmedAudio}
                 />
-                <LyricsStep
-                  lyricTemplateId={lyricTemplateId}
-                  lyricTemplates={lyricTemplates}
-                  drawerOpen={lyricsDrawerOpen}
-                  onDrawerOpen={setLyricsDrawerOpen}
-                  onTemplate={setLyricTemplateId}
-                  onTemplatesChanged={refreshLyricTemplates}
-                />
+                <div ref={campaignLyricsStepRef} tabIndex={-1}>
+                  <LyricsStep
+                    lyricTemplateId={lyricTemplateId}
+                    lyricTemplates={lyricTemplates}
+                    drawerOpen={lyricsDrawerOpen}
+                    onDrawerOpen={setLyricsDrawerOpen}
+                    onTemplate={setLyricTemplateId}
+                    onTemplatesChanged={refreshLyricTemplates}
+                    autoOpenTemplateRequest={autoOpenTemplateRequest}
+                  />
+                </div>
                 <CampaignStep
                   busy={busy}
                   cadenceMinutes={cadenceMinutes}

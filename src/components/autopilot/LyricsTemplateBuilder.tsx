@@ -63,6 +63,36 @@ function reducer(state: State, action: Action): State {
   }
 }
 
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function audioClipIdFromTemplate(template: LyricTemplate): string | null {
+  const transcriptMeta = recordValue(template.transcript_meta);
+  const renderDefaults = recordValue(template.render_defaults);
+  const candidates = [transcriptMeta?.audio_clip_id, renderDefaults?.audio_clip_id];
+  const audioClipId = candidates.find(
+    (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
+  );
+  return audioClipId ?? null;
+}
+
+async function signedUrlForTemplate(template: LyricTemplate): Promise<string | null> {
+  if (!template.trimmed_audio_asset_id) return null;
+  const { data: asset } = await supabase
+    .from("project_assets")
+    .select("storage_bucket,storage_path")
+    .eq("id", template.trimmed_audio_asset_id)
+    .maybeSingle();
+  if (!asset) return null;
+  const { data: signed } = await supabase.storage
+    .from(asset.storage_bucket)
+    .createSignedUrl(asset.storage_path, 3600);
+  return signed?.signedUrl ?? null;
+}
+
 export default function LyricsTemplateBuilder({
   templateId,
   onTemplateIdChange,
@@ -93,21 +123,22 @@ export default function LyricsTemplateBuilder({
       try {
         const { template } = await lyricsApi.get(templateId);
         if (cancelled) return;
-        dispatch({ type: "set_template", template });
-        setStep(statusToStep(template.status));
-        if (template.trimmed_audio_asset_id) {
-          const { data: asset } = await supabase
-            .from("project_assets")
-            .select("storage_bucket,storage_path")
-            .eq("id", template.trimmed_audio_asset_id)
-            .maybeSingle();
-          if (asset) {
-            const { data: signed } = await supabase.storage
-              .from(asset.storage_bucket)
-              .createSignedUrl(asset.storage_path, 3600);
-            if (signed?.signedUrl) dispatch({ type: "set_audio_url", url: signed.signedUrl });
+
+        let hydratedTemplate = template;
+        if (!hydratedTemplate.trimmed_audio_asset_id) {
+          const audioClipId = audioClipIdFromTemplate(hydratedTemplate);
+          if (audioClipId) {
+            const repaired = await lyricsApi.createFromAudioClip({ audioClipId });
+            if (cancelled) return;
+            hydratedTemplate = repaired.template;
           }
         }
+
+        dispatch({ type: "set_template", template: hydratedTemplate });
+        setStep(statusToStep(hydratedTemplate.status));
+        const signedUrl = await signedUrlForTemplate(hydratedTemplate);
+        if (cancelled) return;
+        if (signedUrl) dispatch({ type: "set_audio_url", url: signedUrl });
       } catch (error) {
         dispatch({ type: "error", error: error instanceof Error ? error.message : String(error) });
       } finally {

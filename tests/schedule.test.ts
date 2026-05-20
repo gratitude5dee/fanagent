@@ -21,6 +21,10 @@ const readyItem = {
   default_hashtags: ["#music"],
 };
 
+function futureScheduledAt(): string {
+  return new Date(Date.now() + 60 * 60_000).toISOString();
+}
+
 describe("library schedule helpers", () => {
   it("normalizes TikTok options into Direct Post defaults", () => {
     expect(normalizeTiktokOptions({ privacyLevel: "PUBLIC_TO_EVERYONE" })).toEqual({
@@ -166,6 +170,8 @@ describe("library schedule helpers", () => {
   });
 
   it("builds a scheduled post insert row from a ready library item", () => {
+    const scheduledAt = futureScheduledAt();
+
     expect(
       buildScheduledPostRow({
         item: {
@@ -174,7 +180,7 @@ describe("library schedule helpers", () => {
           segments: [{ source: "stock", provider: "pixabay" }],
         },
         asset: { public_url: "https://cdn/final.mp4", mime_type: "video/mp4" },
-        scheduledAt: "2026-05-20T10:00:00.000Z",
+        scheduledAt,
         tiktokOptions: { privacyLevel: "SELF_ONLY", disableComment: true },
       }),
     ).toMatchObject({
@@ -186,7 +192,7 @@ describe("library schedule helpers", () => {
       video_url: "https://cdn/final.mp4",
       caption: "sound on",
       hashtags: ["#music"],
-      scheduled_at: "2026-05-20T10:00:00.000Z",
+      scheduled_at: scheduledAt,
       status: "pending",
       publish_status: "ready",
       tiktok_privacy_level: "SELF_ONLY",
@@ -196,6 +202,7 @@ describe("library schedule helpers", () => {
   });
 
   it("keeps generated scheduled posts AIGC-labeled by default and allows overrides", () => {
+    const scheduledAt = futureScheduledAt();
     const generatedItem = {
       ...readyItem,
       provenance: [{ source_type: "seedance", provider: "seedance" }],
@@ -205,7 +212,7 @@ describe("library schedule helpers", () => {
       buildScheduledPostRow({
         item: generatedItem,
         asset: { public_url: "https://cdn/final.mp4", mime_type: "video/mp4" },
-        scheduledAt: "2026-05-20T10:00:00.000Z",
+        scheduledAt,
         tiktokOptions: { privacyLevel: "SELF_ONLY" },
       }),
     ).toMatchObject({
@@ -217,7 +224,7 @@ describe("library schedule helpers", () => {
       buildScheduledPostRow({
         item: generatedItem,
         asset: { public_url: "https://cdn/final.mp4", mime_type: "video/mp4" },
-        scheduledAt: "2026-05-20T10:00:00.000Z",
+        scheduledAt,
         tiktokOptions: { privacyLevel: "SELF_ONLY", isAigc: false },
       }),
     ).toMatchObject({
@@ -227,6 +234,7 @@ describe("library schedule helpers", () => {
   });
 
   it("carries source attributions into scheduled post metadata", () => {
+    const scheduledAt = futureScheduledAt();
     const post = buildScheduledPostRow({
       item: {
         ...readyItem,
@@ -248,7 +256,7 @@ describe("library schedule helpers", () => {
         ],
       },
       asset: { public_url: "https://cdn/final.mp4", mime_type: "video/mp4" },
-      scheduledAt: "2026-05-20T10:00:00.000Z",
+      scheduledAt,
       tiktokOptions: { privacyLevel: "SELF_ONLY" },
     });
 
@@ -264,6 +272,7 @@ describe("library schedule helpers", () => {
   });
 
   it("carries the current asset URL into scheduled post responses", () => {
+    const scheduledAt = futureScheduledAt();
     const post = buildScheduledPostRow({
       item: readyItem,
       asset: {
@@ -271,7 +280,7 @@ describe("library schedule helpers", () => {
           "https://zjbiulirzrctfmakqjwk.supabase.co/storage/v1/object/sign/renders/render.mp4?token=fresh",
         mime_type: "video/mp4",
       },
-      scheduledAt: "2026-05-20T10:00:00.000Z",
+      scheduledAt,
       tiktokOptions: { privacyLevel: "SELF_ONLY" },
     });
 
@@ -292,10 +301,11 @@ describe("library schedule helpers", () => {
   });
 
   it("prefers asset dimensions and duration in scheduled post media responses", () => {
+    const scheduledAt = futureScheduledAt();
     const post = buildScheduledPostRow({
       item: readyItem,
       asset: { public_url: "https://cdn/final.mp4", mime_type: "video/mp4" },
-      scheduledAt: "2026-05-20T10:00:00.000Z",
+      scheduledAt,
       tiktokOptions: { privacyLevel: "SELF_ONLY" },
     });
 

@@ -1,12 +1,122 @@
 // Action API for kanvas_lyric_templates. Owner-scoped via the caller's JWT,
 // or via a shared anonymous user when the dashboard is unauthenticated.
-import { createClient } from "npm:@supabase/supabase-js@2.105.4";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.105.4";
 import { handleOptions } from "../_shared/cors.ts";
 import { errorEnvelope, okEnvelope } from "../_shared/envelope.ts";
 import { transcriptToKanvasLyricBlocks } from "../_shared/lyrics.ts";
 import type { Transcript } from "../_shared/transcribe.ts";
 
 const ANON_USER_ID = "00000000-0000-0000-0000-000000000000";
+
+type AudioClipRow = {
+  id: string;
+  source_asset_id: string;
+  trimmed_asset_id: string | null;
+  default_lyric_template_id: string | null;
+  duration_sec: number | null;
+  file_name: string | null;
+  selection_start_sec: number | null;
+  selection_end_sec: number | null;
+};
+
+type MediaAssetRow = {
+  id: string;
+  transcript: Transcript | null;
+  file_name: string | null;
+  mime_type: string | null;
+  metadata: Record<string, unknown> | null;
+  storage_bucket: string;
+  storage_path: string | null;
+  byte_size: number | null;
+  duration_seconds: number | null;
+  public_url: string | null;
+};
+
+type LyricTemplateRow = {
+  id: string;
+  status: string;
+  trimmed_audio_asset_id: string | null;
+  lyric_blocks: unknown[] | null;
+};
+
+const AUDIO_CLIP_SELECT =
+  "id,source_asset_id,trimmed_asset_id,default_lyric_template_id,duration_sec,file_name,selection_start_sec,selection_end_sec";
+const MEDIA_ASSET_SELECT =
+  "id,transcript,file_name,mime_type,metadata,storage_bucket,storage_path,byte_size,duration_seconds,public_url";
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+async function ensureProjectAssetForMediaAsset(input: {
+  admin: SupabaseClient;
+  asset: MediaAssetRow;
+  userId: string;
+  durationMs: number;
+}): Promise<string> {
+  const storagePath = nonEmptyString(input.asset.storage_path);
+  if (!storagePath) {
+    throw new Error("Audio clip media asset is missing storage_path.");
+  }
+
+  const existing = await input.admin
+    .from("project_assets")
+    .select("id")
+    .eq("user_id", input.userId)
+    .eq("storage_bucket", input.asset.storage_bucket)
+    .eq("storage_path", storagePath)
+    .limit(1)
+    .maybeSingle();
+  if (existing.error) throw existing.error;
+  if (existing.data?.id) return String(existing.data.id);
+
+  const inserted = await input.admin
+    .from("project_assets")
+    .insert({
+      user_id: input.userId,
+      kind: "audio_trimmed",
+      storage_bucket: input.asset.storage_bucket,
+      storage_path: storagePath,
+      file_name: input.asset.file_name,
+      mime_type: input.asset.mime_type,
+      byte_size: input.asset.byte_size,
+      duration_ms: input.durationMs,
+      public_url: input.asset.public_url,
+      metadata: {
+        ...(input.asset.metadata ?? {}),
+        source: "fanagent_audio_clip",
+        source_media_asset_id: input.asset.id,
+      },
+    })
+    .select("id")
+    .single();
+  if (inserted.error) throw inserted.error;
+  return String(inserted.data.id);
+}
+
+function buildExistingTemplateRepair(input: {
+  template: LyricTemplateRow;
+  projectAssetId: string;
+  lyricBlocks: ReturnType<typeof transcriptToKanvasLyricBlocks>;
+}): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  if (!input.template.trimmed_audio_asset_id) {
+    patch.trimmed_audio_asset_id = input.projectAssetId;
+  }
+
+  const hasExistingLyrics = Array.isArray(input.template.lyric_blocks)
+    ? input.template.lyric_blocks.length > 0
+    : false;
+  if (!hasExistingLyrics && input.lyricBlocks.length > 0) {
+    patch.lyric_blocks = input.lyricBlocks;
+    patch.error_message = null;
+    if (["draft", "audio_ready", "failed", "lyrics_processing"].includes(input.template.status)) {
+      patch.status = "lyrics_ready";
+    }
+  }
+
+  return patch;
+}
 
 Deno.serve(async (req) => {
   const opt = handleOptions(req);
@@ -36,20 +146,24 @@ Deno.serve(async (req) => {
       }
     }
 
-    const body = await req.json() as { action: string; [k: string]: unknown };
+    const body = (await req.json()) as { action: string; [k: string]: unknown };
 
     switch (body.action) {
       case "create": {
-        const ins = await supabase.from("kanvas_lyric_templates").insert({
-          user_id: userId,
-          title: (body.title as string) ?? "Untitled template",
-          source_audio_asset_id: (body.sourceAssetId as string) ?? null,
-          trimmed_audio_asset_id: (body.trimmedAssetId as string) ?? null,
-          selection_start_ms: (body.selectionStartMs as number) ?? 0,
-          selection_duration_ms: (body.selectionDurationMs as number) ?? 15000,
-          total_duration_ms: (body.totalDurationMs as number) ?? 0,
-          waveform_peaks: (body.waveformPeaks as number[]) ?? [],
-        }).select("*").single();
+        const ins = await supabase
+          .from("kanvas_lyric_templates")
+          .insert({
+            user_id: userId,
+            title: (body.title as string) ?? "Untitled template",
+            source_audio_asset_id: (body.sourceAssetId as string) ?? null,
+            trimmed_audio_asset_id: (body.trimmedAssetId as string) ?? null,
+            selection_start_ms: (body.selectionStartMs as number) ?? 0,
+            selection_duration_ms: (body.selectionDurationMs as number) ?? 15000,
+            total_duration_ms: (body.totalDurationMs as number) ?? 0,
+            waveform_peaks: (body.waveformPeaks as number[]) ?? [],
+          })
+          .select("*")
+          .single();
         if (ins.error) throw ins.error;
         return okEnvelope({ template: ins.data });
       }
@@ -66,37 +180,63 @@ Deno.serve(async (req) => {
         );
         const clip = await admin
           .from("audio_clips")
-          .select("*")
+          .select(AUDIO_CLIP_SELECT)
           .eq("id", audioClipId)
           .single();
         if (clip.error) throw clip.error;
+        const clipRow = clip.data as AudioClipRow;
 
-        if (!force && clip.data.default_lyric_template_id) {
-          const existing = await supabase
-            .from("kanvas_lyric_templates")
-            .select("*")
-            .eq("id", clip.data.default_lyric_template_id)
-            .maybeSingle();
-          if (existing.error) throw existing.error;
-          if (existing.data) return okEnvelope({ template: existing.data });
-        }
-
-        const assetId = clip.data.trimmed_asset_id ?? clip.data.source_asset_id;
+        const assetId = clipRow.trimmed_asset_id ?? clipRow.source_asset_id;
         const asset = await admin
           .from("media_assets")
-          .select("id,transcript,file_name,mime_type,metadata")
+          .select(MEDIA_ASSET_SELECT)
           .eq("id", assetId)
           .single();
         if (asset.error) throw asset.error;
+        const assetRow = asset.data as MediaAssetRow;
 
-        const transcript = asset.data.transcript as Transcript | null;
+        const transcript = assetRow.transcript;
         const lyricBlocks = transcript ? transcriptToKanvasLyricBlocks(transcript) : [];
         const hasLyrics = lyricBlocks.length > 0;
-        const durationMs = Math.round(Number(clip.data.duration_sec ?? 15) * 1000);
+        const durationMs = Math.round(
+          Number(clipRow.duration_sec ?? assetRow.duration_seconds ?? 15) * 1000,
+        );
+        const projectAssetId = await ensureProjectAssetForMediaAsset({
+          admin,
+          asset: assetRow,
+          userId,
+          durationMs,
+        });
+
+        if (!force && clipRow.default_lyric_template_id) {
+          const existing = await supabase
+            .from("kanvas_lyric_templates")
+            .select("*")
+            .eq("id", clipRow.default_lyric_template_id)
+            .maybeSingle();
+          if (existing.error) throw existing.error;
+          if (existing.data) {
+            const patch = buildExistingTemplateRepair({
+              template: existing.data as LyricTemplateRow,
+              projectAssetId,
+              lyricBlocks,
+            });
+            if (Object.keys(patch).length === 0) return okEnvelope({ template: existing.data });
+            const repaired = await supabase
+              .from("kanvas_lyric_templates")
+              .update(patch)
+              .eq("id", existing.data.id)
+              .select("*")
+              .single();
+            if (repaired.error) throw repaired.error;
+            return okEnvelope({ template: repaired.data });
+          }
+        }
+
         const title =
           typeof body.title === "string" && body.title.trim()
             ? body.title.trim()
-            : `${clip.data.file_name ?? asset.data.file_name ?? "Audio clip"} lyrics`;
+            : `${clipRow.file_name ?? assetRow.file_name ?? "Audio clip"} lyrics`;
 
         const ins = await supabase
           .from("kanvas_lyric_templates")
@@ -104,7 +244,7 @@ Deno.serve(async (req) => {
             user_id: userId,
             title,
             source_audio_asset_id: null,
-            trimmed_audio_asset_id: null,
+            trimmed_audio_asset_id: projectAssetId,
             selection_start_ms: 0,
             selection_duration_ms: durationMs,
             total_duration_ms: durationMs,
@@ -116,12 +256,14 @@ Deno.serve(async (req) => {
               language: transcript?.language ?? null,
               word_count: transcript?.words.length ?? 0,
               audio_clip_id: audioClipId,
-              media_asset_id: asset.data.id,
-              source_selection_start_sec: clip.data.selection_start_sec,
-              source_selection_end_sec: clip.data.selection_end_sec,
+              media_asset_id: assetRow.id,
+              project_asset_id: projectAssetId,
+              source_selection_start_sec: clipRow.selection_start_sec,
+              source_selection_end_sec: clipRow.selection_end_sec,
             },
             render_defaults: {
               audio_clip_id: audioClipId,
+              project_asset_id: projectAssetId,
               source: "fanagent_audio_clip",
             },
           })
