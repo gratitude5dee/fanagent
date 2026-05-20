@@ -35,7 +35,7 @@ import {
   type SourceMode,
 } from "@/lib/fanagent/sourceMode";
 import { lyricsApi } from "@/lib/lyrics/api";
-import type { LyricTemplateSummary } from "@/lib/lyrics/types";
+import type { LyricTemplate, LyricTemplateSummary } from "@/lib/lyrics/types";
 
 type Account = {
   id: string;
@@ -135,6 +135,24 @@ type Segment = {
   reused?: boolean | null;
 };
 
+type CampaignHandoff = {
+  audioClipId: string | null;
+  lyricTemplateId: string | null;
+  templateStatus: LyricTemplateSummary["status"] | null;
+  durationSec: number | null;
+  clipSelection: {
+    startSec: number;
+    endSec: number;
+    durationSec: number;
+    originalFileName: string;
+  } | null;
+  trimmedAudioAssetId: string | null;
+  templateAudioClipId: string | null;
+  templateSaved: boolean;
+  templateMatchesAudio: boolean;
+  ready: boolean;
+};
+
 import { invokeEdgeFunction } from "@/lib/fanagent/invokeFunction";
 
 async function callCampaign<T>(action: string, body?: Record<string, unknown>): Promise<T> {
@@ -204,6 +222,33 @@ function summarizeSegments(
   return Array.from(new Set(labels)).join(" + ");
 }
 
+function dedupeStrategyForStockOptions(input: {
+  avoidReuse: boolean;
+  allowReuseWhenExhausted: boolean;
+}): "strict" | "allow_reuse_after_exhaustion" | "allow_reuse_freely" {
+  if (!input.avoidReuse) return "allow_reuse_freely";
+  return input.allowReuseWhenExhausted ? "allow_reuse_after_exhaustion" : "strict";
+}
+
+function summarizeTemplate(template: LyricTemplate | LyricTemplateSummary): LyricTemplateSummary {
+  if ("word_count" in template && "cut_marker_count" in template) return template;
+  const full = template as LyricTemplate;
+  return {
+    id: template.id,
+    title: template.title,
+    status: template.status,
+    audio_clip_id: template.audio_clip_id ?? null,
+    trimmed_audio_asset_id: template.trimmed_audio_asset_id ?? null,
+    total_duration_ms: template.total_duration_ms,
+    selection_duration_ms: template.selection_duration_ms,
+    word_count: Array.isArray(full.lyric_blocks)
+      ? full.lyric_blocks.reduce((sum, block) => sum + (block.words?.length ?? 0), 0)
+      : 0,
+    cut_marker_count: Array.isArray(full.cut_markers) ? full.cut_markers.length : 0,
+    updated_at: template.updated_at,
+  };
+}
+
 export default function AutopilotPanel({
   initialTab,
   focusLyricsStepSignal,
@@ -264,6 +309,7 @@ export default function AutopilotPanel({
     () => new Map(lyricTemplates.map((t) => [t.id, t])),
     [lyricTemplates],
   );
+  const selectedTemplate = lyricTemplateId ? (templateById.get(lyricTemplateId) ?? null) : null;
   const lyricTemplateIdRef = useRef(lyricTemplateId);
   const lyricsStepRef = useRef<HTMLDivElement | null>(null);
   const campaignLyricsStepRef = useRef<HTMLDivElement | null>(null);
@@ -290,12 +336,54 @@ export default function AutopilotPanel({
         : "",
     [trimmedAudio],
   );
+  const campaignHandoff = useMemo<CampaignHandoff>(() => {
+    const templateAudioClipId = selectedTemplate?.audio_clip_id ?? null;
+    const audioClipId = registeredAudioClip?.id ?? templateAudioClipId ?? null;
+    const templateSaved = selectedTemplate?.status === "saved";
+    const templateMatchesAudio =
+      !!templateAudioClipId &&
+      (!registeredAudioClip || templateAudioClipId === registeredAudioClip.id);
+    const templateDurationSec = selectedTemplate
+      ? Math.round(Number(selectedTemplate.selection_duration_ms ?? 0) / 1000)
+      : null;
+    const audioDurationSec =
+      registeredAudioClip?.duration_sec ?? trimmedAudio?.durationSec ?? templateDurationSec;
+    const durationMatches =
+      templateDurationSec != null &&
+      audioDurationSec != null &&
+      Math.abs(templateDurationSec - audioDurationSec) <= 0.05;
+
+    return {
+      audioClipId,
+      lyricTemplateId: lyricTemplateId || null,
+      templateStatus: selectedTemplate?.status ?? null,
+      durationSec: audioDurationSec,
+      clipSelection: trimmedAudio
+        ? {
+            startSec: trimmedAudio.startSec,
+            endSec: trimmedAudio.endSec,
+            durationSec: trimmedAudio.durationSec,
+            originalFileName: trimmedAudio.originalFileName,
+          }
+        : null,
+      trimmedAudioAssetId: selectedTemplate?.trimmed_audio_asset_id ?? null,
+      templateAudioClipId,
+      templateSaved,
+      templateMatchesAudio,
+      ready:
+        !!audioClipId &&
+        !!selectedTemplate?.trimmed_audio_asset_id &&
+        templateSaved &&
+        templateMatchesAudio &&
+        durationMatches,
+    };
+  }, [lyricTemplateId, registeredAudioClip, selectedTemplate, trimmedAudio]);
 
   async function refresh() {
     try {
       const next = await callCampaign<CampaignList>("list");
       setData(next);
-      setLyricTemplates(next.lyricTemplates ?? []);
+      setLyricTemplates((next.lyricTemplates ?? []).map(summarizeTemplate));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     }
@@ -304,7 +392,7 @@ export default function AutopilotPanel({
   async function refreshLyricTemplates() {
     try {
       const next = await lyricsApi.list();
-      setLyricTemplates(next.templates);
+      setLyricTemplates(next.templates.map(summarizeTemplate));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     }
@@ -456,19 +544,37 @@ export default function AutopilotPanel({
   }
 
   async function startCampaign() {
-    if (!trimmedAudio) throw new Error("Trim your audio clip first.");
     if (!account) throw new Error("No account.");
     // Schema readiness is informational only — surfaced in the diagnostics
     // panel. The server will return a specific error if a table is actually
     // missing, so we don't pre-block the launch here.
 
-    if (!registeredAudioClip) {
-      throw new Error("Wait for the audio clip to finish registering before launching.");
-    }
     if (!lyricTemplateId) {
       throw new Error("Review and save a lyric template before launching.");
     }
+    if (!selectedTemplate) {
+      throw new Error("Refresh the lyric templates list before launching.");
+    }
+    if (selectedTemplate.status !== "saved") {
+      throw new Error("Save the lyric template before generating the library.");
+    }
+    if (!selectedTemplate.trimmed_audio_asset_id) {
+      throw new Error("The selected lyric template is missing its persisted trimmed audio.");
+    }
+    if (!trimmedAudio && !selectedTemplate.audio_clip_id) {
+      throw new Error("Trim your audio clip first.");
+    }
+    if (!campaignHandoff.audioClipId) {
+      throw new Error("Wait for the audio clip to finish registering before launching.");
+    }
+    if (!campaignHandoff.templateMatchesAudio) {
+      throw new Error("The selected lyric template must be created from this trimmed audio clip.");
+    }
+    if (!campaignHandoff.ready) {
+      throw new Error("The campaign audio/template handoff is not ready yet.");
+    }
     if (
+      trimmedAudio &&
       !clipSelectionMatchesDuration(
         { startSec: trimmedAudio.startSec, endSec: trimmedAudio.endSec },
         duration,
@@ -492,17 +598,24 @@ export default function AutopilotPanel({
       avoidReuseWithinBatch: stockAvoidReuse,
       allowReuseWhenExhausted: stockAllowReuse,
     };
+    const dedupeStrategy = dedupeStrategyForStockOptions({
+      avoidReuse: stockAvoidReuse,
+      allowReuseWhenExhausted: stockAllowReuse,
+    });
     await callCampaign("create", {
       accountId: account.id,
-      audioClipId: registeredAudioClip.id,
-      clipSelection: {
-        startSec: trimmedAudio.startSec,
-        endSec: trimmedAudio.endSec,
-        durationSec: trimmedAudio.durationSec,
-        originalFileName: trimmedAudio.originalFileName,
-      },
+      audioClipId: campaignHandoff.audioClipId,
+      clipSelection: trimmedAudio
+        ? {
+            startSec: trimmedAudio.startSec,
+            endSec: trimmedAudio.endSec,
+            durationSec: trimmedAudio.durationSec,
+            originalFileName: trimmedAudio.originalFileName,
+          }
+        : undefined,
       sourceMode,
       durationSeconds: duration,
+      dedupeStrategy,
       postCount,
       cadenceMinutes,
       prompt,
@@ -782,7 +895,9 @@ export default function AutopilotPanel({
                   busy={busy}
                   cadenceMinutes={cadenceMinutes}
                   duration={duration}
-                  lyricTemplateReady={!!lyricTemplateId}
+                  lyricTemplateMatchesAudio={campaignHandoff.templateMatchesAudio}
+                  lyricTemplateReady={campaignHandoff.ready}
+                  lyricTemplateStatus={campaignHandoff.templateStatus}
                   postCount={postCount}
                   prompt={prompt}
                   publishPrivacy={publishPrivacy}
@@ -805,7 +920,10 @@ export default function AutopilotPanel({
                   stockProviders={stockProviders}
                   streamerAllowedChannels={streamerAllowedChannels}
                   streamerName={streamerName}
-                  trimmedAudioReady={!!trimmedAudio && !!registeredAudioClip}
+                  trimmedAudioReady={
+                    (!!trimmedAudio && !!registeredAudioClip) ||
+                    (!!campaignHandoff.audioClipId && !!campaignHandoff.trimmedAudioAssetId)
+                  }
                   onCadenceMinutes={setCadenceMinutes}
                   onPostCount={setPostCount}
                   onPrompt={setPrompt}

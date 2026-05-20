@@ -35,8 +35,11 @@ type MediaAssetRow = {
 type LyricTemplateRow = {
   id: string;
   status: string;
+  audio_clip_id: string | null;
   trimmed_audio_asset_id: string | null;
   lyric_blocks: unknown[] | null;
+  transcript_meta?: Record<string, unknown> | null;
+  render_defaults?: Record<string, unknown> | null;
 };
 
 const AUDIO_CLIP_SELECT =
@@ -46,6 +49,12 @@ const MEDIA_ASSET_SELECT =
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 async function ensureProjectAssetForMediaAsset(input: {
@@ -96,10 +105,15 @@ async function ensureProjectAssetForMediaAsset(input: {
 
 function buildExistingTemplateRepair(input: {
   template: LyricTemplateRow;
+  audioClipId: string;
+  mediaAssetId: string;
   projectAssetId: string;
   lyricBlocks: ReturnType<typeof transcriptToKanvasLyricBlocks>;
 }): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
+  if (input.template.audio_clip_id !== input.audioClipId) {
+    patch.audio_clip_id = input.audioClipId;
+  }
   if (!input.template.trimmed_audio_asset_id) {
     patch.trimmed_audio_asset_id = input.projectAssetId;
   }
@@ -115,7 +129,50 @@ function buildExistingTemplateRepair(input: {
     }
   }
 
+  const transcriptMeta = record(input.template.transcript_meta);
+  if (
+    transcriptMeta.audio_clip_id !== input.audioClipId ||
+    transcriptMeta.project_asset_id !== input.projectAssetId ||
+    transcriptMeta.media_asset_id !== input.mediaAssetId
+  ) {
+    patch.transcript_meta = {
+      ...transcriptMeta,
+      audio_clip_id: input.audioClipId,
+      media_asset_id: input.mediaAssetId,
+      project_asset_id: input.projectAssetId,
+    };
+  }
+
+  const renderDefaults = record(input.template.render_defaults);
+  if (
+    renderDefaults.audio_clip_id !== input.audioClipId ||
+    renderDefaults.project_asset_id !== input.projectAssetId
+  ) {
+    patch.render_defaults = {
+      ...renderDefaults,
+      audio_clip_id: input.audioClipId,
+      project_asset_id: input.projectAssetId,
+      source: "fanagent_audio_clip",
+    };
+  }
+
   return patch;
+}
+
+async function bindAudioClipToTemplate(input: {
+  admin: SupabaseClient;
+  audioClipId: string;
+  templateId: string;
+}): Promise<void> {
+  const updated = await input.admin
+    .from("audio_clips")
+    .update({
+      default_lyric_template_id: input.templateId,
+      lyric_template_id: input.templateId,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", input.audioClipId);
+  if (updated.error) throw updated.error;
 }
 
 Deno.serve(async (req) => {
@@ -218,8 +275,15 @@ Deno.serve(async (req) => {
           if (existing.data) {
             const patch = buildExistingTemplateRepair({
               template: existing.data as LyricTemplateRow,
+              audioClipId,
+              mediaAssetId: assetRow.id,
               projectAssetId,
               lyricBlocks,
+            });
+            await bindAudioClipToTemplate({
+              admin,
+              audioClipId,
+              templateId: existing.data.id,
             });
             if (Object.keys(patch).length === 0) return okEnvelope({ template: existing.data });
             const repaired = await supabase
@@ -245,6 +309,7 @@ Deno.serve(async (req) => {
             title,
             source_audio_asset_id: null,
             trimmed_audio_asset_id: projectAssetId,
+            audio_clip_id: audioClipId,
             selection_start_ms: 0,
             selection_duration_ms: durationMs,
             total_duration_ms: durationMs,
@@ -271,14 +336,11 @@ Deno.serve(async (req) => {
           .single();
         if (ins.error) throw ins.error;
 
-        const updatedClip = await admin
-          .from("audio_clips")
-          .update({
-            default_lyric_template_id: ins.data.id,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", audioClipId);
-        if (updatedClip.error) throw updatedClip.error;
+        await bindAudioClipToTemplate({
+          admin,
+          audioClipId,
+          templateId: ins.data.id,
+        });
 
         return okEnvelope({ template: ins.data });
       }
@@ -444,9 +506,20 @@ Deno.serve(async (req) => {
           audioClipId = String(clipIns.data.id);
         }
 
+        if (audioClipId) {
+          await bindAudioClipToTemplate({
+            admin,
+            audioClipId,
+            templateId,
+          });
+        }
+
         const mergedDefaults = {
           ...((tpl.data.render_defaults as Record<string, unknown>) ?? {}),
           ...(resolvedAccountId ? { account_id: resolvedAccountId } : {}),
+          ...(audioClipId ? { audio_clip_id: audioClipId } : {}),
+          ...(trimmedProjectAssetId ? { project_asset_id: trimmedProjectAssetId } : {}),
+          source: "fanagent_audio_clip",
         };
 
         const { data, error } = await supabase

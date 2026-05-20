@@ -138,6 +138,76 @@ function validatePayload(body: CreateBatchRequest) {
   };
 }
 
+type LyricTemplateBinding = {
+  id: string;
+  audio_clip_id: string;
+  selection_duration_ms: number | null;
+};
+
+async function resolveLyricTemplateBinding(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  raw: CreateBatchRequest,
+): Promise<LyricTemplateBinding | null> {
+  if (!raw.lyricTemplateId) return null;
+
+  const tpl = await supabase
+    .from("kanvas_lyric_templates")
+    .select(
+      "id,status,archived_at,audio_clip_id,trimmed_audio_asset_id,selection_duration_ms",
+    )
+    .eq("id", raw.lyricTemplateId)
+    .maybeSingle();
+  if (tpl.error) throw tpl.error;
+  if (!tpl.data) throw new Error("Lyric template not found.");
+  if (tpl.data.archived_at || tpl.data.status === "archived") {
+    throw new Error("Lyric template is archived.");
+  }
+  if (tpl.data.status !== "saved") {
+    throw new Error("Lyric template must be saved before generating a library.");
+  }
+  if (!tpl.data.trimmed_audio_asset_id) {
+    throw new Error("Lyric template is missing persisted trimmed audio.");
+  }
+  if (!tpl.data.audio_clip_id) {
+    throw new Error("Lyric template is not linked to an audio clip.");
+  }
+  if (raw.audioClipId && raw.audioClipId !== tpl.data.audio_clip_id) {
+    throw new Error("Lyric template does not belong to the provided audio clip.");
+  }
+
+  raw.audioClipId = tpl.data.audio_clip_id;
+  return {
+    id: tpl.data.id,
+    audio_clip_id: tpl.data.audio_clip_id,
+    selection_duration_ms:
+      typeof tpl.data.selection_duration_ms === "number"
+        ? tpl.data.selection_duration_ms
+        : null,
+  };
+}
+
+function assertTemplateMatchesAudioClip(input: {
+  template: LyricTemplateBinding | null;
+  audioClipId: unknown;
+  audioClipDurationSec: unknown;
+}): void {
+  if (!input.template) return;
+  if (String(input.audioClipId) !== input.template.audio_clip_id) {
+    throw new Error("Lyric template/audio clip mismatch.");
+  }
+  const templateDurationSec = Number(input.template.selection_duration_ms ?? 0) / 1000;
+  const clipDurationSec = Number(input.audioClipDurationSec ?? 0);
+  if (
+    Number.isFinite(templateDurationSec) &&
+    Number.isFinite(clipDurationSec) &&
+    templateDurationSec > 0 &&
+    clipDurationSec > 0 &&
+    Math.abs(templateDurationSec - clipDurationSec) > 0.05
+  ) {
+    throw new Error("Lyric template duration does not match the audio clip duration.");
+  }
+}
+
 Deno.serve(async (request) => {
   const options = handleOptions(request);
   if (options) return options;
@@ -152,19 +222,7 @@ Deno.serve(async (request) => {
     const supabase = getSupabaseAdmin();
     const raw = (await request.json()) as CreateBatchRequest;
 
-    // If a saved lyric template is provided but no audioClipId/audioBase64,
-    // resolve audio_clip_id from the template so downstream validation passes.
-    if (raw.lyricTemplateId && !raw.audioClipId && !raw.audioBase64) {
-      const tpl = await supabase
-        .from("kanvas_lyric_templates")
-        .select("audio_clip_id")
-        .eq("id", raw.lyricTemplateId)
-        .maybeSingle();
-      if (tpl.error) throw tpl.error;
-      if (tpl.data?.audio_clip_id) {
-        raw.audioClipId = String(tpl.data.audio_clip_id);
-      }
-    }
+    const lyricTemplateBinding = await resolveLyricTemplateBinding(supabase, raw);
 
     const input = validatePayload(raw);
     if (input.audioBytes && input.audioBytes.byteLength > 50 * 1024 * 1024) {
@@ -182,6 +240,11 @@ Deno.serve(async (request) => {
         .single();
       if (clip.error) throw clip.error;
       audioClip = clip.data;
+      assertTemplateMatchesAudioClip({
+        template: lyricTemplateBinding,
+        audioClipId: clip.data.id,
+        audioClipDurationSec: clip.data.duration_sec,
+      });
       const assetId = clip.data.trimmed_asset_id ?? clip.data.source_asset_id;
       const asset = await supabase.from("media_assets").select("*").eq("id", assetId).single();
       if (asset.error) throw asset.error;

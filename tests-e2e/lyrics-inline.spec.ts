@@ -26,6 +26,7 @@ function templateRow(state: TemplateState) {
     status: state.status,
     source_audio_asset_id: null,
     trimmed_audio_asset_id: state.trimmedAudioAssetId,
+    audio_clip_id: audioClipId,
     selection_start_ms: 0,
     selection_duration_ms: 15000,
     total_duration_ms: 31000,
@@ -325,6 +326,7 @@ test.describe("inline lyrics template builder", () => {
     await expect(page.getByText(/Campaign launch complete/i)).toBeVisible({ timeout: 30_000 });
     expect(mocks.getCampaignCreatePayload()?.lyricTemplateId).toBe(templateId);
     expect(mocks.getCampaignCreatePayload()?.audioClipId).toBe(audioClipId);
+    expect(mocks.getCampaignCreatePayload()?.dedupeStrategy).toBe("allow_reuse_after_exhaustion");
     await expect(page).toHaveURL(/\/$/);
   });
 });

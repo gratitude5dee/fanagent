@@ -116,7 +116,11 @@ export interface LyricTemplateSummary {
   id: string;
   title: string;
   status: TemplateStatus;
+  audio_clip_id: string | null;
+  trimmed_audio_asset_id: string | null;
   total_duration_ms: number;
   selection_duration_ms: number;
+  word_count: number;
+  cut_marker_count: number;
   updated_at: string;
 }

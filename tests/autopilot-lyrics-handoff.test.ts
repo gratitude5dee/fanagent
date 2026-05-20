@@ -1,6 +1,7 @@
 import React from "react";
 import { readFileSync } from "node:fs";
 import { renderToString } from "react-dom/server";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/integrations/supabase/client", () => ({
@@ -25,15 +26,19 @@ import type { LyricTemplateSummary } from "../src/lib/lyrics/types";
 
 function renderLyricsStep(template: LyricTemplateSummary): string {
   return renderToString(
-    React.createElement(LyricsStep, {
-      lyricTemplateId: template.id,
-      lyricTemplates: [template],
-      drawerOpen: false,
-      onDrawerOpen: vi.fn(),
-      onTemplate: vi.fn(),
-      onTemplatesChanged: vi.fn(),
-      autoOpenTemplateRequest: 0,
-    }),
+    React.createElement(
+      MemoryRouter,
+      null,
+      React.createElement(LyricsStep, {
+        lyricTemplateId: template.id,
+        lyricTemplates: [template],
+        drawerOpen: false,
+        onDrawerOpen: vi.fn(),
+        onTemplate: vi.fn(),
+        onTemplatesChanged: vi.fn(),
+        autoOpenTemplateRequest: 0,
+      }),
+    ),
   );
 }
 
@@ -43,8 +48,12 @@ describe("Autopilot lyrics handoff", () => {
       id: "template-generated",
       title: "Uploaded song lyrics",
       status: "lyrics_ready",
+      audio_clip_id: "clip-generated",
+      trimmed_audio_asset_id: "asset-generated",
       total_duration_ms: 30000,
       selection_duration_ms: 30000,
+      word_count: 12,
+      cut_marker_count: 2,
       updated_at: "2026-05-20T04:30:00.000Z",
     });
 
@@ -58,8 +67,12 @@ describe("Autopilot lyrics handoff", () => {
       id: "template-saved",
       title: "Saved lyrics",
       status: "saved",
+      audio_clip_id: "clip-saved",
+      trimmed_audio_asset_id: "asset-saved",
       total_duration_ms: 30000,
       selection_duration_ms: 30000,
+      word_count: 12,
+      cut_marker_count: 2,
       updated_at: "2026-05-20T04:30:00.000Z",
     });
 
@@ -78,6 +91,8 @@ describe("Autopilot lyrics handoff", () => {
 
     expect(panelSource).toContain("setAutoOpenTemplateRequest((request) => request + 1)");
     expect(panelSource).toContain("autoOpenTemplateRequest={autoOpenTemplateRequest}");
+    expect(panelSource).toContain("campaignHandoff.ready");
+    expect(panelSource).toContain("dedupeStrategyForStockOptions");
     expect(stepSource).toContain("Review generated template");
     expect(stepSource).toContain("if (lyricTemplateId) openBuilder(lyricTemplateId)");
     expect(builderSource).toContain("audioClipIdFromTemplate");

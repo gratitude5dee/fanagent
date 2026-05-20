@@ -52,6 +52,34 @@ function maybeId(value: unknown): string | null {
   return typeof id === "string" && id ? id : null;
 }
 
+function countTemplateWords(blocks: unknown): number {
+  if (!Array.isArray(blocks)) return 0;
+  return blocks.reduce((sum, block) => {
+    const data = record(block);
+    const words = Array.isArray(data.words) ? data.words : [];
+    return sum + words.length;
+  }, 0);
+}
+
+function summarizeLyricTemplates(rows: unknown[]): Array<Record<string, unknown>> {
+  return rows.map((row) => {
+    const template = record(row);
+    const cutMarkers = Array.isArray(template.cut_markers) ? template.cut_markers : [];
+    return {
+      id: template.id,
+      title: template.title,
+      status: template.status,
+      audio_clip_id: template.audio_clip_id ?? null,
+      trimmed_audio_asset_id: template.trimmed_audio_asset_id ?? null,
+      total_duration_ms: template.total_duration_ms,
+      selection_duration_ms: template.selection_duration_ms,
+      word_count: countTemplateWords(template.lyric_blocks),
+      cut_marker_count: cutMarkers.length,
+      updated_at: template.updated_at,
+    };
+  });
+}
+
 type SchemaCheck = {
   ok: boolean;
   error: string | null;
@@ -315,7 +343,9 @@ Deno.serve(async (request) => {
             "list lyric templates",
             supabase
               .from("kanvas_lyric_templates")
-              .select("id,title,status,total_duration_ms,selection_duration_ms,updated_at")
+              .select(
+                "id,title,status,audio_clip_id,trimmed_audio_asset_id,total_duration_ms,selection_duration_ms,lyric_blocks,cut_markers,updated_at",
+              )
               .is("archived_at", null)
               .order("updated_at", { ascending: false })
               .limit(100),
@@ -334,7 +364,7 @@ Deno.serve(async (request) => {
           batches: batches.data ?? [],
           items: items.data ?? [],
           posts: posts.data ?? [],
-          lyricTemplates: lyricTemplates.data ?? [],
+          lyricTemplates: summarizeLyricTemplates((lyricTemplates.data ?? []) as unknown[]),
           warnings,
         });
       }
@@ -505,6 +535,13 @@ Deno.serve(async (request) => {
           hasCurrentWorkerProblem
             ? (workerRuns.find((run) => Number(run.errors_count ?? 0) > 0)?.detail ?? null)
             : null;
+        const accountData = accountRow.data as {
+          id: string;
+          platform: string;
+          handle: string | null;
+          tiktok_connected_at: string | null;
+          tiktok_creator_info: Record<string, unknown> | null;
+        } | null;
 
         return okEnvelope({
           env: envStatus,
@@ -526,13 +563,13 @@ Deno.serve(async (request) => {
             errors: schemaErrors,
             warnings: schemaWarnings,
           },
-          account: accountRow.data
+          account: accountData
             ? {
-                id: accountRow.data.id,
-                platform: accountRow.data.platform,
-                handle: accountRow.data.handle,
-                tiktokConnected: !!accountRow.data.tiktok_connected_at,
-                tiktokCreatorInfo: accountRow.data.tiktok_creator_info ?? null,
+                id: accountData.id,
+                platform: accountData.platform,
+                handle: accountData.handle,
+                tiktokConnected: !!accountData.tiktok_connected_at,
+                tiktokCreatorInfo: accountData.tiktok_creator_info ?? null,
               }
             : null,
           queueCounts,

@@ -15,7 +15,9 @@ type CampaignStepProps = {
   postCount: number;
   prompt: string;
   publishPrivacy: string;
+  lyricTemplateMatchesAudio: boolean;
   lyricTemplateReady: boolean;
+  lyricTemplateStatus: string | null;
   schemaReady: boolean;
   seedanceResolution: "480p" | "720p" | "1080p";
   sourceMode: SourceMode;
@@ -299,6 +301,18 @@ export function CampaignStep(props: CampaignStepProps) {
         {props.duration > 15 ? (
           <div className="banner">
             {Math.ceil(props.duration / 15)} clips per post will be stitched together with ffmpeg.
+          </div>
+        ) : null}
+        {!props.trimmedAudioReady ? (
+          <div className="banner warn">Trim and register audio before generating the library.</div>
+        ) : null}
+        {props.trimmedAudioReady && !props.lyricTemplateReady ? (
+          <div className="banner warn">
+            {props.lyricTemplateStatus && props.lyricTemplateStatus !== "saved"
+              ? `Save the lyric template first. Current status: ${props.lyricTemplateStatus}.`
+              : props.lyricTemplateMatchesAudio
+                ? "Save the selected lyric template before generating the library."
+                : "Select the saved lyric template created from this trimmed audio clip."}
           </div>
         ) : null}
         <button

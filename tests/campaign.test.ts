@@ -225,6 +225,10 @@ describe("campaign response envelopes", () => {
     expect(source).toContain("audio_asset: audioAsset");
     expect(source).toContain("audioClip");
     expect(source).toContain("audioAsset");
+    expect(source).toContain("resolveLyricTemplateBinding");
+    expect(source).toContain("Lyric template must be saved before generating a library.");
+    expect(source).toContain("Lyric template does not belong to the provided audio clip.");
+    expect(source).toContain("assertTemplateMatchesAudioClip");
   });
 
   it("keeps create-generation-batch on the envelope contract", () => {
@@ -258,6 +262,12 @@ describe("campaign response envelopes", () => {
   it("keeps the campaign list response scoped to UI fields", () => {
     const source = readFileSync("supabase/functions/fanpage-campaign/index.ts", "utf8");
 
+    expect(source).toContain(
+      '"id,title,status,audio_clip_id,trimmed_audio_asset_id,total_duration_ms,selection_duration_ms,lyric_blocks,cut_markers,updated_at"',
+    );
+    expect(source).toContain("summarizeLyricTemplates");
+    expect(source).toContain("word_count: countTemplateWords(template.lyric_blocks)");
+    expect(source).toContain("cut_marker_count: cutMarkers.length");
     expect(source).toContain(
       '"id,batch_id,status,scheduled_at,provider,prompt,segments,stock_clip_url,render_provider,error_message,lyric_template_id,stage_events"',
     );
