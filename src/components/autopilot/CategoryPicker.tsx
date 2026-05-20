@@ -8,6 +8,7 @@ type CategoryPickerProps = {
   subcategorySlug: string;
   randomize: boolean;
   autoRender: boolean;
+  requiredShots?: number;
   loading?: boolean;
   onCategoryId: (id: string) => void;
   onSubcategorySlug: (slug: string) => void;
@@ -23,6 +24,7 @@ export function CategoryPicker(props: CategoryPickerProps) {
     subcategorySlug,
     randomize,
     autoRender,
+    requiredShots = 1,
     loading,
   } = props;
 
@@ -38,7 +40,11 @@ export function CategoryPicker(props: CategoryPickerProps) {
         : poolCounts.totalForCategory(selected.id)
       : 0;
 
-  const insufficientPool = poolCounts != null && !randomize && exactCount < 1;
+  const needed = Math.max(1, requiredShots);
+  const poolEmpty = poolCounts != null && !randomize && selected != null && exactCount < 1;
+  const poolUnderfilled =
+    poolCounts != null && !randomize && selected != null && exactCount > 0 && exactCount < needed;
+
 
   return (
     <div className="stack" style={{ gap: 8 }}>
@@ -110,12 +116,20 @@ export function CategoryPicker(props: CategoryPickerProps) {
         ) : null}
       </div>
 
-      {insufficientPool ? (
+      {poolEmpty ? (
         <div className="banner warn">
-          Selected category has no cached clips yet. The first run will populate the pool from live
-          search before rendering.
+          Selected category has no cached clips yet. The first run will populate the pool from
+          live search before rendering.
         </div>
       ) : null}
+      {poolUnderfilled ? (
+        <div className="banner bad">
+          Pool too small: {exactCount} cached clip{exactCount === 1 ? "" : "s"} for{" "}
+          {selected?.name}, but this template needs {needed}. Enable Randomize, broaden the
+          subcategory, or wait for the live search to backfill.
+        </div>
+      ) : null}
+
     </div>
   );
 }

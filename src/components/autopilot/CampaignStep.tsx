@@ -30,6 +30,8 @@ type CampaignStepProps = {
   subcategorySlug: string;
   randomize: boolean;
   autoRender: boolean;
+  requiredShots?: number;
+
   sportsAllowedChannels: string;
   sportsLeague: string;
   sportsOwnerAssetUrls: string;
@@ -73,7 +75,25 @@ type CampaignStepProps = {
 };
 
 export function CampaignStep(props: CampaignStepProps) {
+  const required = Math.max(1, props.requiredShots ?? 1);
+  const selectedCategory = props.categories.find((c) => c.id === props.categoryId) ?? null;
+  const exactPoolCount =
+    props.poolCounts && selectedCategory
+      ? selectedCategory.children.length > 0 && props.subcategorySlug
+        ? props.poolCounts.get(selectedCategory.id, props.subcategorySlug)
+        : props.poolCounts.totalForCategory(selectedCategory.id)
+      : 0;
+  // Hard block: a non-randomize run with a known-but-too-small pool will
+  // fail mid-render. Force the user to randomize or broaden first.
+  const poolBlocked =
+    !props.randomize &&
+    props.poolCounts != null &&
+    selectedCategory != null &&
+    exactPoolCount > 0 &&
+    exactPoolCount < required;
+
   return (
+
     <section className="panel">
       <div className="panel-title">
         <CalendarClock size={16} />
@@ -96,11 +116,13 @@ export function CampaignStep(props: CampaignStepProps) {
           subcategorySlug={props.subcategorySlug}
           randomize={props.randomize}
           autoRender={props.autoRender}
+          requiredShots={props.requiredShots}
           onCategoryId={props.onCategoryId}
           onSubcategorySlug={props.onSubcategorySlug}
           onRandomize={props.onRandomize}
           onAutoRender={props.onAutoRender}
         />
+
         <div className="split">
           <label>
             Posts to queue
@@ -328,12 +350,18 @@ export function CampaignStep(props: CampaignStepProps) {
         ) : null}
         <button
           className="button primary"
-          disabled={props.busy || !props.trimmedAudioReady || !props.lyricTemplateReady}
+          disabled={
+            props.busy ||
+            !props.trimmedAudioReady ||
+            !props.lyricTemplateReady ||
+            poolBlocked
+          }
           type="submit"
         >
           {props.busy ? <Loader2 className="spin" size={16} /> : <CalendarClock size={16} />}{" "}
           Generate library
         </button>
+
       </div>
     </section>
   );
