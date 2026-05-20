@@ -1,6 +1,8 @@
 import { CalendarClock, Info, Loader2 } from "lucide-react";
 import type { Duration } from "./UploadStep";
-import type { SourceMode, SourceOption } from "@/lib/fanagent/sourceMode";
+import type { SourceMode } from "@/lib/fanagent/sourceMode";
+import { CategoryPicker } from "./CategoryPicker";
+import type { CategoryNode, PoolCountIndex } from "@/lib/fanagent/categories";
 
 type StockProviders = {
   library: boolean;
@@ -21,7 +23,13 @@ type CampaignStepProps = {
   schemaReady: boolean;
   seedanceResolution: "480p" | "720p" | "1080p";
   sourceMode: SourceMode;
-  sourceOptions: SourceOption[];
+  categories: CategoryNode[];
+  poolCounts: PoolCountIndex | null;
+  categoriesLoading: boolean;
+  categoryId: string;
+  subcategorySlug: string;
+  randomize: boolean;
+  autoRender: boolean;
   sportsAllowedChannels: string;
   sportsLeague: string;
   sportsOwnerAssetUrls: string;
@@ -43,7 +51,10 @@ type CampaignStepProps = {
   onPrompt: (value: string) => void;
   onPublishPrivacy: (value: string) => void;
   onSeedanceResolution: (value: "480p" | "720p" | "1080p") => void;
-  onSourceMode: (value: SourceMode) => void;
+  onCategoryId: (value: string) => void;
+  onSubcategorySlug: (value: string) => void;
+  onRandomize: (value: boolean) => void;
+  onAutoRender: (value: boolean) => void;
   onSportsAllowedChannels: (value: string) => void;
   onSportsLeague: (value: string) => void;
   onSportsOwnerAssetUrls: (value: string) => void;
