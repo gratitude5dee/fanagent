@@ -65,9 +65,10 @@ const categoryCache = new Map<string, ClipCategory>();
 
 export async function getCategoryById(
   id: string,
-  supabase: SupabaseClient = getSupabaseAdmin(),
+  client?: SupabaseClient,
 ): Promise<ClipCategory | null> {
   if (categoryCache.has(id)) return categoryCache.get(id)!;
+  const supabase = client ?? (await lazyAdmin());
   const { data, error } = await supabase
     .from("clip_categories")
     .select("id,slug,name,parent_id,source_type")
@@ -82,8 +83,9 @@ export async function getCategoryById(
 
 export async function getCategoryBySlug(
   slug: string,
-  supabase: SupabaseClient = getSupabaseAdmin(),
+  client?: SupabaseClient,
 ): Promise<ClipCategory | null> {
+  const supabase = client ?? (await lazyAdmin());
   const { data, error } = await supabase
     .from("clip_categories")
     .select("id,slug,name,parent_id,source_type")
@@ -97,7 +99,7 @@ export async function getCategoryBySlug(
 }
 
 export async function listAllCategories(
-  supabase: SupabaseClient = getSupabaseAdmin(),
+  client?: SupabaseClient,
 ): Promise<ClipCategory[]> {
   const { data, error } = await supabase
     .from("clip_categories")
