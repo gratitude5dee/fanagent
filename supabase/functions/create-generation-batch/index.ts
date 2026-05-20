@@ -150,7 +150,23 @@ Deno.serve(async (request) => {
 
   try {
     const supabase = getSupabaseAdmin();
-    const input = validatePayload(await request.json());
+    const raw = (await request.json()) as CreateBatchRequest;
+
+    // If a saved lyric template is provided but no audioClipId/audioBase64,
+    // resolve audio_clip_id from the template so downstream validation passes.
+    if (raw.lyricTemplateId && !raw.audioClipId && !raw.audioBase64) {
+      const tpl = await supabase
+        .from("kanvas_lyric_templates")
+        .select("audio_clip_id")
+        .eq("id", raw.lyricTemplateId)
+        .maybeSingle();
+      if (tpl.error) throw tpl.error;
+      if (tpl.data?.audio_clip_id) {
+        raw.audioClipId = String(tpl.data.audio_clip_id);
+      }
+    }
+
+    const input = validatePayload(raw);
     if (input.audioBytes && input.audioBytes.byteLength > 50 * 1024 * 1024) {
       throw new Error("Audio uploads are limited to 50MB.");
     }
