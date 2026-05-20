@@ -75,7 +75,25 @@ type CampaignStepProps = {
 };
 
 export function CampaignStep(props: CampaignStepProps) {
+  const required = Math.max(1, props.requiredShots ?? 1);
+  const selectedCategory = props.categories.find((c) => c.id === props.categoryId) ?? null;
+  const exactPoolCount =
+    props.poolCounts && selectedCategory
+      ? selectedCategory.children.length > 0 && props.subcategorySlug
+        ? props.poolCounts.get(selectedCategory.id, props.subcategorySlug)
+        : props.poolCounts.totalForCategory(selectedCategory.id)
+      : 0;
+  // Hard block: a non-randomize run with a known-but-too-small pool will
+  // fail mid-render. Force the user to randomize or broaden first.
+  const poolBlocked =
+    !props.randomize &&
+    props.poolCounts != null &&
+    selectedCategory != null &&
+    exactPoolCount > 0 &&
+    exactPoolCount < required;
+
   return (
+
     <section className="panel">
       <div className="panel-title">
         <CalendarClock size={16} />
