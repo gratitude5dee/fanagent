@@ -447,6 +447,47 @@ export default function AutopilotPanel({
     return () => clearInterval(t);
   }, []);
 
+  // Load clip categories once (static seed). Default to the first parent.
+  useEffect(() => {
+    let cancelled = false;
+    setCategoriesLoading(true);
+    fetchClipCategories()
+      .then((rows) => {
+        if (cancelled) return;
+        setCategories(rows);
+        setCategoryId((current) => current || rows[0]?.id || "");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setMessage(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setCategoriesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Refresh pool counts on cadence + whenever account changes.
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const idx = await fetchPoolCounts(accountId || null);
+        if (!cancelled) setPoolCounts(idx);
+      } catch {
+        // pool counts are advisory — failure should not block the picker
+      }
+    }
+    load();
+    const t = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [accountId]);
+
   useEffect(() => {
     if (initialTab) setTab(initialTab);
   }, [initialTab]);
