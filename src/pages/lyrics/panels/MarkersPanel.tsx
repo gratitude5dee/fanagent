@@ -232,8 +232,9 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
               onPointerUp={() => {
                 if (dragRef.current?.idx === i) {
                   dragRef.current = null;
-                  // commit through update path so undo captures it
+                  // commit through update path so undo captures it and parent is notified
                   undoRef.current.push(markers);
+                  commit(markers);
                 }
               }}
               onClick={(e) => {
