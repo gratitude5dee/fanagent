@@ -258,11 +258,15 @@ Deno.serve(async (request) => {
     const batch = await supabase
       .from("generation_batches")
       .select(
-        "source_mode,duration_seconds,settings,audio_asset_id,audio_clip_id,dedupe_strategy,duration_tolerance_seconds,duration_tolerance_fallback_seconds",
+        "source_mode,duration_seconds,settings,audio_asset_id,audio_clip_id,dedupe_strategy,duration_tolerance_seconds,duration_tolerance_fallback_seconds,category_id,subcategory_slug,randomize",
       )
       .eq("id", item.data.batch_id)
       .single();
     if (batch.error) throw batch.error;
+
+    const batchCategoryId = (batch.data as any).category_id ?? null;
+    const batchSubcategorySlug = (batch.data as any).subcategory_slug ?? null;
+    const batchRandomize = Boolean((batch.data as any).randomize);
 
     const audioClipId = item.data.audio_clip_id ?? batch.data.audio_clip_id;
     if (!audioClipId) throw new Error("audio_clip_id is required for source candidate dedupe.");
@@ -327,6 +331,8 @@ Deno.serve(async (request) => {
           tolerancePreferredSec: preferredTolerance,
           toleranceFallbackSec: fallbackTolerance,
           portraitOnly: stockSettings.portraitOnly !== false,
+          categoryId: batchCategoryId,
+          subcategorySlug: batchSubcategorySlug,
           segment: {
             segmentIndex,
             sourceType,
@@ -335,8 +341,32 @@ Deno.serve(async (request) => {
             settings: stockSettings,
           },
         });
+
+        // If batch pins a category, also pull from already-cached pool so we
+        // can satisfy from existing inventory without a live API call. Then
+        // intersect with category isolation guard.
+        let candidatePool = rawCandidates;
+        if (batchCategoryId && !batchRandomize) {
+          const cachedPool = await selectClipPool({
+            accountId: item.data.account_id,
+            categoryId: batchCategoryId,
+            subcategorySlug: batchSubcategorySlug,
+            filters: { portraitOnly: stockSettings.portraitOnly !== false },
+            limit: 200,
+          });
+          // Merge by id, prefer cached pool's category tagging.
+          const seen = new Set(candidatePool.map((c) => c.id ?? c.origin_url));
+          for (const c of cachedPool) {
+            const key = c.id ?? c.origin_url;
+            if (!seen.has(key)) {
+              candidatePool.push(c);
+              seen.add(key);
+            }
+          }
+        }
+
         const portraitCandidates =
-          stockSettings.portraitOnly === false ? rawCandidates : filterPortrait(rawCandidates);
+          stockSettings.portraitOnly === false ? candidatePool : filterPortrait(candidatePool);
         const durationFiltered = filterByDuration(
           portraitCandidates,
           segmentDuration,
@@ -350,6 +380,16 @@ Deno.serve(async (request) => {
         );
 
         if (selected) {
+          // SECURITY: category isolation. If the batch pinned a category, the
+          // selected candidate MUST belong to it. This is a P0 guard — never
+          // leak a non-basketball clip into a basketball edit.
+          if (batchCategoryId && !batchRandomize) {
+            assertCandidateInCategory(
+              selected.candidate,
+              batchCategoryId,
+              batchSubcategorySlug,
+            );
+          }
           const adapter = getSourceAdapter(normalizeSourceType(selected.candidate.source_type));
           const cached = await adapter.cache(selected.candidate);
           segments.push(
