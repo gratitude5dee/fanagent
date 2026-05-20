@@ -294,16 +294,24 @@ export default function AutopilotPanel() {
       const next = await callCampaign<Diagnostics>("diagnostics");
       setDiagnostics(next);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      // Swallow transport-level aborts (StrictMode double-mount, HMR) — they
+      // self-heal on the next polling tick. Only surface real failures.
+      if (/aborted|AbortError|signal is aborted/i.test(message)) return;
+      setMessage(message);
     }
   }
 
   useEffect(() => {
     refresh();
     refreshDiagnostics();
-    const t = setInterval(refresh, 15_000);
+    const t = setInterval(() => {
+      refresh();
+      refreshDiagnostics();
+    }, 15_000);
     return () => clearInterval(t);
   }, []);
+
 
   useEffect(() => {
     if (trimmedAudio && !lyricTemplateId) setLyricsDrawerOpen(true);
