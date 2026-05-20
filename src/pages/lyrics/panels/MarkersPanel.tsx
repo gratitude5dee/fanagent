@@ -94,13 +94,19 @@ export default function MarkersPanel({ active, template, audioUrl, onChange }: P
 
   const undo = useCallback(() => {
     const prev = undoRef.current.undo(markers);
-    if (prev) setMarkers(prev);
-  }, [markers]);
+    if (prev) {
+      setMarkers(prev);
+      commit(prev);
+    }
+  }, [markers, commit]);
 
   const redo = useCallback(() => {
     const next = undoRef.current.redo(markers);
-    if (next) setMarkers(next);
-  }, [markers]);
+    if (next) {
+      setMarkers(next);
+      commit(next);
+    }
+  }, [markers, commit]);
 
   // Keyboard shortcuts
   useEffect(() => {
