@@ -225,12 +225,58 @@ export type Database = {
           },
         ]
       }
+      clip_categories: {
+        Row: {
+          created_at: string
+          icon: string | null
+          id: string
+          name: string
+          parent_id: string | null
+          slug: string
+          sort_order: number
+          source_type: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          icon?: string | null
+          id?: string
+          name: string
+          parent_id?: string | null
+          slug: string
+          sort_order?: number
+          source_type: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          icon?: string | null
+          id?: string
+          name?: string
+          parent_id?: string | null
+          slug?: string
+          sort_order?: number
+          source_type?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "clip_categories_parent_id_fkey"
+            columns: ["parent_id"]
+            isOneToOne: false
+            referencedRelation: "clip_categories"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       generation_batches: {
         Row: {
           account_id: string | null
           audio_asset_id: string | null
           audio_clip_id: string | null
+          auto_render: boolean
           cadence_minutes: number
+          category_id: string | null
           completed_at: string | null
           created_at: string | null
           dedupe_strategy: string
@@ -247,10 +293,12 @@ export type Database = {
           prompt: string | null
           publish_defaults: Json
           quantity: number
+          randomize: boolean
           settings: Json
           source_mode: string
           started_at: string | null
           status: string
+          subcategory_slug: string | null
           timezone: string
           updated_at: string | null
         }
@@ -258,7 +306,9 @@ export type Database = {
           account_id?: string | null
           audio_asset_id?: string | null
           audio_clip_id?: string | null
+          auto_render?: boolean
           cadence_minutes?: number
+          category_id?: string | null
           completed_at?: string | null
           created_at?: string | null
           dedupe_strategy?: string
@@ -275,10 +325,12 @@ export type Database = {
           prompt?: string | null
           publish_defaults?: Json
           quantity?: number
+          randomize?: boolean
           settings?: Json
           source_mode?: string
           started_at?: string | null
           status?: string
+          subcategory_slug?: string | null
           timezone?: string
           updated_at?: string | null
         }
@@ -286,7 +338,9 @@ export type Database = {
           account_id?: string | null
           audio_asset_id?: string | null
           audio_clip_id?: string | null
+          auto_render?: boolean
           cadence_minutes?: number
+          category_id?: string | null
           completed_at?: string | null
           created_at?: string | null
           dedupe_strategy?: string
@@ -303,10 +357,12 @@ export type Database = {
           prompt?: string | null
           publish_defaults?: Json
           quantity?: number
+          randomize?: boolean
           settings?: Json
           source_mode?: string
           started_at?: string | null
           status?: string
+          subcategory_slug?: string | null
           timezone?: string
           updated_at?: string | null
         }
@@ -330,6 +386,13 @@ export type Database = {
             columns: ["audio_clip_id"]
             isOneToOne: false
             referencedRelation: "audio_clips"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "generation_batches_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "clip_categories"
             referencedColumns: ["id"]
           },
         ]
@@ -1102,6 +1165,7 @@ export type Database = {
           account_id: string | null
           attribution: string | null
           cached_url: string | null
+          category_id: string | null
           created_at: string | null
           duration_seconds: number
           expires_at: string | null
@@ -1118,6 +1182,7 @@ export type Database = {
           source_type: string
           storage_bucket: string | null
           storage_path: string | null
+          subcategory_slug: string | null
           updated_at: string | null
           width: number | null
         }
@@ -1125,6 +1190,7 @@ export type Database = {
           account_id?: string | null
           attribution?: string | null
           cached_url?: string | null
+          category_id?: string | null
           created_at?: string | null
           duration_seconds: number
           expires_at?: string | null
@@ -1141,6 +1207,7 @@ export type Database = {
           source_type: string
           storage_bucket?: string | null
           storage_path?: string | null
+          subcategory_slug?: string | null
           updated_at?: string | null
           width?: number | null
         }
@@ -1148,6 +1215,7 @@ export type Database = {
           account_id?: string | null
           attribution?: string | null
           cached_url?: string | null
+          category_id?: string | null
           created_at?: string | null
           duration_seconds?: number
           expires_at?: string | null
@@ -1164,6 +1232,7 @@ export type Database = {
           source_type?: string
           storage_bucket?: string | null
           storage_path?: string | null
+          subcategory_slug?: string | null
           updated_at?: string | null
           width?: number | null
         }
@@ -1173,6 +1242,13 @@ export type Database = {
             columns: ["account_id"]
             isOneToOne: false
             referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "source_candidates_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "clip_categories"
             referencedColumns: ["id"]
           },
         ]
@@ -1311,7 +1387,30 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      view_clip_pool_counts: {
+        Row: {
+          account_id: string | null
+          category_id: string | null
+          clip_count: number | null
+          subcategory_slug: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "source_candidates_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "source_candidates_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "clip_categories"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
       claim_generation_items: {
