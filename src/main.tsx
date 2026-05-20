@@ -7,37 +7,28 @@ import "./styles.css";
 const LibraryLanding = lazy(() => import("./pages/library/LibraryLanding"));
 const LibraryDetail = lazy(() => import("./pages/library/LibraryDetail"));
 const AccountsPage = lazy(() => import("./pages/settings/AccountsPage"));
+const LyricsHome = lazy(() => import("./pages/lyrics/LyricsHome"));
+const LyricsWizard = lazy(() => import("./pages/lyrics/LyricsWizard"));
+const RemixEditor = lazy(() => import("./pages/lyrics/RemixEditor"));
+const RemixJobs = lazy(() => import("./pages/lyrics/RemixJobs"));
+
+const wrap = (node: React.ReactNode) => (
+  <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>{node}</Suspense>
+);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<App />} />
-        <Route
-          path="/library"
-          element={
-            <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
-              <LibraryLanding />
-            </Suspense>
-          }
-        />
-        <Route
-          path="/library/:audioClipId"
-          element={
-            <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
-              <LibraryDetail />
-            </Suspense>
-          }
-        />
-        <Route
-          path="/settings/accounts"
-          element={
-            <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
-              <AccountsPage />
-            </Suspense>
-          }
-        />
-        <Route path="/lyrics/*" element={<Navigate to="/?step=lyrics" replace />} />
+        <Route path="/library" element={wrap(<LibraryLanding />)} />
+        <Route path="/library/:audioClipId" element={wrap(<LibraryDetail />)} />
+        <Route path="/settings/accounts" element={wrap(<AccountsPage />)} />
+        <Route path="/lyrics" element={wrap(<LyricsHome />)} />
+        <Route path="/lyrics/new" element={wrap(<LyricsWizard />)} />
+        <Route path="/lyrics/:templateId" element={wrap(<LyricsWizard />)} />
+        <Route path="/lyrics/:templateId/remix" element={wrap(<RemixEditor />)} />
+        <Route path="/lyrics/:templateId/jobs" element={wrap(<RemixJobs />)} />
         <Route path="/calendar" element={<Navigate to="/?mode=studio&view=calendar" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
