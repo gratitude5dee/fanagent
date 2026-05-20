@@ -320,6 +320,10 @@ Deno.serve(async (request) => {
           clipSelection: input.clipSelection,
         }),
         publish_defaults: input.publishDefaults,
+        category_id: input.categoryId,
+        subcategory_slug: input.subcategorySlug,
+        randomize: input.randomize,
+        auto_render: input.autoRender,
       })
       .select("*")
       .single();
