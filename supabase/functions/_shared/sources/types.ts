@@ -47,6 +47,8 @@ export type AdapterSearchInput = {
   mood?: string;
   perAdapterLimit?: number;
   adapterSettings?: Record<string, unknown>;
+  categoryId?: string | null;
+  subcategorySlug?: string | null;
 };
 
 export type SourceCandidate = {
@@ -71,6 +73,8 @@ export type SourceCandidate = {
   metadata?: Record<string, unknown>;
   score?: number;
   tolerance_seconds_used?: number | null;
+  category_id?: string | null;
+  subcategory_slug?: string | null;
 };
 
 export interface SourceAdapter {

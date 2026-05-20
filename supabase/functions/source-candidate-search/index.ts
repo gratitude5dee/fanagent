@@ -16,11 +16,15 @@ type RequestBody = {
   tolerancePreferredSec?: number;
   toleranceFallbackSec?: number;
   portraitOnly?: boolean;
+  categoryId?: string | null;
+  subcategorySlug?: string | null;
 };
 
 function candidateRow(input: {
   candidate: SourceCandidate;
   accountId: string;
+  categoryId?: string | null;
+  subcategorySlug?: string | null;
 }): Record<string, unknown> {
   assertCandidateRights(input.candidate);
   return {
@@ -42,6 +46,8 @@ function candidateRow(input: {
     attribution: input.candidate.attribution ?? null,
     expires_at: input.candidate.expires_at ?? null,
     metadata: input.candidate.metadata ?? {},
+    category_id: input.categoryId ?? input.candidate.category_id ?? null,
+    subcategory_slug: input.subcategorySlug ?? input.candidate.subcategory_slug ?? null,
   };
 }
 
@@ -60,10 +66,14 @@ function assertCandidateRights(candidate: SourceCandidate): void {
 async function upsertCandidates(
   candidates: SourceCandidate[],
   accountId: string,
+  categoryId?: string | null,
+  subcategorySlug?: string | null,
 ): Promise<SourceCandidate[]> {
   if (candidates.length === 0) return [];
   const supabase = getSupabaseAdmin();
-  const rows = candidates.map((candidate) => candidateRow({ candidate, accountId }));
+  const rows = candidates.map((candidate) =>
+    candidateRow({ candidate, accountId, categoryId, subcategorySlug }),
+  );
   const inserted = await supabase
     .from("source_candidates")
     .upsert(rows, { onConflict: "source_type,provider,external_id" })
@@ -114,8 +124,15 @@ Deno.serve(async (request) => {
         portraitOnly: body.portraitOnly ?? true,
         adapterSettings: segment.settings,
         perAdapterLimit: Number(segment.settings?.perAdapterLimit ?? 20),
+        categoryId: body.categoryId ?? null,
+        subcategorySlug: body.subcategorySlug ?? null,
       });
-      bySegment[String(segment.segmentIndex)] = await upsertCandidates(candidates, accountId);
+      bySegment[String(segment.segmentIndex)] = await upsertCandidates(
+        candidates,
+        accountId,
+        body.categoryId ?? null,
+        body.subcategorySlug ?? null,
+      );
     }
 
     return okEnvelope({ candidates: bySegment });
