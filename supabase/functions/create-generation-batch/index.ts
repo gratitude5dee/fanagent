@@ -66,16 +66,20 @@ function validatePayload(body: CreateBatchRequest) {
     1,
     Math.min(Math.floor(Number(body.quantity ?? body.count ?? body.postCount ?? 1)), 250),
   );
-  const cadenceMinutes = Math.max(
-    5,
-    Math.min(Math.floor(Number(body.cadenceMinutes ?? 240)), 10_080),
-  );
+  const autoRender = body.autoRender === true;
+  // Auto-render mode bypasses scheduling: items are claimed by the worker
+  // immediately and rendered back-to-back into the library (no post rows).
+  const cadenceMinutes = autoRender
+    ? 5
+    : Math.max(5, Math.min(Math.floor(Number(body.cadenceMinutes ?? 240)), 10_080));
   const allowedDurations = [15, 30, 45, 60, 75, 90];
   const requestedDuration = Math.floor(Number(body.durationSeconds ?? 15));
   const durationSeconds = allowedDurations.includes(requestedDuration) ? requestedDuration : 15;
   const sourceMode = normalizeSourceMode(body.sourceMode);
   const audioMimeType = body.audioMimeType || "audio/mpeg";
-  const startAt = new Date(body.startAt ?? Date.now() + 30 * 60_000);
+  const startAt = autoRender
+    ? new Date(Date.now() - 60_000)
+    : new Date(body.startAt ?? Date.now() + 30 * 60_000);
   const clipSelection =
     normalizeClipSelection(body.clipSelection, durationSeconds, body.audioFileName) ??
     (body.audioClipId
