@@ -407,7 +407,11 @@ export default function AutopilotPanel() {
   async function startCampaign() {
     if (!trimmedAudio) throw new Error("Trim your audio clip first.");
     if (!account) throw new Error("No account.");
-    if (!schemaReady) throw new Error("Database queue schema is not ready.");
+    if (diagnostics && !schemaReady) {
+      throw new Error(
+        `Database queue schema is not ready: ${schemaDiagnosticsSummary(diagnostics.schema)}`,
+      );
+    }
     if (!registeredAudioClip) {
       throw new Error("Wait for the audio clip to finish registering before launching.");
     }
