@@ -28,6 +28,13 @@ export type StockSettings = {
   keywords?: string[];
   negativeKeywords?: string[];
   category?: string;
+  /**
+   * When true, the category term is treated as a hard lock: it is prepended
+   * to every provider query, required keywords are merged in, and clips are
+   * filtered post-hoc against the locked keyword set. Used to prevent
+   * "Basketball" campaigns from mixing in unrelated stock footage.
+   */
+  lockCategory?: boolean;
   mood?: string;
   portraitOnly?: boolean;
   minDurationSec?: number;
@@ -53,6 +60,7 @@ function normalizeSettings(settings?: StockSettings): Required<StockSettings> {
     keywords: settings?.keywords ?? [],
     negativeKeywords: settings?.negativeKeywords ?? [],
     category: settings?.category ?? "",
+    lockCategory: settings?.lockCategory ?? false,
     mood: settings?.mood ?? "",
     portraitOnly: settings?.portraitOnly ?? true,
     minDurationSec: Math.max(1, Number(settings?.minDurationSec ?? DEFAULT_TARGET_DURATION - 1)),
@@ -64,7 +72,10 @@ function normalizeSettings(settings?: StockSettings): Required<StockSettings> {
 }
 
 function buildQuery(query: string, settings: Required<StockSettings>): string {
-  const terms = [query, settings.category, settings.mood, ...settings.keywords]
+  // When locked, the category is prepended verbatim so providers cannot
+  // out-rank it with broader matches.
+  const head = settings.lockCategory && settings.category ? settings.category : "";
+  const terms = [head, query, settings.category, settings.mood, ...settings.keywords]
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
@@ -79,6 +90,7 @@ function buildQuery(query: string, settings: Required<StockSettings>): string {
   }
   return cleaned.replace(/\s+/g, " ").trim().slice(0, 100) || "cinematic vertical lifestyle music";
 }
+
 
 function aspectScore(width: number, height: number): number {
   if (!width || !height) return 0;
