@@ -76,10 +76,15 @@ export function UploadStep({
               onAudioFile(file);
               onTrimmedAudio(null);
             }}
-            required={!trimmedAudio}
+            required={!trimmedAudio && !templateProvidesAudio}
           />
         </label>
         <div className="banner">You must have rights to publish this audio.</div>
+        {templateProvidesAudio && !audioFile && !trimmedAudio ? (
+          <div className="banner">
+            Using audio from the selected lyric template. Upload a file only to replace it.
+          </div>
+        ) : null}
         {uploadError ? <div className="banner bad">{uploadError}</div> : null}
         {audioFile ? (
           <AudioTrimmer
