@@ -2,17 +2,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { EventDropArg } from "@fullcalendar/core";
 import {
   CalendarDays,
-  Images,
   PlugZap,
   RefreshCcw,
   Send,
-  Sparkles,
   UploadCloud,
   WandSparkles,
 } from "lucide-react";
-import { Link } from "react-router-dom";
-import AutopilotPanel from "@/components/AutopilotPanel";
 import AutopilotWizard from "@/components/AutopilotWizard";
+import BulkScheduleDialog from "@/components/calendar/BulkScheduleDialog";
+import StudioCalendarPanel from "@/components/studio/StudioCalendarPanel";
+import StudioPostReview from "@/components/studio/StudioPostReview";
+import StudioReadyLibraryPanel from "@/components/studio/StudioReadyLibraryPanel";
+import { SUPABASE_URL } from "@/integrations/supabase/client";
+
 import BulkScheduleDialog from "@/components/calendar/BulkScheduleDialog";
 import StudioCalendarPanel from "@/components/studio/StudioCalendarPanel";
 import StudioPostReview from "@/components/studio/StudioPostReview";
