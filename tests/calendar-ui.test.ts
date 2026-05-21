@@ -119,6 +119,7 @@ describe("calendar post UI helpers", () => {
 
   it("formats publish statuses for the post review sheet", () => {
     expect(publishStatusLabel("blocked_missing_privacy")).toBe("blocked missing privacy");
+    expect(publishStatusLabel("blocked_review_required")).toBe("blocked review required");
     expect(publishStatusLabel("regenerated")).toBe("regenerated");
     expect(publishStatusLabel(null)).toBe("not sent");
   });

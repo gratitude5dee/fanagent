@@ -206,6 +206,7 @@ describe("campaign response envelopes", () => {
       audioAsset: { id: "asset-1" },
       video_library_items: [{ id: "library-1" }],
       items: [{ id: "item-1" }, { id: "item-2" }],
+      posts: [{ id: "post-1" }, { id: "post-2" }],
     });
 
     expect(normalized).toEqual({
@@ -214,8 +215,21 @@ describe("campaign response envelopes", () => {
       audio_asset: { id: "asset-1" },
       video_library_items: [{ id: "library-1" }],
       items: [{ id: "item-1" }, { id: "item-2" }],
+      posts: [{ id: "post-1" }, { id: "post-2" }],
       items_total: 2,
     });
+  });
+
+  it("splits immediate rendering from draft calendar scheduling during batch creation", () => {
+    const source = readFileSync("supabase/functions/create-generation-batch/index.ts", "utf8");
+
+    expect(source).toContain("autoDraftSchedule");
+    expect(source).toContain('publish_status: "blocked_render_not_ready"');
+    expect(source).toContain("const renderSchedule = input.autoRender");
+    expect(source).toContain("const draftSchedule = buildSchedule(input.startAt");
+    expect(source).toContain("scheduledAt: draftSchedule");
+    expect(source).toContain('.from("posts").insert(draftRows)');
+    expect(source).toContain(".update({ post_id: post.id");
   });
 
   it("returns the spec snake_case audio objects from create-generation-batch", () => {

@@ -58,6 +58,12 @@ function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function integerValue(value: unknown, fallback: number, min: number, max: number): number {
+  const numeric = Number(value ?? fallback);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(min, Math.min(Math.floor(numeric), max));
+}
+
 type SupabaseAdmin = ReturnType<typeof getSupabaseAdmin>;
 
 type RegenerationItemRow = {
@@ -457,6 +463,49 @@ async function callWorker(name: string, body: unknown): Promise<Response> {
   });
 }
 
+function waitUntilBackground(task: Promise<unknown>): void {
+  const runtime = (
+    globalThis as typeof globalThis & {
+      EdgeRuntime?: { waitUntil?: (promise: Promise<unknown>) => void };
+    }
+  ).EdgeRuntime;
+  const guarded = task.catch((error) => {
+    console.error("[fanpage-campaign] background worker pump failed", error);
+  });
+  if (typeof runtime?.waitUntil === "function") runtime.waitUntil(guarded);
+  else void guarded;
+}
+
+async function pumpGenerationWorkers(input: {
+  batchId?: string | null;
+  passes?: number;
+  maxItems?: number;
+}): Promise<{ passes: number; processed: number; errors: number }> {
+  const passes = integerValue(input.passes, 6, 1, 12);
+  const maxItems = integerValue(input.maxItems, 3, 1, 10);
+  let processed = 0;
+  let errors = 0;
+
+  for (let pass = 0; pass < passes; pass += 1) {
+    const response = await callWorker("fanpage-generate-due", {
+      ...(input.batchId ? { batchId: input.batchId } : {}),
+      maxItems,
+    });
+    const json = await readJson(response);
+    if (!response.ok) {
+      throw childError(json, "fanpage-generate-due failed");
+    }
+    const data = record(unwrapEnvelopeData(json));
+    const passProcessed = Number(data.processed ?? 0);
+    const passErrors = Number(data.errors ?? 0);
+    processed += Number.isFinite(passProcessed) ? passProcessed : 0;
+    errors += Number.isFinite(passErrors) ? passErrors : 0;
+    if (!Number.isFinite(passProcessed) || passProcessed < 1) break;
+  }
+
+  return { passes, processed, errors };
+}
+
 Deno.serve(async (request) => {
   const opt = handleOptions(request);
   if (opt) return opt;
@@ -790,8 +839,14 @@ Deno.serve(async (request) => {
         if (batchId) {
           callChild("generate-video-prompts", { batchId }).catch(() => {});
         }
-        if (record(data.batch).auto_render === true) {
-          callWorker("fanpage-generate-due", {}).catch(() => {});
+        if (record(data.batch).auto_render === true && batchId) {
+          waitUntilBackground(
+            pumpGenerationWorkers({
+              batchId,
+              passes: integerValue(body.passes, 6, 1, 12),
+              maxItems: integerValue(body.maxItems, 3, 1, 10),
+            }),
+          );
         }
         return okEnvelope(data, "Campaign created.");
       }
@@ -808,16 +863,12 @@ Deno.serve(async (request) => {
       }
 
       case "runGenerationWorkers": {
-        const res = await callWorker("fanpage-generate-due", {});
-        const json = await readJson(res);
-        if (!res.ok) {
-          return errorEnvelope(
-            childError(json, "fanpage-generate-due failed"),
-            "GENERATION_WORKER_FAILED",
-            res.status,
-          );
-        }
-        return okEnvelope(unwrapEnvelopeData(json));
+        const result = await pumpGenerationWorkers({
+          batchId: stringValue(body.batchId),
+          passes: integerValue(body.passes, 1, 1, 12),
+          maxItems: integerValue(body.maxItems, 3, 1, 10),
+        });
+        return okEnvelope(result);
       }
 
       case "runPublishWorker": {

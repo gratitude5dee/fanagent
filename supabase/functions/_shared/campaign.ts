@@ -82,9 +82,8 @@ export function buildCampaignCreateBatchPayload(body: UnknownRecord): UnknownRec
 export function normalizeCampaignCreateResponse(rawResponse: unknown): UnknownRecord {
   const data = record(unwrapEnvelopeData(rawResponse));
   const items = Array.isArray(data.items) ? data.items : [];
-  const videoLibraryItems = Array.isArray(data.video_library_items)
-    ? data.video_library_items
-    : [];
+  const videoLibraryItems = Array.isArray(data.video_library_items) ? data.video_library_items : [];
+  const posts = Array.isArray(data.posts) ? data.posts : [];
   const itemsTotal = Number.isFinite(Number(data.items_total))
     ? Number(data.items_total)
     : items.length || videoLibraryItems.length;
@@ -95,6 +94,7 @@ export function normalizeCampaignCreateResponse(rawResponse: unknown): UnknownRe
     audio_asset: data.audio_asset ?? data.audioAsset ?? null,
     video_library_items: videoLibraryItems,
     items,
+    posts,
     items_total: itemsTotal,
   };
 }

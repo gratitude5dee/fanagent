@@ -176,6 +176,7 @@ type CampaignCreateResponse = {
   audio_asset?: { id?: string | null } | null;
   items?: Array<{ id?: string | null }>;
   video_library_items?: Array<{ id?: string | null }>;
+  posts?: Array<{ id?: string | null }>;
   items_total?: number;
 };
 
@@ -725,6 +726,7 @@ export function AutopilotProvider({
       subcategorySlug: randomize ? null : subcategorySlug || null,
       randomize,
       autoRender,
+      autoDraftSchedule: true,
       durationSeconds: duration,
       dedupeStrategy,
       postCount,

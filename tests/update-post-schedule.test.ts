@@ -21,4 +21,17 @@ describe("update-post-schedule TikTok options", () => {
     expect(source).toContain("const maxFuture = now + 90 * 24 * 60 * 60 * 1000");
     expect(source).toContain("scheduledAt cannot be more than 90 days in the future.");
   });
+
+  it("promotes reviewed posts only when render, privacy, and TikTok are ready", () => {
+    const source = readFileSync("supabase/functions/update-post-schedule/index.ts", "utf8");
+
+    expect(source).toContain("function publishReadiness");
+    expect(source).toContain('status: "blocked_render_not_ready"');
+    expect(source).toContain('status: "blocked_missing_privacy"');
+    expect(source).toContain('status: "blocked_account_not_connected"');
+    expect(source).toContain('return { status: "ready", message: null }');
+    expect(source).toContain("update.publish_status = readiness.status");
+    expect(source).toContain('.update({ status: "scheduled"');
+    expect(source).toContain('.eq("status", "ready")');
+  });
 });

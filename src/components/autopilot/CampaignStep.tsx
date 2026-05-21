@@ -127,7 +127,7 @@ export function CampaignStep(props: CampaignStepProps) {
 
         <div className="split">
           <label>
-            Posts to queue
+            Videos to generate
             <input
               type="number"
               min={1}
@@ -140,7 +140,7 @@ export function CampaignStep(props: CampaignStepProps) {
         </div>
         <div className="split schedule-split">
           <label>
-            First post
+            Draft calendar start
             <input
               type="datetime-local"
               value={props.startAt}
@@ -148,7 +148,7 @@ export function CampaignStep(props: CampaignStepProps) {
             />
           </label>
           <label>
-            Cadence min
+            Draft cadence min
             <input
               type="number"
               min={5}
@@ -359,7 +359,7 @@ export function CampaignStep(props: CampaignStepProps) {
             type="submit"
           >
             {props.busy ? <Loader2 className="spin" size={16} /> : <CalendarClock size={16} />}{" "}
-            {props.submitLabel ?? "Generate library"}
+            {props.submitLabel ?? "Generate videos"}
           </button>
         )}
       </div>

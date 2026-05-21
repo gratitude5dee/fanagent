@@ -64,6 +64,8 @@ describe("regenerate lyric template guard", () => {
     const source = readFileSync("supabase/functions/fanpage-campaign/index.ts", "utf8");
 
     expect(source).toContain("record(data.batch).auto_render === true");
-    expect(source).toContain('callWorker("fanpage-generate-due", {})');
+    expect(source).toContain("waitUntilBackground");
+    expect(source).toContain("pumpGenerationWorkers({");
+    expect(source).toContain("batchId");
   });
 });

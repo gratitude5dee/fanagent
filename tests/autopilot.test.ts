@@ -83,6 +83,18 @@ describe("Autopilot wizard structure", () => {
     expect(uploadStep).toContain("You must have rights to publish this audio.");
   });
 
+  it("labels campaign launch as immediate video generation with draft calendar slots", () => {
+    const context = readFileSync("src/pages/autopilot/AutopilotContext.tsx", "utf8");
+    const campaignStep = readFileSync("src/components/autopilot/CampaignStep.tsx", "utf8");
+    const reviewPage = readFileSync("src/pages/autopilot/steps/ReviewPage.tsx", "utf8");
+
+    expect(context).toContain("autoDraftSchedule: true");
+    expect(campaignStep).toContain("Videos to generate");
+    expect(campaignStep).toContain("Draft calendar start");
+    expect(campaignStep).toContain("Draft cadence min");
+    expect(reviewPage).toContain("draft every");
+  });
+
   it("exposes recovery for failed generation items surfaced by diagnostics", () => {
     const context = readFileSync("src/pages/autopilot/AutopilotContext.tsx", "utf8");
     const connectPage = readFileSync("src/pages/autopilot/steps/ConnectPage.tsx", "utf8");

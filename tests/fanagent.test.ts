@@ -448,6 +448,20 @@ describe("generation reliability fixes", () => {
     expect(migration).toContain("Prioritizes in-progress work and batches closest");
   });
 
+  it("adds batch-scoped queue claims and post indexes for immediate campaign rendering", () => {
+    const migration = readFileSync(
+      "supabase/migrations/20260521162606_fanagent_immediate_render_draft_slots.sql",
+      "utf8",
+    );
+
+    expect(migration).toContain("p_batch_id uuid default null");
+    expect(migration).toContain("and (p_batch_id is null or gi.batch_id = p_batch_id)");
+    expect(migration).toContain("public.claim_generation_items(integer, text, integer, uuid)");
+    expect(migration).toContain("idx_posts_library_item_id");
+    expect(migration).toContain("idx_posts_generation_item_id");
+    expect(migration).toContain("idx_posts_pending_blocked_schedule");
+  });
+
   it("clears stale lock owner labels after retryable worker errors", () => {
     const migration = readFileSync(
       "supabase/migrations/20260519140000_fanagent_clear_stale_lock_owner.sql",
@@ -477,8 +491,10 @@ describe("generation reliability fixes", () => {
   it("keeps generation worker limits env-bounded and envelope-shaped", () => {
     const workerSource = readFileSync("supabase/functions/fanpage-generate-due/index.ts", "utf8");
 
-    expect(workerSource).toContain("function maxPerRun()");
+    expect(workerSource).toContain("function maxPerRun(override?: unknown)");
     expect(workerSource).toContain('"FANAGENT_GENERATE_MAX_PER_RUN"');
+    expect(workerSource).toContain("body.maxItems");
+    expect(workerSource).toContain("p_batch_id: batchId ?? null");
     expect(workerSource).toContain("function childTimeoutMs()");
     expect(workerSource).toContain('"FANAGENT_CHILD_TIMEOUT_MS"');
     expect(workerSource).toContain("105_000");
@@ -487,12 +503,11 @@ describe("generation reliability fixes", () => {
     expect(workerSource).toContain("signal: controller.signal");
     expect(workerSource).toContain("timed out after");
     expect(workerSource).toContain("timed\\s+out");
-    expect(workerSource).toContain("Math.max(1, Math.min(Math.floor(configured), 3))");
-    expect(workerSource).toContain("claimDueItems(maxItems)");
+    expect(workerSource).toContain("Math.max(1, Math.min(Math.floor(configured), 10))");
+    expect(workerSource).toContain("claimDueItems(maxItems, body.batchId)");
     expect(workerSource).toContain("locked_by: null");
-    expect(workerSource).toContain(
-      "okEnvelope({ processed, errors, errorList, maxPerRun: maxItems })",
-    );
+    expect(workerSource).toContain("okEnvelope({");
+    expect(workerSource).toContain("batchId: body.batchId ?? null");
     expect(workerSource).toContain(
       'errorEnvelope("Unauthorized cron call", "UNAUTHORIZED_CRON", 401)',
     );
@@ -796,6 +811,19 @@ describe("generation reliability fixes", () => {
     expect(karaokeSource).toContain("perceptual_hash: perceptualHash");
     expect(karaokeSource).toContain('perceptual_hash_kind: "sha256_64_content_fingerprint"');
     expect(karaokeSource).toContain("perceptual_hash: rendered.perceptualHash");
+  });
+
+  it("hydrates draft calendar posts when library finalize marks a render ready", () => {
+    const finalizeSource = readFileSync("supabase/functions/library-finalize/index.ts", "utf8");
+
+    expect(finalizeSource).toContain("async function hydrateDraftPosts");
+    expect(finalizeSource).toContain('publishStatus = needsReview ? "blocked_review_required"');
+    expect(finalizeSource).toContain("final_asset_id: input.finalAssetId");
+    expect(finalizeSource).toContain("video_url: input.videoUrl");
+    expect(finalizeSource).toContain(
+      "Render complete. Review and save this post before publishing.",
+    );
+    expect(finalizeSource).toContain("await hydrateDraftPosts({");
   });
 });
 

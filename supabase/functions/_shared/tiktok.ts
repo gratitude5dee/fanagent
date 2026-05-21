@@ -5,6 +5,8 @@ const apiBase = "https://open.tiktokapis.com";
 const authBase = "https://www.tiktok.com/v2/auth/authorize/";
 
 export type TikTokPublishBlockStatus =
+  | "blocked_render_not_ready"
+  | "blocked_review_required"
   | "blocked_account_not_connected"
   | "blocked_missing_privacy"
   | "blocked_creator_restriction"

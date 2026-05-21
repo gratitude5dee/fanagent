@@ -51,6 +51,44 @@ function assertWithinScheduleWindow(scheduledAt: Date): void {
   }
 }
 
+async function hasTikTokConnection(accountId: string): Promise<boolean> {
+  const supabase = getSupabaseAdmin();
+  const account = await supabase
+    .from("accounts")
+    .select("tiktok_access_token_encrypted,tiktok_connected_at")
+    .eq("id", accountId)
+    .maybeSingle();
+  if (account.error) throw account.error;
+  return Boolean(account.data?.tiktok_access_token_encrypted || account.data?.tiktok_connected_at);
+}
+
+function publishReadiness(input: {
+  finalAssetId?: string | null;
+  videoUrl?: string | null;
+  privacyLevel?: string | null;
+  tiktokConnected: boolean;
+}): { status: string; message: string | null } {
+  if (!input.finalAssetId && !input.videoUrl) {
+    return {
+      status: "blocked_render_not_ready",
+      message: "Video is still rendering. Review the post after the render finishes.",
+    };
+  }
+  if (!input.privacyLevel) {
+    return {
+      status: "blocked_missing_privacy",
+      message: "Choose a TikTok privacy level before publishing.",
+    };
+  }
+  if (!input.tiktokConnected) {
+    return {
+      status: "blocked_account_not_connected",
+      message: "Connect TikTok to auto-post.",
+    };
+  }
+  return { status: "ready", message: null };
+}
+
 Deno.serve(async (request) => {
   const options = handleOptions(request);
   if (options) return options;
@@ -65,7 +103,9 @@ Deno.serve(async (request) => {
     const supabase = getSupabaseAdmin();
     const current = await supabase
       .from("posts")
-      .select("id,status,privacy_settings")
+      .select(
+        "id,status,privacy_settings,account_id,library_item_id,final_asset_id,video_url,tiktok_privacy_level",
+      )
       .eq("id", body.postId)
       .single();
     if (current.error) throw current.error;
@@ -123,6 +163,20 @@ Deno.serve(async (request) => {
       };
     }
 
+    const nextPrivacyLevel =
+      body.privacyLevel === undefined
+        ? current.data.tiktok_privacy_level
+        : body.privacyLevel || null;
+    const readiness = publishReadiness({
+      finalAssetId: current.data.final_asset_id,
+      videoUrl: current.data.video_url,
+      privacyLevel: nextPrivacyLevel,
+      tiktokConnected: await hasTikTokConnection(current.data.account_id),
+    });
+    update.publish_status = readiness.status;
+    update.publish_error = readiness.message;
+    update.error_message = readiness.message;
+
     const updated = await supabase
       .from("posts")
       .update(update)
@@ -130,6 +184,15 @@ Deno.serve(async (request) => {
       .select("*")
       .single();
     if (updated.error) throw updated.error;
+
+    if (readiness.status === "ready" && current.data.library_item_id) {
+      const library = await supabase
+        .from("video_library_items")
+        .update({ status: "scheduled", updated_at: new Date().toISOString() })
+        .eq("id", current.data.library_item_id)
+        .eq("status", "ready");
+      if (library.error) throw library.error;
+    }
 
     return okEnvelope({ post: updated.data });
   } catch (error) {

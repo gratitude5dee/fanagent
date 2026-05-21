@@ -1,10 +1,11 @@
 import { useNavigate } from "react-router-dom";
-import type { CampaignBatch, CampaignPost } from "@/lib/campaigns/api";
+import type { CampaignBatch, CampaignItem, CampaignPost } from "@/lib/campaigns/api";
 import { appRoutes } from "@/lib/routes";
 import CampaignRowActions from "./CampaignRowActions";
 
 type CampaignsTableProps = {
   batches: CampaignBatch[];
+  items: CampaignItem[];
   posts: CampaignPost[];
   accountLabel: (accountId?: string | null) => string;
   busy?: boolean;
@@ -22,6 +23,7 @@ function statusTone(batch: CampaignBatch): string {
 
 export default function CampaignsTable({
   batches,
+  items,
   posts,
   accountLabel,
   busy = false,
@@ -57,6 +59,10 @@ export default function CampaignsTable({
         ) : (
           batches.map((batch) => {
             const batchPosts = posts.filter((post) => post.batch_id === batch.id);
+            const batchItems = items.filter((item) => item.batch_id === batch.id);
+            const readyCount = batchItems.filter((item) =>
+              ["complete", "ready"].includes(item.status),
+            ).length;
             return (
               <div
                 className="campaigns-table__row"
@@ -78,14 +84,16 @@ export default function CampaignsTable({
                   <span>{batch.prompt || batch.id.slice(0, 8)}</span>
                 </div>
                 <div>
-                  <strong>{batch.post_count} posts</strong>
-                  <span>every {batch.cadence_minutes}m</span>
+                  <strong>{batch.post_count} videos</strong>
+                  <span>draft every {batch.cadence_minutes}m</span>
                 </div>
                 <div>
                   <span className={`status-pill ${statusTone(batch)}`}>
                     {batch.paused_at ? "paused" : batch.status}
                   </span>
-                  <span>{batchPosts.length} queued posts</span>
+                  <span>
+                    {readyCount}/{batch.post_count} ready · {batchPosts.length} draft slots
+                  </span>
                 </div>
                 <div>{accountLabel(batch.account_id)}</div>
                 <div>{new Date(batch.created_at).toLocaleString()}</div>

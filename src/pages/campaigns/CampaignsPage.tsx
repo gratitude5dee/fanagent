@@ -81,6 +81,7 @@ export default function CampaignsPage() {
       />
       <CampaignsTable
         batches={filtered}
+        items={campaigns.items}
         posts={campaigns.posts}
         accountLabel={accountLabel}
         busy={campaigns.loading}

@@ -38,7 +38,7 @@ export default function ReviewPage() {
             <CalendarClock size={16} />
             <span>Schedule</span>
             <strong>
-              {ctx.postCount} posts · every {ctx.cadenceMinutes}m
+              {ctx.postCount} videos · draft every {ctx.cadenceMinutes}m
             </strong>
           </div>
         </div>
@@ -59,7 +59,7 @@ export default function ReviewPage() {
             <div>
               <strong>Campaign settings</strong>
               <span>
-                {ctx.isCampaignFormComplete ? ctx.prompt : "Complete schedule and prompt"}
+                {ctx.isCampaignFormComplete ? ctx.prompt : "Complete draft schedule and prompt"}
               </span>
             </div>
           </div>

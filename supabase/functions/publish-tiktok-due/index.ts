@@ -304,6 +304,12 @@ function blockedRescanCutoff(minutes: number | undefined): number | null {
 }
 
 function isEligiblePendingPost(post: Post, cutoff: number | null): boolean {
+  if (
+    post.publish_status === "blocked_render_not_ready" ||
+    post.publish_status === "blocked_review_required"
+  ) {
+    return false;
+  }
   if (!isBlockedPublishStatus(post.publish_status)) return true;
   if (cutoff === null) return false;
   const changedAt = Date.parse(post.updated_at ?? post.scheduled_at);

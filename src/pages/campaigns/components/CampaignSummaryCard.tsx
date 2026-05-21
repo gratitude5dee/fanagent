@@ -15,7 +15,7 @@ export default function CampaignSummaryCard({
   lyricTemplateTitle,
 }: CampaignSummaryCardProps) {
   const failed = items.filter((item) => item.status === "failed").length;
-  const ready = items.filter((item) => item.status === "ready").length;
+  const ready = items.filter((item) => ["complete", "ready"].includes(item.status)).length;
   return (
     <section className="panel">
       <div className="panel-title">
@@ -30,9 +30,9 @@ export default function CampaignSummaryCard({
         </div>
         <div className="campaign-summary-metric">
           <CalendarClock size={16} />
-          <span>Queue</span>
+          <span>Library</span>
           <strong>
-            {ready}/{items.length} ready · {posts.length} posts
+            {ready}/{items.length} ready · {posts.length} draft slots
           </strong>
         </div>
         <div className="campaign-summary-metric">

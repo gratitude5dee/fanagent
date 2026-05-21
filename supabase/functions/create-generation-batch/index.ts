@@ -44,6 +44,7 @@ type CreateBatchRequest = {
   subcategorySlug?: string | null;
   randomize?: boolean;
   autoRender?: boolean;
+  autoDraftSchedule?: boolean;
 };
 
 const supportedAudio = new Set([
@@ -66,24 +67,20 @@ function validatePayload(body: CreateBatchRequest) {
     1,
     Math.min(Math.floor(Number(body.quantity ?? body.count ?? body.postCount ?? 1)), 250),
   );
-  // Default to auto-render when a lyric template is attached — the user has
-  // already curated the audio + captions and expects videos to populate the
-  // library immediately (not wait for a cron-driven scheduled post).
   const autoRender =
     typeof body.autoRender === "boolean" ? body.autoRender : !!body.lyricTemplateId;
-  // Auto-render mode bypasses scheduling: items are claimed by the worker
-  // immediately and rendered back-to-back into the library (no post rows).
-  const cadenceMinutes = autoRender
-    ? 5
-    : Math.max(5, Math.min(Math.floor(Number(body.cadenceMinutes ?? 240)), 10_080));
+  const autoDraftSchedule = body.autoDraftSchedule !== false;
+  const cadenceMinutes = Math.max(
+    5,
+    Math.min(Math.floor(Number(body.cadenceMinutes ?? 240)), 10_080),
+  );
   const allowedDurations = [15, 30, 45, 60, 75, 90];
   const requestedDuration = Math.floor(Number(body.durationSeconds ?? 15));
   const durationSeconds = allowedDurations.includes(requestedDuration) ? requestedDuration : 15;
   const sourceMode = normalizeSourceMode(body.sourceMode);
   const audioMimeType = body.audioMimeType || "audio/mpeg";
-  const startAt = autoRender
-    ? new Date(Date.now() - 60_000)
-    : new Date(body.startAt ?? Date.now() + 30 * 60_000);
+  const startAt = new Date(body.startAt ?? Date.now() + 30 * 60_000);
+  const renderStartAt = autoRender ? new Date(Date.now() - 60_000) : startAt;
   const clipSelection =
     normalizeClipSelection(body.clipSelection, durationSeconds, body.audioFileName) ??
     (body.audioClipId
@@ -132,6 +129,7 @@ function validatePayload(body: CreateBatchRequest) {
     sourceMode,
     prompt: body.prompt || "music-driven fan edit with cinematic lifestyle visuals",
     startAt,
+    renderStartAt,
     timezone: body.timezone || "America/Los_Angeles",
     durationSeconds,
     durationTolerance,
@@ -157,6 +155,101 @@ function validatePayload(body: CreateBatchRequest) {
     subcategorySlug: body.subcategorySlug ?? null,
     randomize: body.randomize === true,
     autoRender,
+    autoDraftSchedule,
+  };
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function bool(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String).filter(Boolean).slice(0, 20) : [];
+}
+
+function buildDraftPostRow(input: {
+  accountId: string;
+  batchId: string;
+  item: Record<string, unknown>;
+  scheduledAt: Date;
+  publishDefaults: Record<string, unknown>;
+}): Record<string, unknown> {
+  const payload = record(input.item.input_payload);
+  const promptPlan = record(payload.prompt_plan);
+  const publishDefaults = input.publishDefaults;
+  const privacyLevel = String(
+    publishDefaults.privacyLevel ?? publishDefaults.privacy_level ?? "SELF_ONLY",
+  );
+  const caption =
+    String(promptPlan.caption ?? publishDefaults.caption ?? "sound on").trim() || "sound on";
+  return {
+    account_id: input.accountId,
+    batch_id: input.batchId,
+    generation_item_id: input.item.id,
+    library_item_id: input.item.library_item_id ?? null,
+    final_asset_id: null,
+    video_url: null,
+    caption: caption.slice(0, 2200),
+    hashtags: stringArray(promptPlan.hashtags ?? publishDefaults.hashtags),
+    hook_text: typeof promptPlan.hookText === "string" ? promptPlan.hookText : null,
+    scheduled_at: input.scheduledAt.toISOString(),
+    status: "pending",
+    publish_status: "blocked_render_not_ready",
+    publish_error: "Video is still rendering. Review the post after the render finishes.",
+    error_message: "Video is still rendering. Review the post after the render finishes.",
+    platform: "tiktok",
+    post_type: "video",
+    tiktok_privacy_level: privacyLevel,
+    tiktok_disable_duet: bool(publishDefaults.disableDuet ?? publishDefaults.disable_duet, true),
+    tiktok_disable_stitch: bool(
+      publishDefaults.disableStitch ?? publishDefaults.disable_stitch,
+      true,
+    ),
+    tiktok_disable_comment: bool(
+      publishDefaults.disableComment ?? publishDefaults.disable_comment,
+      false,
+    ),
+    tiktok_is_aigc: bool(publishDefaults.isAigc ?? publishDefaults.is_aigc, true),
+    tiktok_brand_content: bool(
+      publishDefaults.brandContentToggle ?? publishDefaults.brand_content_toggle,
+      false,
+    ),
+    tiktok_brand_organic: bool(
+      publishDefaults.brandOrganicToggle ?? publishDefaults.brand_organic_toggle,
+      false,
+    ),
+    privacy_settings: {
+      privacy_level: privacyLevel,
+      disable_duet: bool(publishDefaults.disableDuet ?? publishDefaults.disable_duet, true),
+      disable_stitch: bool(publishDefaults.disableStitch ?? publishDefaults.disable_stitch, true),
+      disable_comment: bool(
+        publishDefaults.disableComment ?? publishDefaults.disable_comment,
+        false,
+      ),
+      is_aigc: bool(publishDefaults.isAigc ?? publishDefaults.is_aigc, true),
+      brand_content_toggle: bool(
+        publishDefaults.brandContentToggle ?? publishDefaults.brand_content_toggle,
+        false,
+      ),
+      brand_organic_toggle: bool(
+        publishDefaults.brandOrganicToggle ?? publishDefaults.brand_organic_toggle,
+        false,
+      ),
+    },
+    metadata: {
+      draft_schedule: true,
+      review_required: true,
+      audio_clip_id: input.item.audio_clip_id ?? null,
+      library_item_id: input.item.library_item_id ?? null,
+      generation_item_id: input.item.id,
+      duration_seconds: input.item.duration_seconds ?? null,
+    },
   };
 }
 
@@ -371,7 +464,10 @@ Deno.serve(async (request) => {
       (insertedLibraryItems.data ?? []).map((row, idx) => [idx, row]),
     );
 
-    const schedule = buildSchedule(input.startAt, input.count, input.cadenceMinutes);
+    const renderSchedule = input.autoRender
+      ? Array.from({ length: input.count }, () => input.renderStartAt)
+      : buildSchedule(input.startAt, input.count, input.cadenceMinutes);
+    const draftSchedule = buildSchedule(input.startAt, input.count, input.cadenceMinutes);
     const modelId =
       input.sourceMode === "seedance" || input.sourceMode === "mixed"
         ? (optionalEnv("SEEDANCE_MODEL_ID") ?? "bytedance/seedance-2.0/fast/text-to-video")
@@ -379,7 +475,7 @@ Deno.serve(async (request) => {
           ? (optionalEnv("GMI_SEEDANCE_MODEL_ID") ?? "Seedance-2.0")
           : "stock-pipeline";
 
-    const items = schedule.map((scheduledAt, index) => {
+    const items = renderSchedule.map((scheduledAt, index) => {
       const libraryItem = libraryItemsByIndex.get(index);
       const promptPlan = createPromptPlan({
         basePrompt: input.prompt,
@@ -434,6 +530,38 @@ Deno.serve(async (request) => {
       if (linkedLibrary.error) throw linkedLibrary.error;
     }
 
+    let insertedPosts: Record<string, unknown>[] = [];
+    if (input.autoDraftSchedule) {
+      const draftRows = ((insertedItems.data ?? []) as Record<string, unknown>[]).map((item) =>
+        buildDraftPostRow({
+          accountId: input.accountId,
+          batchId: batch.data.id,
+          item,
+          scheduledAt: draftSchedule[Number(item.item_index ?? 0)] ?? input.startAt,
+          publishDefaults: input.publishDefaults,
+        }),
+      );
+      const drafts = draftRows.length
+        ? await supabase.from("posts").insert(draftRows).select("id,generation_item_id")
+        : { data: [], error: null };
+      if (drafts.error) throw drafts.error;
+      insertedPosts = (drafts.data ?? []) as Record<string, unknown>[];
+
+      for (const post of insertedPosts) {
+        const generationItemId =
+          typeof post.generation_item_id === "string" && post.generation_item_id
+            ? post.generation_item_id
+            : null;
+        if (!generationItemId) continue;
+        const linkedPost = await supabase
+          .from("generation_items")
+          .update({ post_id: post.id, updated_at: new Date().toISOString() })
+          .eq("id", generationItemId)
+          .is("post_id", null);
+        if (linkedPost.error) throw linkedPost.error;
+      }
+    }
+
     return okEnvelope({
       batch: batch.data,
       audio_clip: audioClip,
@@ -442,6 +570,7 @@ Deno.serve(async (request) => {
       audioAsset,
       video_library_items: insertedLibraryItems.data,
       items: insertedItems.data,
+      posts: insertedPosts,
       items_total: insertedItems.data?.length ?? 0,
     });
   } catch (error) {

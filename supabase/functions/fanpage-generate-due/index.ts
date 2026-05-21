@@ -61,6 +61,11 @@ type MediaAsset = {
   transcript?: unknown;
 };
 
+type RequestBody = {
+  batchId?: string;
+  maxItems?: number;
+};
+
 function fnUrl(name: string): string {
   return `${optionalEnv("SUPABASE_URL")}/functions/v1/${name}`;
 }
@@ -117,10 +122,10 @@ function isIdleTimeout(error: unknown): boolean {
   return /\b(IDLE_TIMEOUT|idle timeout|timeout limit|timed\s+out|504)\b/i.test(message);
 }
 
-function maxPerRun(): number {
-  const configured = Number(optionalEnv("FANAGENT_GENERATE_MAX_PER_RUN") ?? 1);
-  if (!Number.isFinite(configured)) return 1;
-  return Math.max(1, Math.min(Math.floor(configured), 3));
+function maxPerRun(override?: unknown): number {
+  const configured = Number(override ?? optionalEnv("FANAGENT_GENERATE_MAX_PER_RUN") ?? 3);
+  if (!Number.isFinite(configured)) return 3;
+  return Math.max(1, Math.min(Math.floor(configured), 10));
 }
 
 function gmiKey(): string {
@@ -507,12 +512,18 @@ async function failLinkedLibraryItem(item: GenerationItem, error: unknown): Prom
   if (failed.error) throw failed.error;
 }
 
-async function claimDueItems(limit: number) {
+async function readBody(request: Request): Promise<RequestBody> {
+  if (!request.body) return {};
+  return (await request.json().catch(() => ({}))) as RequestBody;
+}
+
+async function claimDueItems(limit: number, batchId?: string) {
   const supabase = getSupabaseAdmin();
   const claimed = await supabase.rpc("claim_generation_items", {
     p_limit: limit,
     p_worker_id: `${FUNCTION_NAME}-${crypto.randomUUID()}`,
     p_claim_window_minutes: 3,
+    p_batch_id: batchId ?? null,
   });
   if (claimed.error) throw claimed.error;
   return (claimed.data ?? []) as GenerationItem[];
@@ -532,8 +543,9 @@ Deno.serve(async (request) => {
 
   try {
     const supabase = getSupabaseAdmin();
-    const maxItems = maxPerRun();
-    const due = await claimDueItems(maxItems);
+    const body = await readBody(request);
+    const maxItems = maxPerRun(body.maxItems);
+    const due = await claimDueItems(maxItems, body.batchId);
 
     for (const row of due) {
       try {
@@ -580,8 +592,18 @@ Deno.serve(async (request) => {
       }
     }
 
-    await endWorkerRun(runId, processed, errors, { errors: errorList, maxPerRun: maxItems });
-    return okEnvelope({ processed, errors, errorList, maxPerRun: maxItems });
+    await endWorkerRun(runId, processed, errors, {
+      errors: errorList,
+      maxPerRun: maxItems,
+      batchId: body.batchId ?? null,
+    });
+    return okEnvelope({
+      processed,
+      errors,
+      errorList,
+      maxPerRun: maxItems,
+      batchId: body.batchId ?? null,
+    });
   } catch (error) {
     await endWorkerRun(runId, processed, errors + 1, {
       fatal: errorMessage(error),

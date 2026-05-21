@@ -83,6 +83,14 @@ describe("TikTok publish blocking", () => {
     expect(worker).toContain('publish_status: "retry_scheduled"');
   });
 
+  it("does not publish render or review blocked draft posts during blocked rescans", () => {
+    const worker = readFileSync("supabase/functions/publish-tiktok-due/index.ts", "utf8");
+
+    expect(worker).toContain('post.publish_status === "blocked_render_not_ready"');
+    expect(worker).toContain('post.publish_status === "blocked_review_required"');
+    expect(worker).toContain("return false;");
+  });
+
   it("returns publish result objects with publish ids and explicit error fields", () => {
     const worker = readFileSync("supabase/functions/publish-tiktok-due/index.ts", "utf8");
     const wrapper = readFileSync("supabase/functions/fanpage-publish-due/index.ts", "utf8");
