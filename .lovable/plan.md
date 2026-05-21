@@ -1,43 +1,23 @@
-# Fix sidebar theming + make TikTok connect optional
+# Stop the lyrics SAVE TEMPLATE bar from hiding behind the wizard footer
 
-## 1. Make TikTok connection optional
+## Cause
 
-**`src/pages/autopilot/steps.ts`** — change the `connect` step's `isComplete` from `(ctx) => ctx.isConnected` to `() => true`. This unlocks all downstream steps regardless of TikTok status. The Connect page still renders, still shows the connect/reconnect CTA, and `firstIncompleteStep` will now skip past connect to `upload` on first load.
+`LyricsTemplateBuilder` renders a floating action bar with `position: fixed; bottom: 16px` (`.lyr-footer` in `src/styles.css` line 1845), which holds the SAVE TEMPLATE button. The Autopilot wizard wraps the page in `AutopilotLayout`, whose `.autopilot-step-footer` is `position: sticky; bottom: 0` with `z-index: 10` (styles.css line 2518). When the lyrics step is rendered inside the wizard, the wizard's sticky Back/Continue bar paints on top of the floating SAVE TEMPLATE bar, so the user can't click it.
 
-**`src/pages/autopilot/steps/ConnectPage.tsx`** — add a small "Optional — you can connect later before publishing" helper line under the account row so users understand they can move on.
+## Fix (CSS only, in `src/styles.css`)
 
-**Redirect rule** — keep the existing `useAutopilotStepGuard`; with connect always complete, deep links work and `/autopilot` → `/autopilot/upload` (first incomplete) on fresh accounts. We accept this; the user wanted connect non-blocking.
+1. `.lyr-footer` — raise `bottom` from `16px` to `84px` so it floats above the ~64px-tall sticky wizard footer, and bump `z-index` from `10` to `20` so it always paints above it.
+2. `.lyr-help` — raise `bottom` from `24px` to `92px` and bump `z-index` to `20` so the floating help button doesn't end up under the wizard footer either.
+3. Add a tiny `padding-bottom: 96px` to `.autopilot-step-surface` so any non-floating content inside a step (when this lyrics builder is used standalone or other steps add buttons) keeps clearance from the sticky footer.
 
-(Publish path already requires `isConnected` server-side in `publish-tiktok-due`, so making the wizard step optional is safe.)
+No component / TSX changes needed; this is a pure layering fix.
 
-## 2. Sidebar matches the dark app shell
+## Verification
 
-The shadcn `Sidebar` reads `--sidebar` / `--sidebar-foreground` tokens. Currently `:root` sets them to light values (`oklch(0.984 …)` bg, near-black text), and the app never adds the `.dark` class to `<html>`, so the sidebar renders white while the rest of the app is painted dark by the custom `app-shell` / `wizard-shell` rules from `styles.css`.
-
-Two-line fix in **`src/styles.css`** `:root` block (around lines 90–97): override the sidebar tokens to match the app's dark surface tokens already defined elsewhere in the file:
-
-```
---sidebar: oklch(0.16 0.02 270);              /* same family as --bg-base #0a0a0f */
---sidebar-foreground: oklch(0.98 0 0);        /* white */
---sidebar-primary: oklch(0.58 0.20 290);      /* accent purple */
---sidebar-primary-foreground: oklch(0.98 0 0);
---sidebar-accent: oklch(0.22 0.03 270);       /* hover row */
---sidebar-accent-foreground: oklch(0.98 0 0);
---sidebar-border: oklch(1 0 0 / 8%);
---sidebar-ring: oklch(0.58 0.20 290);
-```
-
-**`src/components/AppSidebar.tsx`** — drop the hard-coded `hover:bg-muted/50` on the `NavLink` (it fights the sidebar tokens) and let `SidebarMenuButton`'s built-in hover state do the work. Also style the `.brand-block` wordmark to use `text-sidebar-foreground`.
-
-## 3. Verification
-
-- `/autopilot/connect` — "Continue" enabled even when TikTok is not connected; step pills 2-5 no longer `aria-disabled`.
-- Sidebar background is the same near-black as the main canvas; "FanAgent" wordmark and all nav items render white; active item uses the purple accent; hover row is a subtle lighter band.
-- No regression on `/clips`, `/library`, `/campaigns` — sidebar tokens are the only CSS touched.
+- `/autopilot/lyrics` — SAVE TEMPLATE pill visible above the wizard's Back/Continue bar and clickable; help bubble no longer obscured.
+- Standalone `/lyrics` route still renders the floating bar correctly (just 68px higher than before, still inside the viewport).
+- No regression to other autopilot steps (Connect, Upload, Campaign, Review) — they don't use `.lyr-footer`.
 
 ## Files
 
-- edit `src/pages/autopilot/steps.ts`
-- edit `src/pages/autopilot/steps/ConnectPage.tsx`
-- edit `src/styles.css` (sidebar token block only)
-- edit `src/components/AppSidebar.tsx`
+- edit `src/styles.css` (three small rule edits)
