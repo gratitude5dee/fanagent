@@ -1,4 +1,13 @@
-import { CalendarDays, Film, Images, Music, Settings, Sparkles, Zap } from "lucide-react";
+import {
+  CalendarDays,
+  Film,
+  Images,
+  Megaphone,
+  Music,
+  Settings,
+  Sparkles,
+  Zap,
+} from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Sidebar,
@@ -11,7 +20,8 @@ import {
 } from "@/components/ui/sidebar";
 
 const primary = [
-  { title: "Autopilot", url: "/", icon: Zap },
+  { title: "Autopilot", url: "/autopilot", icon: Zap },
+  { title: "Campaigns", url: "/campaigns", icon: Megaphone },
   { title: "Clips", url: "/clips", icon: Film },
   { title: "Library", url: "/library", icon: Images },
   { title: "Lyrics", url: "/lyrics", icon: Music },
@@ -27,11 +37,10 @@ export function AppSidebar() {
     if (query) {
       const params = new URLSearchParams(query);
       const here = new URLSearchParams(search);
-      return (
-        pathname === path &&
-        Array.from(params.entries()).every(([k, v]) => here.get(k) === v)
-      );
+      return pathname === path && Array.from(params.entries()).every(([k, v]) => here.get(k) === v);
     }
+    if (path === "/autopilot")
+      return pathname === "/autopilot" || pathname.startsWith("/autopilot/");
     if (path === "/") return pathname === "/" && !search.includes("mode=studio");
     return pathname === path || pathname.startsWith(`${path}/`);
   };

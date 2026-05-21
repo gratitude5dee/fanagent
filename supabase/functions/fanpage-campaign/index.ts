@@ -7,6 +7,7 @@
 //                                       → wraps create-generation-batch
 //   pause    { batchId }                → marks batch paused_at = now()
 //   resume   { batchId }                → clears paused_at
+//   cancel   { batchId }                → stops remaining queued work without schema changes
 //   skip     { itemId }                 → marks item skipped
 //   regenerate { itemId }              → resets item to pending so the worker reruns it
 //   markLibraryItemUnfit { libraryItemId, reason? }
@@ -21,7 +22,7 @@ import {
 } from "../_shared/campaign.ts";
 import { okEnvelope, errorEnvelope, unwrapEnvelopeData } from "../_shared/envelope.ts";
 import { optionalEnv } from "../_shared/env.ts";
-import { createRegenerationReset } from "../_shared/generation.ts";
+import { createRegenerationReset, validateTemplateForRender } from "../_shared/generation.ts";
 import { buildLibraryUnfitUpdate } from "../_shared/library.ts";
 import { getSupabaseAdmin } from "../_shared/supabase.ts";
 
@@ -223,7 +224,9 @@ async function loadStorageBucketNames(
       };
     }),
   );
-  const checkedNames = new Set(bucketChecks.filter((bucket) => bucket.ok).map((bucket) => bucket.name));
+  const checkedNames = new Set(
+    bucketChecks.filter((bucket) => bucket.ok).map((bucket) => bucket.name),
+  );
   if (checkedNames.size > 0) {
     const checkErrors = bucketChecks
       .filter((bucket) => !bucket.ok && bucket.error)
@@ -313,7 +316,7 @@ Deno.serve(async (request) => {
             supabase
               .from("generation_batches")
               .select(
-                "id,source_mode,status,post_count,cadence_minutes,paused_at,created_at,lyric_template_id",
+                "id,account_id,source_mode,status,post_count,cadence_minutes,paused_at,completed_at,created_at,prompt,lyric_template_id",
               )
               .order("created_at", { ascending: false })
               .limit(25),
@@ -324,7 +327,7 @@ Deno.serve(async (request) => {
             supabase
               .from("generation_items")
               .select(
-                "id,batch_id,status,scheduled_at,provider,prompt,segments,stock_clip_url,render_provider,error_message,lyric_template_id,stage_events",
+                "id,account_id,batch_id,item_index,library_item_id,status,scheduled_at,provider,prompt,segments,stock_clip_url,render_provider,error_message,lyric_template_id,stage_events",
               )
               .order("scheduled_at", { ascending: true })
               .limit(200),
@@ -334,7 +337,9 @@ Deno.serve(async (request) => {
             "list posts",
             supabase
               .from("posts")
-              .select("id,generation_item_id,caption,status,publish_status,scheduled_at,video_url")
+              .select(
+                "id,batch_id,generation_item_id,library_item_id,caption,status,publish_status,scheduled_at,video_url",
+              )
               .order("scheduled_at", { ascending: true })
               .limit(200),
             [],
@@ -357,7 +362,9 @@ Deno.serve(async (request) => {
           batches.error ? `batches: ${schemaErrorMessage(batches.error)}` : null,
           items.error ? `items: ${schemaErrorMessage(items.error)}` : null,
           posts.error ? `posts: ${schemaErrorMessage(posts.error)}` : null,
-          lyricTemplates.error ? `lyricTemplates: ${schemaErrorMessage(lyricTemplates.error)}` : null,
+          lyricTemplates.error
+            ? `lyricTemplates: ${schemaErrorMessage(lyricTemplates.error)}`
+            : null,
         ].filter(Boolean);
         return okEnvelope({
           account: account.data ?? null,
@@ -518,23 +525,28 @@ Deno.serve(async (request) => {
           .filter((check) => check.error && check.transient)
           .map((check) => check.error);
         const dataErrors = [
-          recentWorkerRuns.error ? `recent worker_runs: ${schemaErrorMessage(recentWorkerRuns.error)}` : null,
+          recentWorkerRuns.error
+            ? `recent worker_runs: ${schemaErrorMessage(recentWorkerRuns.error)}`
+            : null,
           recentFailedItems.error
             ? `recent failed generation_items: ${schemaErrorMessage(recentFailedItems.error)}`
             : null,
-          queueRows.error ? `generation item queue counts: ${schemaErrorMessage(queueRows.error)}` : null,
+          queueRows.error
+            ? `generation item queue counts: ${schemaErrorMessage(queueRows.error)}`
+            : null,
           blockedPublishRows.error
             ? `blocked publish counts: ${schemaErrorMessage(blockedPublishRows.error)}`
             : null,
-          accountRow.error ? `primary TikTok account: ${schemaErrorMessage(accountRow.error)}` : null,
+          accountRow.error
+            ? `primary TikTok account: ${schemaErrorMessage(accountRow.error)}`
+            : null,
         ].filter(Boolean);
         const latestWorkerRun = workerRuns[0] ?? null;
         const hasCurrentWorkerProblem =
           failedItems.length > 0 || Number(latestWorkerRun?.errors_count ?? 0) > 0;
-        const lastWorkerError =
-          hasCurrentWorkerProblem
-            ? (workerRuns.find((run) => Number(run.errors_count ?? 0) > 0)?.detail ?? null)
-            : null;
+        const lastWorkerError = hasCurrentWorkerProblem
+          ? (workerRuns.find((run) => Number(run.errors_count ?? 0) > 0)?.detail ?? null)
+          : null;
         const accountData = accountRow.data as {
           id: string;
           platform: string;
@@ -667,6 +679,44 @@ Deno.serve(async (request) => {
         return okEnvelope({ ok: true });
       }
 
+      case "cancel": {
+        const batchId = body.batchId as string | undefined;
+        if (!batchId) throw new Error("batchId required");
+        const now = new Date().toISOString();
+        const batch = await supabase
+          .from("generation_batches")
+          .update({
+            paused_at: now,
+            completed_at: now,
+            status: "failed",
+            error_message: "campaign canceled by user",
+            updated_at: now,
+          })
+          .eq("id", batchId);
+        if (batch.error) throw batch.error;
+
+        const items = await supabase
+          .from("generation_items")
+          .update({
+            status: "skipped",
+            error_message: "campaign canceled by user",
+            updated_at: now,
+          })
+          .eq("batch_id", batchId)
+          .neq("status", "ready")
+          .neq("status", "complete")
+          .neq("status", "skipped");
+        if (items.error) throw items.error;
+
+        const posts = await supabase
+          .from("posts")
+          .update({ status: "skipped", publish_status: "canceled", updated_at: now })
+          .eq("batch_id", batchId)
+          .neq("status", "posted");
+        if (posts.error) throw posts.error;
+        return okEnvelope({ ok: true });
+      }
+
       case "skip": {
         const itemId = body.itemId as string | undefined;
         if (!itemId) throw new Error("itemId required");
@@ -689,10 +739,31 @@ Deno.serve(async (request) => {
         if (!itemId) throw new Error("itemId required");
         const item = await supabase
           .from("generation_items")
-          .select("post_id,library_item_id")
+          .select("id,batch_id,post_id,library_item_id,lyric_template_id")
           .eq("id", itemId)
           .maybeSingle();
         if (item.error) throw item.error;
+        if (!item.data) throw new Error("Generation item not found.");
+        const batch = await supabase
+          .from("generation_batches")
+          .select("id,lyric_template_id")
+          .eq("id", item.data.batch_id)
+          .maybeSingle();
+        if (batch.error) throw batch.error;
+        const lyricTemplateId =
+          item.data.lyric_template_id ?? batch.data?.lyric_template_id ?? null;
+        if (lyricTemplateId) {
+          const template = await supabase
+            .from("kanvas_lyric_templates")
+            .select("id,status,lyric_blocks,trimmed_audio_asset_id")
+            .eq("id", lyricTemplateId)
+            .maybeSingle();
+          if (template.error) throw template.error;
+          const validation = validateTemplateForRender(template.data);
+          if (!validation.ok) {
+            return errorEnvelope(validation.message, validation.code, 400);
+          }
+        }
         if (item.data?.post_id) {
           const skippedPost = await supabase
             .from("posts")
@@ -753,9 +824,24 @@ Deno.serve(async (request) => {
         }
         const r = await supabase
           .from("generation_items")
-          .update({ ...createRegenerationReset(), attempt_count: 0 })
+          .update({
+            ...createRegenerationReset(),
+            lyric_template_id: lyricTemplateId,
+            attempt_count: 0,
+          })
           .eq("id", itemId);
         if (r.error) throw r.error;
+        const attempt = await supabase.from("render_attempts").insert({
+          generation_item_id: itemId,
+          stage: "karaoke",
+          status: "started",
+          provider: "user_regenerate",
+          detail: {
+            cause: "user_regenerate",
+            lyric_template_id: lyricTemplateId,
+          },
+        });
+        if (attempt.error) throw attempt.error;
         return okEnvelope({ ok: true });
       }
 

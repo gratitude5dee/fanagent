@@ -333,6 +333,44 @@ export function createRegenerationReset(
   };
 }
 
+export type TemplateRenderValidation =
+  | { ok: true }
+  | { ok: false; code: "LYRIC_TEMPLATE_NOT_RENDERABLE"; message: string };
+
+function templateRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+export function validateTemplateForRender(template: unknown): TemplateRenderValidation {
+  const record = templateRecord(template);
+  if (record.status !== "saved") {
+    return {
+      ok: false,
+      code: "LYRIC_TEMPLATE_NOT_RENDERABLE",
+      message: "Selected lyric template must be saved before it can render.",
+    };
+  }
+  if (!record.trimmed_audio_asset_id) {
+    return {
+      ok: false,
+      code: "LYRIC_TEMPLATE_NOT_RENDERABLE",
+      message:
+        "Selected lyric template is missing its trimmed audio asset. Open Lyrics and re-save the template.",
+    };
+  }
+  if (!Array.isArray(record.lyric_blocks) || record.lyric_blocks.length === 0) {
+    return {
+      ok: false,
+      code: "LYRIC_TEMPLATE_NOT_RENDERABLE",
+      message:
+        "Selected lyric template has no transcribed blocks. Open Lyrics and re-save the template.",
+    };
+  }
+  return { ok: true };
+}
+
 export function createPromptPlan(input: {
   basePrompt?: string;
   index: number;

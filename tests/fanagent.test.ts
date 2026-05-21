@@ -618,10 +618,12 @@ describe("generation reliability fixes", () => {
 
   it("pins Vite dev React chunks to one runtime identity", () => {
     const app = readFileSync("src/App.tsx", "utf8");
+    const main = readFileSync("src/main.tsx", "utf8");
     const viteConfig = readFileSync("vite.config.ts", "utf8");
 
-    expect(app).toContain('import AutopilotPanel from "@/components/AutopilotPanel"');
-    expect(app).not.toContain('lazy(() => import("@/components/AutopilotPanel"))');
+    expect(app).toContain('if (mode === "autopilot") return <Navigate');
+    expect(main).toContain('lazy(() => import("./pages/autopilot/AutopilotLayout"))');
+    expect(main).not.toContain('lazy(() => import("@/components/AutopilotPanel"))');
     expect(viteConfig).toContain('dedupe: ["react", "react-dom"]');
     expect(viteConfig).toContain("node_modules/react");
     expect(viteConfig).toContain("node_modules/react-dom");

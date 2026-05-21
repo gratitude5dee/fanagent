@@ -1,14 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { EventDropArg } from "@fullcalendar/core";
-import {
-  CalendarDays,
-  PlugZap,
-  RefreshCcw,
-  Send,
-  UploadCloud,
-  WandSparkles,
-} from "lucide-react";
-import AutopilotPanel from "@/components/AutopilotPanel";
+import { Navigate, useLocation } from "react-router-dom";
+import { CalendarDays, PlugZap, RefreshCcw, Send, UploadCloud, WandSparkles } from "lucide-react";
 import BulkScheduleDialog from "@/components/calendar/BulkScheduleDialog";
 import StudioCalendarPanel from "@/components/studio/StudioCalendarPanel";
 import StudioPostReview from "@/components/studio/StudioPostReview";
@@ -28,6 +21,7 @@ import { buildTikTokConnectUrl } from "@/lib/fanagent/accounts";
 import { invokeEdgeFunction } from "@/lib/fanagent/invokeFunction";
 import type { SourceMode } from "@/lib/fanagent/types";
 import { scheduleLibraryItems } from "@/lib/library/api";
+import { autopilotRedirectPath } from "@/lib/routes";
 import { readInitialAppQuery } from "@/lib/studio/initialAppQuery";
 import { useStudioData } from "@/lib/studio/useStudioData";
 
@@ -55,6 +49,7 @@ async function invokeFunction<T>(name: string, body?: Record<string, unknown>): 
 }
 
 export default function App() {
+  const location = useLocation();
   const initialQuery = useRef(readInitialAppQuery());
   const { data, refresh, busy: studioBusy, error: studioError } = useStudioData();
   const libraryPanelRef = useRef<HTMLDivElement>(null);
@@ -119,6 +114,10 @@ export default function App() {
         ]),
       ).sort(),
     [data.libraryItems, data.libraryPreviews],
+  );
+  const autopilotRedirect = useMemo(
+    () => autopilotRedirectPath(location.search),
+    [location.search],
   );
 
   useEffect(() => {
@@ -461,6 +460,8 @@ export default function App() {
     />
   );
 
+  if (mode === "autopilot") return <Navigate to={autopilotRedirect} replace />;
+
   return (
     <main
       className={`app-shell ${mode === "studio" ? "studio-shell" : ""}`}
@@ -468,9 +469,7 @@ export default function App() {
     >
       <header className="topbar">
         <div>
-          <h1 style={{ fontSize: 18 }}>
-            {mode === "studio" ? "Studio" : "Autopilot"}
-          </h1>
+          <h1 style={{ fontSize: 18 }}>{mode === "studio" ? "Studio" : "Autopilot"}</h1>
           <p>
             {mode === "studio"
               ? "Calendar + post review for queued TikTok publishes"
@@ -517,73 +516,63 @@ export default function App() {
         </div>
       </header>
 
-
       {studioError ? <div className="banner bad">{studioError}</div> : null}
       {message ? <div className="banner">{message}</div> : null}
 
-      {mode === "autopilot" ? (
-        <AutopilotPanel
-          initialTab={lyricsFocusSignal ? "lyrics" : undefined}
-          focusLyricsStepSignal={lyricsFocusSignal}
-          initialLyricTemplateId={initialQuery.current.lyricTemplateId}
-        />
-      ) : (
+      <>
+        {blockedPostCount > 0 ? (
+          <div className="banner warn">
+            {blockedPostCount} scheduled post{blockedPostCount === 1 ? "" : "s"} need publishing
+            attention.
+          </div>
+        ) : null}
 
-        <>
-          {blockedPostCount > 0 ? (
-            <div className="banner warn">
-              {blockedPostCount} scheduled post{blockedPostCount === 1 ? "" : "s"} need publishing
-              attention.
-            </div>
-          ) : null}
-
-          {studioView === "create" ? (
-            <section className="dashboard-grid">
-              {createPanel}
-              <section className="stack">
-                <div className="action-row">
-                  <button
-                    type="button"
-                    className="button ghost"
-                    onClick={() => setReadyLibraryOpen((open) => !open)}
-                  >
-                    <CalendarDays size={14} /> Ready library
-                  </button>
-                  <button
-                    className="button ghost"
-                    type="button"
-                    disabled={studioBusy}
-                    onClick={refresh}
-                  >
-                    <RefreshCcw className={studioBusy ? "spin" : undefined} size={14} /> Refresh
-                  </button>
-                </div>
-                {readyLibraryOpen ? readyLibraryPanel : null}
-                {calendarPanel}
-              </section>
-              {postReviewPanel}
+        {studioView === "create" ? (
+          <section className="dashboard-grid">
+            {createPanel}
+            <section className="stack">
+              <div className="action-row">
+                <button
+                  type="button"
+                  className="button ghost"
+                  onClick={() => setReadyLibraryOpen((open) => !open)}
+                >
+                  <CalendarDays size={14} /> Ready library
+                </button>
+                <button
+                  className="button ghost"
+                  type="button"
+                  disabled={studioBusy}
+                  onClick={refresh}
+                >
+                  <RefreshCcw className={studioBusy ? "spin" : undefined} size={14} /> Refresh
+                </button>
+              </div>
+              {readyLibraryOpen ? readyLibraryPanel : null}
+              {calendarPanel}
             </section>
-          ) : (
-            <div className={`calendar-workspace ${selectedPost ? "has-review" : ""}`}>
-              {readyLibraryPanel}
-              <section className="stack">{calendarPanel}</section>
-              {selectedPost ? postReviewPanel : null}
-            </div>
-          )}
+            {postReviewPanel}
+          </section>
+        ) : (
+          <div className={`calendar-workspace ${selectedPost ? "has-review" : ""}`}>
+            {readyLibraryPanel}
+            <section className="stack">{calendarPanel}</section>
+            {selectedPost ? postReviewPanel : null}
+          </div>
+        )}
 
-          {bulkDialogOpen ? (
-            <BulkScheduleDialog
-              libraryItemIds={Array.from(selectedLibraryIds)}
-              onClose={() => setBulkDialogOpen(false)}
-              onScheduled={() => {
-                setBulkDialogOpen(false);
-                setSelectedLibraryIds(new Set());
-                void refresh();
-              }}
-            />
-          ) : null}
-        </>
-      )}
+        {bulkDialogOpen ? (
+          <BulkScheduleDialog
+            libraryItemIds={Array.from(selectedLibraryIds)}
+            onClose={() => setBulkDialogOpen(false)}
+            onScheduled={() => {
+              setBulkDialogOpen(false);
+              setSelectedLibraryIds(new Set());
+              void refresh();
+            }}
+          />
+        ) : null}
+      </>
     </main>
   );
 }

@@ -31,6 +31,8 @@ type CampaignStepProps = {
   randomize: boolean;
   autoRender: boolean;
   requiredShots?: number;
+  showSubmitButton?: boolean;
+  submitLabel?: string;
 
   sportsAllowedChannels: string;
   sportsLeague: string;
@@ -94,7 +96,6 @@ export function CampaignStep(props: CampaignStepProps) {
     exactPoolCount < required;
 
   return (
-
     <section className="panel">
       <div className="panel-title">
         <CalendarClock size={16} />
@@ -349,20 +350,18 @@ export function CampaignStep(props: CampaignStepProps) {
                 : "Select the saved lyric template created from this trimmed audio clip."}
           </div>
         ) : null}
-        <button
-          className="button primary"
-          disabled={
-            props.busy ||
-            !props.trimmedAudioReady ||
-            !props.lyricTemplateReady ||
-            poolBlocked
-          }
-          type="submit"
-        >
-          {props.busy ? <Loader2 className="spin" size={16} /> : <CalendarClock size={16} />}{" "}
-          Generate library
-        </button>
-
+        {props.showSubmitButton === false ? null : (
+          <button
+            className="button primary"
+            disabled={
+              props.busy || !props.trimmedAudioReady || !props.lyricTemplateReady || poolBlocked
+            }
+            type="submit"
+          >
+            {props.busy ? <Loader2 className="spin" size={16} /> : <CalendarClock size={16} />}{" "}
+            {props.submitLabel ?? "Generate library"}
+          </button>
+        )}
       </div>
     </section>
   );

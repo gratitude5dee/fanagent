@@ -33,6 +33,35 @@ type GenerationItemRow = {
   item_index: number | null;
 };
 
+type CodedError = Error & { code?: string; status?: number };
+
+function lyricTemplateBlocksMissing(): CodedError {
+  const error = new Error(
+    "Selected lyric template has no transcribed blocks. Open Lyrics and re-save the template.",
+  ) as CodedError;
+  error.code = "LYRIC_TEMPLATE_BLOCKS_MISSING";
+  error.status = 400;
+  return error;
+}
+
+function responseCode(error: unknown): string {
+  if (error instanceof Error && "code" in error && typeof (error as CodedError).code === "string") {
+    return (error as CodedError).code ?? "RENDER_KARAOKE_FAILED";
+  }
+  return "RENDER_KARAOKE_FAILED";
+}
+
+function responseStatus(error: unknown): number {
+  if (
+    error instanceof Error &&
+    "status" in error &&
+    typeof (error as CodedError).status === "number"
+  ) {
+    return (error as CodedError).status ?? 500;
+  }
+  return 500;
+}
+
 function fnUrl(name: string): string {
   return `${optionalEnv("SUPABASE_URL")}/functions/v1/${name}`;
 }
@@ -213,20 +242,28 @@ Deno.serve(async (request) => {
             .select("id,lyric_blocks,selection_start_ms")
             .eq("id", lyricTemplateId)
             .maybeSingle();
+          if (lt.error) throw lt.error;
           const blocks = (lt.data?.lyric_blocks ?? []) as RenderLyricBlock[];
+          if (!lt.data || blocks.length === 0) {
+            await supabase
+              .from("generation_items")
+              .update({
+                status: "failed",
+                error_message:
+                  "Selected lyric template has no transcribed blocks. Open Lyrics and re-save the template.",
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", body.itemId);
+            throw lyricTemplateBlocksMissing();
+          }
           if (blocks.length > 0) {
             const font = pickFont(body.itemId!);
-            const ass = blocksToAss(
-              blocks,
-              lt.data!.selection_start_ms ?? 0,
-              totalSeconds,
-              {
-                fontName: font.name,
-                fontWeight: font.weight,
-                primaryColour: font.primaryColour,
-                outlineColour: font.outlineColour,
-              },
-            );
+            const ass = blocksToAss(blocks, lt.data!.selection_start_ms ?? 0, totalSeconds, {
+              fontName: font.name,
+              fontWeight: font.weight,
+              primaryColour: font.primaryColour,
+              outlineColour: font.outlineColour,
+            });
             const assPath = `subtitles/${body.itemId}-${Date.now()}.ass`;
             const upAss = await supabase.storage
               .from("post-assets")
@@ -248,9 +285,7 @@ Deno.serve(async (request) => {
               // libass rejected the ASS file (rare). Fall back to plain SRT
               // so we still ship the video — font variation is preserved as
               // a metadata badge even when the visual font is uniform.
-              console.warn(
-                `[render-karaoke] ASS compose failed, falling back to SRT: ${assErr}`,
-              );
+              console.warn(`[render-karaoke] ASS compose failed, falling back to SRT: ${assErr}`);
               const srt = blocksToSrt(blocks, lt.data!.selection_start_ms ?? 0, totalSeconds);
               const srtPath = `subtitles/${body.itemId}-${Date.now()}.srt`;
               const up = await supabase.storage
@@ -397,6 +432,6 @@ Deno.serve(async (request) => {
       finalized,
     });
   } catch (error) {
-    return errorEnvelope(error, "RENDER_KARAOKE_FAILED", 500);
+    return errorEnvelope(error, responseCode(error), responseStatus(error));
   }
 });

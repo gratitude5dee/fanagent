@@ -269,10 +269,10 @@ describe("campaign response envelopes", () => {
     expect(source).toContain("word_count: countTemplateWords(template.lyric_blocks)");
     expect(source).toContain("cut_marker_count: cutMarkers.length");
     expect(source).toContain(
-      '"id,batch_id,status,scheduled_at,provider,prompt,segments,stock_clip_url,render_provider,error_message,lyric_template_id,stage_events"',
+      '"id,account_id,batch_id,item_index,library_item_id,status,scheduled_at,provider,prompt,segments,stock_clip_url,render_provider,error_message,lyric_template_id,stage_events"',
     );
     expect(source).toContain(
-      '"id,generation_item_id,caption,status,publish_status,scheduled_at,video_url"',
+      '"id,batch_id,generation_item_id,library_item_id,caption,status,publish_status,scheduled_at,video_url"',
     );
     expect(source).not.toContain('.from("generation_items")\n          .select("*")');
     expect(source).not.toContain('.from("posts")\n          .select("*")');

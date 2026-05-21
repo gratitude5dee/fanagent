@@ -82,17 +82,18 @@ describe("Autopilot lyrics handoff", () => {
   });
 
   it("wires the auto-created template request from Autopilot into the inline builder", () => {
-    const panelSource = readFileSync("src/components/AutopilotPanel.tsx", "utf8");
+    const contextSource = readFileSync("src/pages/autopilot/AutopilotContext.tsx", "utf8");
+    const pageSource = readFileSync("src/pages/autopilot/steps/LyricsPage.tsx", "utf8");
     const stepSource = readFileSync("src/components/autopilot/LyricsStep.tsx", "utf8");
     const builderSource = readFileSync(
       "src/components/autopilot/LyricsTemplateBuilder.tsx",
       "utf8",
     );
 
-    expect(panelSource).toContain("setAutoOpenTemplateRequest((request) => request + 1)");
-    expect(panelSource).toContain("autoOpenTemplateRequest={autoOpenTemplateRequest}");
-    expect(panelSource).toContain("campaignHandoff.ready");
-    expect(panelSource).toContain("dedupeStrategyForStockOptions");
+    expect(contextSource).toContain("setAutoOpenTemplateRequest((request) => request + 1)");
+    expect(pageSource).toContain("autoOpenTemplateRequest={ctx.autoOpenTemplateRequest}");
+    expect(contextSource).toContain("campaignHandoff.ready");
+    expect(contextSource).toContain("dedupeStrategyForStockOptions");
     expect(stepSource).toContain("Review generated template");
     expect(stepSource).toContain("if (lyricTemplateId) openBuilder(lyricTemplateId)");
     expect(builderSource).toContain("audioClipIdFromTemplate");

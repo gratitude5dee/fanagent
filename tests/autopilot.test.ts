@@ -4,13 +4,17 @@ import { buildSourceOptions } from "../src/lib/fanagent/sourceMode";
 
 describe("Autopilot wizard structure", () => {
   it("uses stepped components and exposes gated adapter modes", () => {
-    const panel = readFileSync("src/components/AutopilotPanel.tsx", "utf8");
+    const connectPage = readFileSync("src/pages/autopilot/steps/ConnectPage.tsx", "utf8");
+    const uploadPage = readFileSync("src/pages/autopilot/steps/UploadPage.tsx", "utf8");
+    const lyricsPage = readFileSync("src/pages/autopilot/steps/LyricsPage.tsx", "utf8");
+    const campaignPage = readFileSync("src/pages/autopilot/steps/CampaignPage.tsx", "utf8");
+    const context = readFileSync("src/pages/autopilot/AutopilotContext.tsx", "utf8");
 
-    expect(panel).toContain("ConnectStep");
-    expect(panel).toContain("UploadStep");
-    expect(panel).toContain("LyricsStep");
-    expect(panel).toContain("CampaignStep");
-    expect(panel).toContain("isFanAgentSchemaReady(diagnostics?.schema)");
+    expect(connectPage).toContain("ConnectStep");
+    expect(uploadPage).toContain("UploadStep");
+    expect(lyricsPage).toContain("LyricsStep");
+    expect(campaignPage).toContain("CampaignStep");
+    expect(context).toContain("isFanAgentSchemaReady(diagnostics?.schema)");
 
     const options = buildSourceOptions({
       fal: true,
@@ -30,10 +34,10 @@ describe("Autopilot wizard structure", () => {
     expect(campaignStep).toContain("Owner MP4 asset URLs");
     expect(campaignStep).toContain("props.sportsOwnerAssetUrls");
     expect(campaignStep).toContain('props.sourceMode === "streamer_clip"');
-    expect(panel).toContain("sourceSettings: {");
-    expect(panel).toContain("sports_edit: {");
-    expect(panel).toContain("ownerAssetUrls: parseKeyValueLines(sportsOwnerAssetUrls)");
-    expect(panel).toContain("streamer_clip: {");
+    expect(context).toContain("sourceSettings: {");
+    expect(context).toContain("sports_edit: {");
+    expect(context).toContain("ownerAssetUrls: parseKeyValueLines(sportsOwnerAssetUrls)");
+    expect(context).toContain("streamer_clip: {");
   });
 
   it("allows campaign-level source allowlists when provider credentials exist", () => {
@@ -54,37 +58,39 @@ describe("Autopilot wizard structure", () => {
   });
 
   it("auto-opens the lyric review drawer after a trimmed clip is ready", () => {
-    const panel = readFileSync("src/components/AutopilotPanel.tsx", "utf8");
+    const context = readFileSync("src/pages/autopilot/AutopilotContext.tsx", "utf8");
     const lyricsStep = readFileSync("src/components/autopilot/LyricsStep.tsx", "utf8");
 
-    expect(panel).toContain("setLyricsDrawerOpen(true)");
+    expect(context).toContain("setLyricsDrawerOpen(true)");
     expect(lyricsStep).toContain("lyrics-drawer");
   });
 
   it("registers trimmed audio clips before campaign creation", () => {
-    const panel = readFileSync("src/components/AutopilotPanel.tsx", "utf8");
+    const context = readFileSync("src/pages/autopilot/AutopilotContext.tsx", "utf8");
     const uploadStep = readFileSync("src/components/autopilot/UploadStep.tsx", "utf8");
     const campaignStep = readFileSync("src/components/autopilot/CampaignStep.tsx", "utf8");
+    const campaignPage = readFileSync("src/pages/autopilot/steps/CampaignPage.tsx", "utf8");
 
-    expect(panel).toContain("registerAudioClip({");
-    expect(panel).toContain("transcribeAudioClip(registered.audio_clip.id)");
-    expect(panel).toContain("lyricsApi.createFromAudioClip({");
-    expect(panel).toContain("audioClipId: registeredAudioClip.id");
-    expect(panel).toContain("Review and save a lyric template before launching.");
-    expect(panel).toContain("lyricTemplateReady={!!lyricTemplateId}");
+    expect(context).toContain("registerAudioClip({");
+    expect(context).toContain("transcribeAudioClip(registered.audio_clip.id)");
+    expect(context).toContain("lyricsApi.createFromAudioClip({");
+    expect(context).toContain("audioClipId: registeredClip.id");
+    expect(context).toContain("Review and save a lyric template before launching.");
+    expect(campaignPage).toContain("lyricTemplateReady={!!ctx.lyricTemplateId}");
     expect(campaignStep).toContain("!props.lyricTemplateReady");
-    expect(panel).not.toContain("audioBase64: await blobToBase64(trimmedAudio.blob)");
+    expect(context).not.toContain("audioBase64: await blobToBase64(trimmedAudio.blob)");
     expect(uploadStep).toContain('audioClipStatus === "transcribing"');
     expect(uploadStep).toContain("You must have rights to publish this audio.");
   });
 
   it("exposes recovery for failed generation items surfaced by diagnostics", () => {
-    const panel = readFileSync("src/components/AutopilotPanel.tsx", "utf8");
+    const context = readFileSync("src/pages/autopilot/AutopilotContext.tsx", "utf8");
+    const connectPage = readFileSync("src/pages/autopilot/steps/ConnectPage.tsx", "utf8");
 
-    expect(panel).toContain("async function recoverRecentFailures()");
-    expect(panel).toContain('callCampaign("recoverRecentFailures"');
-    expect(panel).toContain("diagnostics.recentFailedItems.length > 0");
-    expect(panel).toContain("Recent failed generation items");
-    expect(panel).toContain("> Recover");
+    expect(context).toContain("const recoverRecentFailures = useCallback(async () =>");
+    expect(context).toContain('callCampaign("recoverRecentFailures"');
+    expect(connectPage).toContain("ctx.diagnostics.recentFailedItems.length > 0");
+    expect(connectPage).toContain("Recent failed generation items");
+    expect(connectPage).toContain("> Recover");
   });
 });

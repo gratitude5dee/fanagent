@@ -22,6 +22,7 @@ vi.mock("@/lib/studio/useStudioData", () => ({
 }));
 
 import App from "../src/App";
+import { autopilotRedirectPath } from "../src/lib/routes";
 import { readInitialAppQuery } from "../src/lib/studio/initialAppQuery";
 
 const emptyStudioData = {
@@ -66,7 +67,7 @@ describe("Studio IA consolidation", () => {
     expect(html).not.toContain("Create Batch");
   });
 
-  it("mounts Autopilot with the inline lyrics step from the lyrics query state", () => {
+  it("redirects Autopilot lyrics query state into the routed wizard", () => {
     const html = renderAppWithSearch("?step=lyrics");
 
     expect(readInitialAppQuery("?step=lyrics")).toEqual({
@@ -74,8 +75,7 @@ describe("Studio IA consolidation", () => {
       studioView: "create",
       focusLyrics: true,
     });
-    expect(html).toContain("Fanpage Autopilot");
-    expect(html).toContain("3. Lyrics template");
-    expect(html).toContain("New template");
+    expect(autopilotRedirectPath("?step=lyrics")).toBe("/autopilot/lyrics?step=lyrics");
+    expect(html).toBe("");
   });
 });
