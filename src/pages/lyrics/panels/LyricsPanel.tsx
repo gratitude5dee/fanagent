@@ -8,6 +8,7 @@ type Props = {
   engine: AudioEngine;
   onDone: (blocks: LyricBlock[]) => Promise<void>;
   onRetry: () => Promise<void>;
+  onBlocksLive?: (blocks: LyricBlock[]) => void;
 };
 
 function statusToTranscribe(t: LyricTemplate | null): TranscribeStatus {
