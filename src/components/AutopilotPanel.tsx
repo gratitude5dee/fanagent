@@ -11,8 +11,8 @@ import {
   PlayCircle,
   RefreshCcw,
   RotateCcw,
-  Sparkles,
 } from "lucide-react";
+
 import { SUPABASE_URL } from "@/integrations/supabase/client";
 import { CampaignStep } from "@/components/autopilot/CampaignStep";
 import { ConnectStep } from "@/components/autopilot/ConnectStep";
@@ -759,33 +759,9 @@ export default function AutopilotPanel({
 
   return (
     <div className="autopilot-panel stack">
-      <header className="panel-title">
-        <Sparkles size={18} />
-        <h2>Fanpage Autopilot</h2>
-      </header>
-
-      <div className="action-row" role="tablist" aria-label="Autopilot sections">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "campaign"}
-          className={`button ${tab === "campaign" ? "primary" : "ghost"}`}
-          onClick={() => setTab("campaign")}
-        >
-          <CalendarClock size={14} /> Campaign
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "lyrics"}
-          className={`button ${tab === "lyrics" ? "primary" : "ghost"}`}
-          onClick={() => setTab("lyrics")}
-        >
-          <FileMusic size={14} /> Lyrics
-        </button>
-      </div>
-
       {message ? <div className="banner">{message}</div> : null}
+
+
 
       {diagnostics ? (
         <section className="panel">
