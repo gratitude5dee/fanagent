@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useReducer, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { ChevronLeft, HelpCircle, Loader2, Save, Sparkles } from "lucide-react";
 import AudioPanel from "@/pages/lyrics/panels/AudioPanel";
 import LyricsPanel from "@/pages/lyrics/panels/LyricsPanel";
 import MarkersPanel from "@/pages/lyrics/panels/MarkersPanel";
 import { lyricsApi } from "@/lib/lyrics/api";
+import { resyncOnWordsChange, type WordKey } from "@/lib/lyrics/markers";
 import { useAudioEngine } from "@/lib/lyrics/useAudioEngine";
 import { useTrimmedAudioUrl } from "@/lib/lyrics/useTrimmedAudioUrl";
 import type { LyricBlock, LyricTemplate } from "@/lib/lyrics/types";
@@ -181,8 +182,43 @@ export default function LyricsTemplateBuilder({
     dispatch({ type: "set_preview", url });
   }, []);
 
+  function flattenWords(blocks: LyricBlock[]): WordKey[] {
+    const out: WordKey[] = [];
+    for (const b of blocks) {
+      for (const w of b.words ?? []) {
+        out.push({ id: w.id, startTime: w.startTime, endTime: w.endTime });
+      }
+    }
+    return out;
+  }
+
+  const livePersistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onBlocksLive = useCallback(
+    (blocks: LyricBlock[]) => {
+      if (!state.template) return;
+      const prevWords = flattenWords(state.template.lyric_blocks ?? []);
+      const nextWords = flattenWords(blocks);
+      const prevMarkersSec = (state.template.cut_markers ?? []).map((m) => m / 1000);
+      const syncedSec = resyncOnWordsChange(prevWords, nextWords, prevMarkersSec);
+      const cut_markers = syncedSec.map((m) => Math.round(m * 1000));
+      dispatch({ type: "patch", patch: { lyric_blocks: blocks, cut_markers } });
+      if (livePersistTimer.current) clearTimeout(livePersistTimer.current);
+      const tplId = state.template.id;
+      livePersistTimer.current = setTimeout(() => {
+        lyricsApi.patch(tplId, { lyric_blocks: blocks, cut_markers }).catch(() => {
+          /* last-write-wins, best-effort */
+        });
+      }, 250);
+    },
+    [state.template],
+  );
+
   async function onLyricsDone(blocks: LyricBlock[]) {
     if (!state.template) return;
+    if (livePersistTimer.current) {
+      clearTimeout(livePersistTimer.current);
+      livePersistTimer.current = null;
+    }
     const next = await lyricsApi.patch(state.template.id, {
       lyric_blocks: blocks,
       status: "lyrics_ready",
