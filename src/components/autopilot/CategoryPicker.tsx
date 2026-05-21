@@ -45,52 +45,87 @@ export function CategoryPicker(props: CategoryPickerProps) {
   const poolUnderfilled =
     poolCounts != null && !randomize && selected != null && exactCount > 0 && exactCount < needed;
 
-
   return (
-    <div className="stack" style={{ gap: 8 }}>
-      <div className="split">
+    <div className="stack" style={{ gap: 12 }}>
+      <div
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 12,
+          opacity: 0.85,
+        }}
+      >
+        <Layers size={12} /> Clip category
+      </div>
+
+      {loading ? (
+        <div className="banner">Loading categories…</div>
+      ) : (
+        <div
+          className="category-grid"
+          role="radiogroup"
+          aria-label="Clip category"
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
+            gap: 8,
+          }}
+        >
+          {categories.map((cat) => {
+            const active = cat.id === categoryId;
+            const count = totalForCategory(cat.id);
+            return (
+              <button
+                key={cat.id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                disabled={randomize}
+                onClick={() => {
+                  props.onCategoryId(cat.id);
+                  props.onSubcategorySlug("");
+                }}
+                className={`button ${active ? "primary" : "ghost"}`}
+                style={{
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  padding: "10px 12px",
+                  textAlign: "left",
+                  height: "auto",
+                  minHeight: 64,
+                  gap: 4,
+                  opacity: randomize ? 0.5 : 1,
+                }}
+              >
+                <span style={{ fontWeight: 600 }}>
+                  {cat.icon ? `${cat.icon} ` : ""}
+                  {cat.name}
+                </span>
+                <span style={{ fontSize: 11, opacity: 0.75 }}>{count} clips</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {hasSubs ? (
         <label>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Layers size={12} /> Clip category
-          </span>
+          Subcategory
           <select
-            value={categoryId}
-            disabled={loading || randomize}
-            onChange={(e) => {
-              props.onCategoryId(e.target.value);
-              props.onSubcategorySlug("");
-            }}
+            value={subcategorySlug}
+            disabled={randomize}
+            onChange={(e) => props.onSubcategorySlug(e.target.value)}
           >
-            <option value="">
-              {loading ? "Loading categories…" : "Select a category"}
-            </option>
-            {categories.map((cat) => (
-              <option key={cat.id} value={cat.id}>
-                {cat.name} ({totalForCategory(cat.id)})
+            <option value="">All {selected?.name}</option>
+            {subcategories.map((sub) => (
+              <option key={sub.id} value={sub.slug}>
+                {sub.name} ({poolCounts ? poolCounts.get(selected!.id, sub.slug) : 0})
               </option>
             ))}
           </select>
         </label>
-        {hasSubs ? (
-          <label>
-            Subcategory
-            <select
-              value={subcategorySlug}
-              disabled={randomize}
-              onChange={(e) => props.onSubcategorySlug(e.target.value)}
-            >
-              <option value="">All {selected?.name}</option>
-              {subcategories.map((sub) => (
-                <option key={sub.id} value={sub.slug}>
-                  {sub.name} ({poolCounts ? poolCounts.get(selected!.id, sub.slug) : 0})
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : (
-          <div />
-        )}
-      </div>
+      ) : null}
 
       <div className="action-row" style={{ flexWrap: "wrap" }}>
         <label className="check" title="Sample stratified across all top-level categories">
@@ -119,7 +154,8 @@ export function CategoryPicker(props: CategoryPickerProps) {
       {poolEmpty ? (
         <div className="banner warn">
           Selected category has no cached clips yet. The first run will populate the pool from
-          live search before rendering.
+          live search before rendering. Sourcing is locked to {selected?.name} — no off-category
+          stock will be mixed in.
         </div>
       ) : null}
       {poolUnderfilled ? (
@@ -129,7 +165,6 @@ export function CategoryPicker(props: CategoryPickerProps) {
           subcategory, or wait for the live search to backfill.
         </div>
       ) : null}
-
     </div>
   );
 }
