@@ -50,7 +50,7 @@ export function AppSidebar() {
       {items.map((item) => (
         <SidebarMenuItem key={item.title}>
           <SidebarMenuButton asChild isActive={isActive(item.url)}>
-            <NavLink to={item.url} className="flex items-center gap-2 hover:bg-muted/50">
+            <NavLink to={item.url} className="flex items-center gap-2">
               <item.icon className="h-4 w-4" />
               <span>{item.title}</span>
             </NavLink>
@@ -62,8 +62,8 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarContent>
-        <div className="brand-block">
+      <SidebarContent className="bg-sidebar text-sidebar-foreground">
+        <div className="brand-block text-sidebar-foreground">
           <span className="brand-mark">
             <Sparkles size={14} />
           </span>
