@@ -23,6 +23,7 @@ createRoot(document.getElementById("root")!).render(
       <Routes>
         <Route path="/" element={<App />} />
         <Route path="/library" element={wrap(<LibraryLanding />)} />
+        <Route path="/clips" element={wrap(<ClipsPage />)} />
         <Route path="/library/:audioClipId" element={wrap(<LibraryDetail />)} />
         <Route path="/settings/accounts" element={wrap(<AccountsPage />)} />
         <Route path="/lyrics" element={wrap(<LyricsHome />)} />
