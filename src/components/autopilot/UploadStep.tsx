@@ -25,6 +25,7 @@ type UploadStepProps = {
   audioClipStatus: AudioClipStatus;
   audioClipError: string | null;
   registeredAudioClipId: string | null;
+  templateProvidesAudio?: boolean;
   onAudioFile: (file: File | null) => void;
   onDuration: (duration: Duration) => void;
   onTrimmedAudio: (trimmed: TrimmedAudio | null) => void;
@@ -39,6 +40,7 @@ export function UploadStep({
   audioClipStatus,
   audioClipError,
   registeredAudioClipId,
+  templateProvidesAudio = false,
   onAudioFile,
   onDuration,
   onTrimmedAudio,
