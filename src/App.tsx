@@ -547,9 +547,8 @@ export default function App() {
       {message ? <div className="banner">{message}</div> : null}
 
       {mode === "autopilot" ? (
-        (typeof window !== "undefined" &&
-          new URLSearchParams(window.location.search).get("wizard") === "1") ||
-        initialQuery.current.useWizard ? (
+        typeof window !== "undefined" &&
+        new URLSearchParams(window.location.search).get("wizard") === "1" ? (
           <AutopilotWizard
             initialTab={lyricsFocusSignal ? "lyrics" : undefined}
             focusLyricsStepSignal={lyricsFocusSignal}
