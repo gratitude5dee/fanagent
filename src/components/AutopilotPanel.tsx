@@ -962,6 +962,11 @@ export default function AutopilotPanel({
                   audioClipStatus={audioClipStatus}
                   audioClipError={audioClipError}
                   registeredAudioClipId={registeredAudioClip?.id ?? null}
+                  templateProvidesAudio={
+                    !!selectedTemplate?.audio_clip_id &&
+                    !!selectedTemplate?.trimmed_audio_asset_id &&
+                    selectedTemplate?.status === "saved"
+                  }
                   onAudioFile={setAudioFile}
                   onDuration={setDuration}
                   onTrimmedAudio={setTrimmedAudio}
