@@ -525,21 +525,13 @@ export default function App() {
       {message ? <div className="banner">{message}</div> : null}
 
       {mode === "autopilot" ? (
-        typeof window !== "undefined" &&
-        new URLSearchParams(window.location.search).get("wizard") === "1" ? (
-          <AutopilotWizard
-            initialTab={lyricsFocusSignal ? "lyrics" : undefined}
-            focusLyricsStepSignal={lyricsFocusSignal}
-            initialLyricTemplateId={initialQuery.current.lyricTemplateId}
-          />
-        ) : (
-          <AutopilotPanel
-            initialTab={lyricsFocusSignal ? "lyrics" : undefined}
-            focusLyricsStepSignal={lyricsFocusSignal}
-            initialLyricTemplateId={initialQuery.current.lyricTemplateId}
-          />
-        )
+        <AutopilotWizard
+          initialTab={lyricsFocusSignal ? "lyrics" : undefined}
+          focusLyricsStepSignal={lyricsFocusSignal}
+          initialLyricTemplateId={initialQuery.current.lyricTemplateId}
+        />
       ) : (
+
         <>
           {blockedPostCount > 0 ? (
             <div className="banner warn">
