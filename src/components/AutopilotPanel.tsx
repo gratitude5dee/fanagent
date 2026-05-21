@@ -262,6 +262,7 @@ export default function AutopilotPanel({
   initialLyricTemplateId,
 }: AutopilotPanelProps = {}) {
   const [data, setData] = useState<CampaignList | null>(null);
+  const [lastLaunchedAudioClipId, setLastLaunchedAudioClipId] = useState<string | null>(null);
   const [lyricTemplates, setLyricTemplates] = useState<LyricTemplateSummary[]>([]);
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [trimmedAudio, setTrimmedAudio] = useState<{
