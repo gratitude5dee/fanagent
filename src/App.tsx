@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import AutopilotPanel from "@/components/AutopilotPanel";
+import AutopilotWizard from "@/components/AutopilotWizard";
 import BulkScheduleDialog from "@/components/calendar/BulkScheduleDialog";
 import StudioCalendarPanel from "@/components/studio/StudioCalendarPanel";
 import StudioPostReview from "@/components/studio/StudioPostReview";
@@ -546,11 +547,21 @@ export default function App() {
       {message ? <div className="banner">{message}</div> : null}
 
       {mode === "autopilot" ? (
-        <AutopilotPanel
-          initialTab={lyricsFocusSignal ? "lyrics" : undefined}
-          focusLyricsStepSignal={lyricsFocusSignal}
-          initialLyricTemplateId={initialQuery.current.lyricTemplateId}
-        />
+        (typeof window !== "undefined" &&
+          new URLSearchParams(window.location.search).get("wizard") === "1") ||
+        initialQuery.current.useWizard ? (
+          <AutopilotWizard
+            initialTab={lyricsFocusSignal ? "lyrics" : undefined}
+            focusLyricsStepSignal={lyricsFocusSignal}
+            initialLyricTemplateId={initialQuery.current.lyricTemplateId}
+          />
+        ) : (
+          <AutopilotPanel
+            initialTab={lyricsFocusSignal ? "lyrics" : undefined}
+            focusLyricsStepSignal={lyricsFocusSignal}
+            initialLyricTemplateId={initialQuery.current.lyricTemplateId}
+          />
+        )
       ) : (
         <>
           {blockedPostCount > 0 ? (
