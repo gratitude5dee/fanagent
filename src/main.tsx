@@ -2,6 +2,7 @@ import { StrictMode, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import App from "./App";
+import { AppShell } from "./components/AppShell";
 import "./styles.css";
 
 const LibraryLanding = lazy(() => import("./pages/library/LibraryLanding"));
@@ -14,7 +15,9 @@ const RemixEditor = lazy(() => import("./pages/lyrics/RemixEditor"));
 const RemixJobs = lazy(() => import("./pages/lyrics/RemixJobs"));
 
 const wrap = (node: React.ReactNode) => (
-  <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>{node}</Suspense>
+  <AppShell>
+    <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>{node}</Suspense>
+  </AppShell>
 );
 
 createRoot(document.getElementById("root")!).render(
