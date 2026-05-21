@@ -15,11 +15,6 @@ import StudioPostReview from "@/components/studio/StudioPostReview";
 import StudioReadyLibraryPanel from "@/components/studio/StudioReadyLibraryPanel";
 import { SUPABASE_URL } from "@/integrations/supabase/client";
 
-import BulkScheduleDialog from "@/components/calendar/BulkScheduleDialog";
-import StudioCalendarPanel from "@/components/studio/StudioCalendarPanel";
-import StudioPostReview from "@/components/studio/StudioPostReview";
-import StudioReadyLibraryPanel from "@/components/studio/StudioReadyLibraryPanel";
-import { SUPABASE_URL } from "@/integrations/supabase/client";
 import {
   buildTikTokPrivacySettings,
   filterCalendarLibraryItems,
