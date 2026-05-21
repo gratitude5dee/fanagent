@@ -7,8 +7,9 @@ describe("render-karaoke lyric block guard", () => {
 
     expect(source).toContain('"LYRIC_TEMPLATE_BLOCKS_MISSING"');
     expect(source).toContain("Selected lyric template has no transcribed blocks");
-    expect(source).toContain("if (!lt.data || blocks.length === 0)");
+    expect(source).toContain("validateTemplateForRender");
+    expect(source).toContain("if (!validation.ok)");
     expect(source).toContain('status: "failed"');
-    expect(source).toContain("throw lyricTemplateBlocksMissing()");
+    expect(source).toContain("throw error");
   });
 });

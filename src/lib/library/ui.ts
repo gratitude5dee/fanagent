@@ -1,4 +1,4 @@
-import type { LibraryItem, LibraryStatus } from "./types";
+import type { LibraryItem, LibraryStatus, RegenerateTarget } from "./types";
 
 export type LibraryTone = "good" | "warn" | "bad" | "idle";
 export type LibraryStatusFilter =
@@ -140,6 +140,28 @@ export function filterLibraryItems(
     filters.sort ?? "distinct",
     filters.randomSeed ?? "library",
   );
+}
+
+export function canRegenerateLibraryItem(item: LibraryItem): boolean {
+  return !["posted", "archived"].includes(item.status) && !!item.id;
+}
+
+export function regenerationTargetForItem(item: LibraryItem): RegenerateTarget | null {
+  if (!canRegenerateLibraryItem(item)) return null;
+  return {
+    libraryItemId: item.id,
+    generationItemId: item.generation_item_id,
+  };
+}
+
+export function selectedRegeneratableTargets(
+  items: LibraryItem[],
+  selectedIds: Set<string>,
+): RegenerateTarget[] {
+  return items
+    .filter((item) => selectedIds.has(item.id))
+    .map(regenerationTargetForItem)
+    .filter((target): target is RegenerateTarget => target !== null);
 }
 
 export function selectedRegeneratableIds(items: LibraryItem[], selectedIds: Set<string>): string[] {

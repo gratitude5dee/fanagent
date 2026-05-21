@@ -296,7 +296,7 @@ describe("campaign library item actions", () => {
     expect(source).toContain("skippedGenerationPosts");
     expect(source).toContain('.eq("generation_item_id", itemId)');
     expect(source).toContain("skippedLibraryPosts");
-    expect(source).toContain('.eq("library_item_id", item.data.library_item_id)');
+    expect(source).toContain('.eq("library_item_id", target.libraryItemId)');
     expect(source).toContain('.neq("status", "posted")');
     expect(source).toContain("source_candidate_uses");
   });

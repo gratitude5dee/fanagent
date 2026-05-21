@@ -127,6 +127,7 @@ export type LibraryFailureUpdateInput = {
   metadata?: unknown;
   error?: unknown;
   now?: Date;
+  generationItemId?: string | null;
 };
 
 function normalizeAudioBase64(value: string): string {
@@ -348,6 +349,7 @@ export function buildLibraryFailureUpdate(
         : "Generation failed before this library item could be finalized.";
   return {
     status: "failed",
+    ...(input.generationItemId ? { generation_item_id: input.generationItemId } : {}),
     metadata: {
       ...(isRecord(input.metadata) ? input.metadata : {}),
       failed: true,

@@ -84,6 +84,11 @@ export type LibraryItem = {
   media?: MediaAsset | null;
 };
 
+export type RegenerateTarget = {
+  generationItemId?: string | null;
+  libraryItemId?: string | null;
+};
+
 export type SourceCandidate = {
   id: string;
   source_type: string;

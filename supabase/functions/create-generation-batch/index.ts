@@ -174,9 +174,7 @@ async function resolveLyricTemplateBinding(
 
   const tpl = await supabase
     .from("kanvas_lyric_templates")
-    .select(
-      "id,status,archived_at,audio_clip_id,trimmed_audio_asset_id,selection_duration_ms",
-    )
+    .select("id,status,archived_at,audio_clip_id,trimmed_audio_asset_id,selection_duration_ms")
     .eq("id", raw.lyricTemplateId)
     .maybeSingle();
   if (tpl.error) throw tpl.error;
@@ -202,9 +200,7 @@ async function resolveLyricTemplateBinding(
     id: tpl.data.id,
     audio_clip_id: tpl.data.audio_clip_id,
     selection_duration_ms:
-      typeof tpl.data.selection_duration_ms === "number"
-        ? tpl.data.selection_duration_ms
-        : null,
+      typeof tpl.data.selection_duration_ms === "number" ? tpl.data.selection_duration_ms : null,
   };
 }
 
@@ -423,6 +419,20 @@ Deno.serve(async (request) => {
 
     const insertedItems = await supabase.from("generation_items").insert(items).select("*");
     if (insertedItems.error) throw insertedItems.error;
+
+    for (const item of insertedItems.data ?? []) {
+      const libraryItemId =
+        typeof item.library_item_id === "string" && item.library_item_id
+          ? item.library_item_id
+          : null;
+      if (!libraryItemId) continue;
+      const linkedLibrary = await supabase
+        .from("video_library_items")
+        .update({ generation_item_id: item.id, updated_at: new Date().toISOString() })
+        .eq("id", libraryItemId)
+        .is("generation_item_id", null);
+      if (linkedLibrary.error) throw linkedLibrary.error;
+    }
 
     return okEnvelope({
       batch: batch.data,

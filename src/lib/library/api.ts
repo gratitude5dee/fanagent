@@ -1,6 +1,12 @@
 import { supabase } from "@/integrations/supabase/client";
 import { unwrapFunctionData } from "@/lib/studio/envelope";
-import type { AudioClip, LibraryItem, MediaAsset, SourceCandidate } from "./types";
+import type {
+  AudioClip,
+  LibraryItem,
+  MediaAsset,
+  RegenerateTarget,
+  SourceCandidate,
+} from "./types";
 
 export type AudioClipSummary = {
   clip: AudioClip;
@@ -294,18 +300,44 @@ export async function listReadyLibraryItems(limit = 50): Promise<LibraryItem[]> 
   );
 }
 
+export type RegenerateResult = {
+  ok?: boolean;
+  generationItemId?: string | null;
+  libraryItemId?: string | null;
+  status?: string | null;
+  message?: string | null;
+};
 
-export async function regenerateGenerationItems(generationItemIds: string[]): Promise<void> {
-  for (const itemId of generationItemIds) {
+function regeneratePayload(target: RegenerateTarget): Record<string, unknown> {
+  const payload: Record<string, unknown> = { action: "regenerate" };
+  if (target.generationItemId) {
+    payload.generationItemId = target.generationItemId;
+    payload.itemId = target.generationItemId;
+  }
+  if (target.libraryItemId) payload.libraryItemId = target.libraryItemId;
+  return payload;
+}
+
+export async function regenerateLibraryItems(
+  targets: RegenerateTarget[],
+): Promise<RegenerateResult[]> {
+  const results: RegenerateResult[] = [];
+  for (const target of targets) {
+    if (!target.generationItemId && !target.libraryItemId) continue;
     const { data, error } = await supabase.functions.invoke("fanpage-campaign", {
-      body: { action: "regenerate", itemId },
+      body: regeneratePayload(target),
     });
     if (error) {
       if (data) unwrapFunctionData(data);
       throw new Error(error.message);
     }
-    unwrapFunctionData(data);
+    results.push(unwrapFunctionData<RegenerateResult>(data));
   }
+  return results;
+}
+
+export async function regenerateGenerationItems(generationItemIds: string[]): Promise<void> {
+  await regenerateLibraryItems(generationItemIds.map((generationItemId) => ({ generationItemId })));
 }
 
 export async function markLibraryItemUnfit(libraryItemId: string, reason?: string): Promise<void> {

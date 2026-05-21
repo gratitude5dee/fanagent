@@ -396,7 +396,7 @@ export function AutopilotProvider({
   const [categoryId, setCategoryId] = useState("");
   const [subcategorySlug, setSubcategorySlug] = useState("");
   const [randomize, setRandomize] = useState(false);
-  const [autoRender, setAutoRender] = useState(false);
+  const [autoRender, setAutoRender] = useState(true);
 
   const templateById = useMemo(
     () => new Map(lyricTemplates.map((template) => [template.id, template])),

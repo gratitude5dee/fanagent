@@ -359,6 +359,47 @@ describe("video library item helpers", () => {
     });
   });
 
+  it("keeps the generation link when a library item fails before finalize", () => {
+    const update = buildLibraryFailureUpdate({
+      metadata: { existing: true },
+      error: "render failed",
+      generationItemId: "generation-1",
+      now: new Date("2026-05-18T12:00:00.000Z"),
+    });
+
+    expect(update).toMatchObject({
+      status: "failed",
+      generation_item_id: "generation-1",
+      metadata: {
+        existing: true,
+        failed: true,
+        failure_error: "render failed",
+      },
+    });
+  });
+
+  it("repairs library and generation links in the regenerate migration", () => {
+    const migration = readFileSync(
+      "supabase/migrations/20260521145352_fanagent_regenerate_link_repair.sql",
+      "utf8",
+    );
+
+    expect(migration).toContain("gi.library_item_id = vli.id");
+    expect(migration).toContain("vli.generation_item_id = gi.id");
+    expect(migration).toContain("idx_video_library_items_generation_item_id");
+    expect(migration).toContain("idx_generation_items_library_item_id");
+    expect(migration).toContain("idx_video_library_items_failed_regenerate");
+  });
+
+  it("backfills library generation ids immediately after batch item creation", () => {
+    const source = readFileSync("supabase/functions/create-generation-batch/index.ts", "utf8");
+
+    expect(source).toContain('.from("generation_items").insert(items).select("*")');
+    expect(source).toContain('.from("video_library_items")');
+    expect(source).toContain("generation_item_id: item.id");
+    expect(source).toContain('.eq("id", libraryItemId)');
+  });
+
   it("derives batch library status from ready and failed slot states", () => {
     expect(deriveBatchLibraryStatus([])).toBe("building");
     expect(deriveBatchLibraryStatus(["not_ready", "ready"])).toBe("building");

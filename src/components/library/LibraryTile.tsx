@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { LibraryItem, LibrarySegment } from "@/lib/library/types";
 import {
+  canRegenerateLibraryItem,
   canScheduleLibraryItem,
   libraryAttributionLines,
   libraryCaptionText,
@@ -52,6 +53,7 @@ export default function LibraryTile({
   const schedulable = canScheduleLibraryItem(item);
   const attributions = libraryAttributionLines(item);
   const qualityMarkers = libraryQualityMarkers(item);
+  const regeneratable = canRegenerateLibraryItem(item);
 
   async function copyCaption() {
     const text = libraryCaptionText(item);
@@ -160,8 +162,11 @@ export default function LibraryTile({
           <button
             type="button"
             className="button ghost"
-            disabled={!item.generation_item_id}
+            disabled={!regeneratable}
             onClick={() => onRegenerate(item)}
+            title={
+              regeneratable ? "Regenerate this clip" : "Posted and archived clips cannot regenerate"
+            }
           >
             <RefreshCcw size={14} /> Regenerate
           </button>

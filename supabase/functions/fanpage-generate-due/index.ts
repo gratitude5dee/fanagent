@@ -27,6 +27,8 @@ type GenerationItem = {
   id: string;
   batch_id: string;
   account_id: string;
+  audio_clip_id: string | null;
+  item_index: number;
   segments: Segment[] | null;
   status: string;
   provider: string;
@@ -69,7 +71,11 @@ function childTimeoutMs(): number {
   return Math.max(15_000, Math.min(Math.floor(configured), 120_000));
 }
 
-async function invokeChild(name: string, body: unknown, timeoutMs = childTimeoutMs()): Promise<Response> {
+async function invokeChild(
+  name: string,
+  body: unknown,
+  timeoutMs = childTimeoutMs(),
+): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -458,7 +464,27 @@ async function failLinkedLibraryItem(item: GenerationItem, error: unknown): Prom
     if (linked.error) throw linked.error;
     libraryItemId = linked.data?.id ?? null;
   }
+  if (!libraryItemId && item.batch_id && item.audio_clip_id) {
+    const matched = await supabase
+      .from("video_library_items")
+      .select("id")
+      .eq("batch_id", item.batch_id)
+      .eq("audio_clip_id", item.audio_clip_id)
+      .eq("library_index", item.item_index)
+      .maybeSingle();
+    if (matched.error) throw matched.error;
+    libraryItemId = matched.data?.id ?? null;
+  }
   if (!libraryItemId) return;
+
+  if (!item.library_item_id) {
+    const linkedItem = await supabase
+      .from("generation_items")
+      .update({ library_item_id: libraryItemId, updated_at: new Date().toISOString() })
+      .eq("id", item.id)
+      .is("library_item_id", null);
+    if (linkedItem.error) throw linkedItem.error;
+  }
 
   const current = await supabase
     .from("video_library_items")
@@ -470,7 +496,13 @@ async function failLinkedLibraryItem(item: GenerationItem, error: unknown): Prom
 
   const failed = await supabase
     .from("video_library_items")
-    .update(buildLibraryFailureUpdate({ metadata: current.data?.metadata, error }))
+    .update(
+      buildLibraryFailureUpdate({
+        metadata: current.data?.metadata,
+        error,
+        generationItemId: item.id,
+      }),
+    )
     .eq("id", libraryItemId);
   if (failed.error) throw failed.error;
 }

@@ -9,7 +9,8 @@
 //   resume   { batchId }                → clears paused_at
 //   cancel   { batchId }                → stops remaining queued work without schema changes
 //   skip     { itemId }                 → marks item skipped
-//   regenerate { itemId }              → resets item to pending so the worker reruns it
+//   regenerate { itemId | generationItemId | libraryItemId }
+//                                       → resets item to pending so the worker reruns it
 //   markLibraryItemUnfit { libraryItemId, reason? }
 //                                       → blocks a library item and skips not-posted linked posts
 //   recoverRecentFailures { since, limit, includeFailed, includeStaleActive }
@@ -51,6 +52,178 @@ function maybeId(value: unknown): string | null {
   const data = record(value);
   const id = data.id;
   return typeof id === "string" && id ? id : null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+type SupabaseAdmin = ReturnType<typeof getSupabaseAdmin>;
+
+type RegenerationItemRow = {
+  id: string;
+  batch_id: string | null;
+  post_id: string | null;
+  library_item_id: string | null;
+  lyric_template_id: string | null;
+  audio_clip_id: string | null;
+  item_index: number | null;
+};
+
+type RegenerationLibraryRow = {
+  id: string;
+  generation_item_id: string | null;
+  batch_id: string | null;
+  audio_clip_id: string | null;
+  library_index: number | null;
+};
+
+const regenerationItemSelect =
+  "id,batch_id,post_id,library_item_id,lyric_template_id,audio_clip_id,item_index";
+const regenerationLibrarySelect = "id,generation_item_id,batch_id,audio_clip_id,library_index";
+
+async function loadGenerationItem(
+  supabase: SupabaseAdmin,
+  itemId: string,
+): Promise<RegenerationItemRow | null> {
+  const item = await supabase
+    .from("generation_items")
+    .select(regenerationItemSelect)
+    .eq("id", itemId)
+    .maybeSingle();
+  if (item.error) throw item.error;
+  return (item.data as RegenerationItemRow | null) ?? null;
+}
+
+async function loadLibraryItem(
+  supabase: SupabaseAdmin,
+  libraryItemId: string,
+): Promise<RegenerationLibraryRow | null> {
+  const libraryItem = await supabase
+    .from("video_library_items")
+    .select(regenerationLibrarySelect)
+    .eq("id", libraryItemId)
+    .maybeSingle();
+  if (libraryItem.error) throw libraryItem.error;
+  return (libraryItem.data as RegenerationLibraryRow | null) ?? null;
+}
+
+async function findGenerationItemForLibrary(
+  supabase: SupabaseAdmin,
+  libraryItem: RegenerationLibraryRow,
+): Promise<RegenerationItemRow | null> {
+  if (libraryItem.generation_item_id) {
+    const linked = await loadGenerationItem(supabase, libraryItem.generation_item_id);
+    if (linked) return linked;
+  }
+
+  const byLibraryId = await supabase
+    .from("generation_items")
+    .select(regenerationItemSelect)
+    .eq("library_item_id", libraryItem.id)
+    .maybeSingle();
+  if (byLibraryId.error) throw byLibraryId.error;
+  if (byLibraryId.data) return byLibraryId.data as RegenerationItemRow;
+
+  if (libraryItem.batch_id && Number.isInteger(libraryItem.library_index)) {
+    const bySlot = await supabase
+      .from("generation_items")
+      .select(regenerationItemSelect)
+      .eq("batch_id", libraryItem.batch_id)
+      .eq("item_index", libraryItem.library_index)
+      .maybeSingle();
+    if (bySlot.error) throw bySlot.error;
+    if (bySlot.data) return bySlot.data as RegenerationItemRow;
+  }
+
+  return null;
+}
+
+async function findLibraryItemForGeneration(
+  supabase: SupabaseAdmin,
+  item: RegenerationItemRow,
+): Promise<RegenerationLibraryRow | null> {
+  if (item.library_item_id) {
+    const linked = await loadLibraryItem(supabase, item.library_item_id);
+    if (linked) return linked;
+  }
+
+  const byGeneration = await supabase
+    .from("video_library_items")
+    .select(regenerationLibrarySelect)
+    .eq("generation_item_id", item.id)
+    .maybeSingle();
+  if (byGeneration.error) throw byGeneration.error;
+  if (byGeneration.data) return byGeneration.data as RegenerationLibraryRow;
+
+  if (item.batch_id && item.audio_clip_id && Number.isInteger(item.item_index)) {
+    const bySlot = await supabase
+      .from("video_library_items")
+      .select(regenerationLibrarySelect)
+      .eq("batch_id", item.batch_id)
+      .eq("audio_clip_id", item.audio_clip_id)
+      .eq("library_index", item.item_index)
+      .maybeSingle();
+    if (bySlot.error) throw bySlot.error;
+    if (bySlot.data) return bySlot.data as RegenerationLibraryRow;
+  }
+
+  return null;
+}
+
+async function repairRegenerationLinks(
+  supabase: SupabaseAdmin,
+  item: RegenerationItemRow,
+  libraryItem: RegenerationLibraryRow | null,
+): Promise<RegenerationItemRow> {
+  if (!libraryItem) return item;
+  const now = new Date().toISOString();
+  if (item.library_item_id !== libraryItem.id) {
+    const updatedItem = await supabase
+      .from("generation_items")
+      .update({ library_item_id: libraryItem.id, updated_at: now })
+      .eq("id", item.id);
+    if (updatedItem.error) throw updatedItem.error;
+    item = { ...item, library_item_id: libraryItem.id };
+  }
+  if (libraryItem.generation_item_id !== item.id) {
+    const updatedLibrary = await supabase
+      .from("video_library_items")
+      .update({ generation_item_id: item.id, updated_at: now })
+      .eq("id", libraryItem.id);
+    if (updatedLibrary.error) throw updatedLibrary.error;
+  }
+  return item;
+}
+
+async function resolveRegenerationTarget(
+  supabase: SupabaseAdmin,
+  body: Record<string, unknown>,
+): Promise<{ item: RegenerationItemRow; libraryItemId: string | null }> {
+  const requestedItemId = stringValue(body.generationItemId) ?? stringValue(body.itemId);
+  const requestedLibraryItemId = stringValue(body.libraryItemId);
+  if (!requestedItemId && !requestedLibraryItemId) {
+    throw new Error("itemId, generationItemId, or libraryItemId required");
+  }
+
+  let item = requestedItemId ? await loadGenerationItem(supabase, requestedItemId) : null;
+  let libraryItem = requestedLibraryItemId
+    ? await loadLibraryItem(supabase, requestedLibraryItemId)
+    : null;
+
+  if (requestedItemId && !item) throw new Error("Generation item not found.");
+  if (requestedLibraryItemId && !libraryItem) throw new Error("Library item not found.");
+  if (item && libraryItem?.generation_item_id && libraryItem.generation_item_id !== item.id) {
+    throw new Error("Library item is linked to a different generation item.");
+  }
+
+  if (!item && libraryItem) item = await findGenerationItemForLibrary(supabase, libraryItem);
+  if (!item) throw new Error("Regeneration target not found for this library item.");
+
+  if (!libraryItem) libraryItem = await findLibraryItemForGeneration(supabase, item);
+  item = await repairRegenerationLinks(supabase, item, libraryItem);
+
+  return { item, libraryItemId: libraryItem?.id ?? item.library_item_id ?? null };
 }
 
 function countTemplateWords(blocks: unknown): number {
@@ -617,6 +790,9 @@ Deno.serve(async (request) => {
         if (batchId) {
           callChild("generate-video-prompts", { batchId }).catch(() => {});
         }
+        if (record(data.batch).auto_render === true) {
+          callWorker("fanpage-generate-due", {}).catch(() => {});
+        }
         return okEnvelope(data, "Campaign created.");
       }
 
@@ -735,23 +911,16 @@ Deno.serve(async (request) => {
       }
 
       case "regenerate": {
-        const itemId = body.itemId as string | undefined;
-        if (!itemId) throw new Error("itemId required");
-        const item = await supabase
-          .from("generation_items")
-          .select("id,batch_id,post_id,library_item_id,lyric_template_id")
-          .eq("id", itemId)
-          .maybeSingle();
-        if (item.error) throw item.error;
-        if (!item.data) throw new Error("Generation item not found.");
+        const target = await resolveRegenerationTarget(supabase, body);
+        const item = target.item;
+        const itemId = item.id;
         const batch = await supabase
           .from("generation_batches")
           .select("id,lyric_template_id")
-          .eq("id", item.data.batch_id)
+          .eq("id", item.batch_id)
           .maybeSingle();
         if (batch.error) throw batch.error;
-        const lyricTemplateId =
-          item.data.lyric_template_id ?? batch.data?.lyric_template_id ?? null;
+        const lyricTemplateId = item.lyric_template_id ?? batch.data?.lyric_template_id ?? null;
         if (lyricTemplateId) {
           const template = await supabase
             .from("kanvas_lyric_templates")
@@ -764,7 +933,7 @@ Deno.serve(async (request) => {
             return errorEnvelope(validation.message, validation.code, 400);
           }
         }
-        if (item.data?.post_id) {
+        if (item.post_id) {
           const skippedPost = await supabase
             .from("posts")
             .update({
@@ -772,7 +941,7 @@ Deno.serve(async (request) => {
               publish_status: "regenerated",
               generation_item_id: null,
             })
-            .eq("id", item.data.post_id)
+            .eq("id", item.post_id)
             .neq("status", "posted");
           if (skippedPost.error) throw skippedPost.error;
         }
@@ -786,7 +955,7 @@ Deno.serve(async (request) => {
           .eq("generation_item_id", itemId)
           .neq("status", "posted");
         if (skippedGenerationPosts.error) throw skippedGenerationPosts.error;
-        if (item.data?.library_item_id) {
+        if (target.libraryItemId) {
           const skippedLibraryPosts = await supabase
             .from("posts")
             .update({
@@ -794,7 +963,7 @@ Deno.serve(async (request) => {
               publish_status: "regenerated",
               generation_item_id: null,
             })
-            .eq("library_item_id", item.data.library_item_id)
+            .eq("library_item_id", target.libraryItemId)
             .neq("status", "posted");
           if (skippedLibraryPosts.error) throw skippedLibraryPosts.error;
         }
@@ -803,10 +972,11 @@ Deno.serve(async (request) => {
           .delete()
           .eq("generation_item_id", itemId);
         if (clearedUses.error) throw clearedUses.error;
-        if (item.data?.library_item_id) {
+        if (target.libraryItemId) {
           const resetLibrary = await supabase
             .from("video_library_items")
             .update({
+              generation_item_id: itemId,
               status: "not_ready",
               final_asset_id: null,
               thumbnail_url: null,
@@ -819,7 +989,7 @@ Deno.serve(async (request) => {
               metadata: {},
               updated_at: new Date().toISOString(),
             })
-            .eq("id", item.data.library_item_id);
+            .eq("id", target.libraryItemId);
           if (resetLibrary.error) throw resetLibrary.error;
         }
         const r = await supabase
@@ -842,7 +1012,12 @@ Deno.serve(async (request) => {
           },
         });
         if (attempt.error) throw attempt.error;
-        return okEnvelope({ ok: true });
+        return okEnvelope({
+          ok: true,
+          generationItemId: itemId,
+          libraryItemId: target.libraryItemId,
+          status: "pending",
+        });
       }
 
       case "markLibraryItemUnfit": {

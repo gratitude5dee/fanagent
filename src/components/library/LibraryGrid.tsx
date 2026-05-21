@@ -1,12 +1,12 @@
 import { useMemo, useState } from "react";
 import { CalendarClock, RefreshCcw, Search, X } from "lucide-react";
 import LibraryTile from "./LibraryTile";
-import type { LibraryItem } from "@/lib/library/types";
+import type { LibraryItem, RegenerateTarget } from "@/lib/library/types";
 import {
   filterLibraryItems,
   type LibrarySortMode,
   type LibraryStatusFilter,
-  selectedRegeneratableIds,
+  selectedRegeneratableTargets,
   selectedSchedulableIds,
 } from "@/lib/library/ui";
 
@@ -40,7 +40,7 @@ export default function LibraryGrid({
   onSelectMany: (itemIds: string[]) => void;
   onClearSelection: () => void;
   onBulkSchedule: (libraryItemIds: string[]) => void;
-  onBulkRegenerate: (generationItemIds: string[]) => void;
+  onBulkRegenerate: (targets: RegenerateTarget[]) => void;
   onRegenerate: (item: LibraryItem) => void;
   onMarkUnfit: (item: LibraryItem) => void;
   onReplaceSegment: (item: LibraryItem, segmentIndex: number) => void;
@@ -54,8 +54,8 @@ export default function LibraryGrid({
     () => filterLibraryItems(items, { status, query, sort, randomSeed }),
     [items, query, randomSeed, sort, status],
   );
-  const selectedGenerationIds = useMemo(
-    () => selectedRegeneratableIds(items, selectedIds),
+  const selectedRegenerateTargets = useMemo(
+    () => selectedRegeneratableTargets(items, selectedIds),
     [items, selectedIds],
   );
   const selectedLibraryIds = useMemo(
@@ -130,8 +130,8 @@ export default function LibraryGrid({
           <button
             type="button"
             className="button primary"
-            disabled={busy || selectedGenerationIds.length === 0}
-            onClick={() => onBulkRegenerate(selectedGenerationIds)}
+            disabled={busy || selectedRegenerateTargets.length === 0}
+            onClick={() => onBulkRegenerate(selectedRegenerateTargets)}
           >
             <RefreshCcw size={14} /> Regenerate selected
           </button>

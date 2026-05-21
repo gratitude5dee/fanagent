@@ -19,6 +19,7 @@ import {
 } from "../_shared/assets.ts";
 import { blocksToAss, blocksToSrt, type RenderLyricBlock } from "../_shared/lyrics.ts";
 import { pickFont } from "../_shared/fonts.ts";
+import { validateTemplateForRender } from "../_shared/generation.ts";
 
 type GenerationItemRow = {
   id: string;
@@ -239,23 +240,26 @@ Deno.serve(async (request) => {
         if (lyricTemplateId) {
           const lt = await supabase
             .from("kanvas_lyric_templates")
-            .select("id,lyric_blocks,selection_start_ms")
+            .select("id,status,lyric_blocks,trimmed_audio_asset_id,selection_start_ms")
             .eq("id", lyricTemplateId)
             .maybeSingle();
           if (lt.error) throw lt.error;
-          const blocks = (lt.data?.lyric_blocks ?? []) as RenderLyricBlock[];
-          if (!lt.data || blocks.length === 0) {
+          const validation = validateTemplateForRender(lt.data);
+          if (!validation.ok) {
             await supabase
               .from("generation_items")
               .update({
                 status: "failed",
-                error_message:
-                  "Selected lyric template has no transcribed blocks. Open Lyrics and re-save the template.",
+                error_message: validation.message,
                 updated_at: new Date().toISOString(),
               })
               .eq("id", body.itemId);
-            throw lyricTemplateBlocksMissing();
+            const error = lyricTemplateBlocksMissing();
+            error.message = validation.message;
+            error.code = validation.code;
+            throw error;
           }
+          const blocks = (lt.data?.lyric_blocks ?? []) as RenderLyricBlock[];
           if (blocks.length > 0) {
             const font = pickFont(body.itemId!);
             const ass = blocksToAss(blocks, lt.data!.selection_start_ms ?? 0, totalSeconds, {

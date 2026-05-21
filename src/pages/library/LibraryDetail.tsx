@@ -8,11 +8,12 @@ import SingleScheduleDialog from "@/components/library/SingleScheduleDialog";
 import {
   getLibraryDetail,
   markLibraryItemUnfit,
-  regenerateGenerationItems,
+  regenerateLibraryItems,
   type LibraryDetail as LibraryDetailData,
 } from "@/lib/library/api";
 import { displayError } from "@/lib/errors";
-import type { LibraryItem } from "@/lib/library/types";
+import type { LibraryItem, RegenerateTarget } from "@/lib/library/types";
+import { regenerationTargetForItem } from "@/lib/library/ui";
 
 function titleFor(data: LibraryDetailData | null): string {
   if (!data) return "Library";
@@ -68,17 +69,15 @@ export default function LibraryDetail() {
     });
   }
 
-  async function regenerate(generationItemIds: string[]) {
-    if (generationItemIds.length === 0) return;
+  async function regenerate(targets: RegenerateTarget[]) {
+    if (targets.length === 0) return;
     setBusy(true);
     setMessage(null);
     try {
-      await regenerateGenerationItems(generationItemIds);
+      await regenerateLibraryItems(targets);
       setSelectedIds(new Set());
       await refresh();
-      setMessage(
-        `Regenerated ${generationItemIds.length} item${generationItemIds.length === 1 ? "" : "s"}.`,
-      );
+      setMessage(`Regenerated ${targets.length} item${targets.length === 1 ? "" : "s"}.`);
     } catch (error) {
       setMessage(displayError(error));
     } finally {
@@ -87,8 +86,9 @@ export default function LibraryDetail() {
   }
 
   function regenerateOne(item: LibraryItem) {
-    if (!item.generation_item_id) return;
-    regenerate([item.generation_item_id]);
+    const target = regenerationTargetForItem(item);
+    if (!target) return;
+    regenerate([target]);
   }
 
   async function markUnfit(item: LibraryItem) {

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   createRegenerationReset,
@@ -47,5 +48,22 @@ describe("regenerate lyric template guard", () => {
       error_message: null,
     });
     expect(reset).not.toHaveProperty("lyric_template_id");
+  });
+
+  it("allows regenerate to resolve generation rows from library item ids", () => {
+    const source = readFileSync("supabase/functions/fanpage-campaign/index.ts", "utf8");
+
+    expect(source).toContain("libraryItemId");
+    expect(source).toContain("resolveRegenerationTarget");
+    expect(source).toContain("findGenerationItemForLibrary");
+    expect(source).toContain("generationItemId: itemId");
+    expect(source).toContain('status: "pending"');
+  });
+
+  it("starts the generation worker after auto-render campaign creation", () => {
+    const source = readFileSync("supabase/functions/fanpage-campaign/index.ts", "utf8");
+
+    expect(source).toContain("record(data.batch).auto_render === true");
+    expect(source).toContain('callWorker("fanpage-generate-due", {})');
   });
 });

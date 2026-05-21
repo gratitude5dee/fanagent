@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   canScheduleLibraryItem,
+  canRegenerateLibraryItem,
   defaultSingleScheduleInput,
   filterLibraryItems,
   libraryAttributionLines,
@@ -14,6 +15,7 @@ import {
   libraryStatusTone,
   parseSingleScheduleInput,
   selectedRegeneratableIds,
+  selectedRegeneratableTargets,
   selectedSchedulableIds,
   sortLibraryItems,
   sortLibraryItemsForDisplay,
@@ -195,6 +197,19 @@ describe("library UI helpers", () => {
     expect(selectedRegeneratableIds(items, new Set(["item-ready", "missing"]))).toEqual([
       "generation-1",
     ]);
+  });
+
+  it("keeps failed library rows regeneratable even before generation links are repaired", () => {
+    const failedWithoutGeneration: LibraryItem = {
+      ...items[1],
+      id: "item-failed-unlinked",
+      generation_item_id: null,
+    };
+
+    expect(canRegenerateLibraryItem(failedWithoutGeneration)).toBe(true);
+    expect(
+      selectedRegeneratableTargets([failedWithoutGeneration], new Set(["item-failed-unlinked"])),
+    ).toEqual([{ libraryItemId: "item-failed-unlinked", generationItemId: null }]);
   });
 
   it("exposes the library sort modes in the grid UI", () => {
