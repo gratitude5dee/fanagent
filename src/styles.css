@@ -252,13 +252,14 @@ textarea {
 }
 
 .panel {
-  background: var(--fanagent-surface);
-  border: 1px solid var(--fanagent-line);
-  border-radius: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
   box-shadow: var(--fanagent-shadow);
   min-width: 0;
   padding: 18px;
 }
+
 
 .calendar-panel {
   overflow: hidden;
