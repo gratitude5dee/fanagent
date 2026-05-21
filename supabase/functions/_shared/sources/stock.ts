@@ -249,7 +249,10 @@ export async function searchStock(input: {
   const settings = normalizeSettings(input.settings);
   const query = buildQuery(input.query, settings);
   const searches: Array<Promise<StockClip[]>> = [];
-  if (settings.providers.includes("library"))
+  // When the category is locked, skip the unscoped library scan — we can't
+  // confirm individual `media_assets` rows match the category and we'd risk
+  // leaking off-category footage into the campaign.
+  if (settings.providers.includes("library") && !settings.lockCategory)
     searches.push(searchLibrary(input.accountId, settings));
   if (settings.providers.includes("pexels")) searches.push(searchPexels(query, settings));
   if (settings.providers.includes("pixabay")) searches.push(searchPixabay(query, settings));
