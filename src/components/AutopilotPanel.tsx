@@ -1051,6 +1051,9 @@ export default function AutopilotPanel({
                   onStreamerName={setStreamerName}
                 />
               </form>
+              {lastLaunchedAudioClipId ? (
+                <GeneratedLibraryPreview audioClipId={lastLaunchedAudioClipId} />
+              ) : null}
             </>
           ) : null}
 
