@@ -46,6 +46,23 @@ export function UploadStep({
   onTrimmedAudio,
 }: UploadStepProps) {
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
+
+  function handleFile(file: File | null) {
+    setUploadError(null);
+    if (file) {
+      try {
+        validateAudioUpload(file);
+      } catch (error) {
+        setUploadError(error instanceof Error ? error.message : String(error));
+        onAudioFile(null);
+        onTrimmedAudio(null);
+        return;
+      }
+    }
+    onAudioFile(file);
+    onTrimmedAudio(null);
+  }
 
   return (
     <section className="panel">
@@ -54,27 +71,42 @@ export function UploadStep({
         <h3>2. Upload audio</h3>
       </div>
       <div className="stack">
-        <label>
-          Audio (MP3/WAV/M4A/AAC/FLAC, max 50 MB)
+        <label
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragActive(true);
+          }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragActive(false);
+            const file = e.dataTransfer.files?.[0] ?? null;
+            handleFile(file);
+          }}
+          style={{
+            border: `2px dashed ${dragActive ? "hsl(220 90% 56%)" : "rgba(127,127,127,0.35)"}`,
+            borderRadius: 10,
+            padding: 14,
+            background: dragActive ? "rgba(120,140,255,0.06)" : "transparent",
+            transition: "background 120ms, border-color 120ms",
+            display: "block",
+          }}
+        >
+          <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>
+            Audio (MP3/WAV/M4A/AAC/FLAC, max 50 MB) — drag &amp; drop or browse
+          </div>
           <input
             type="file"
             accept={AUDIO_ACCEPT}
             onChange={(event) => {
               const file = event.target.files?.[0] ?? null;
-              setUploadError(null);
-              if (file) {
-                try {
-                  validateAudioUpload(file);
-                } catch (error) {
-                  setUploadError(error instanceof Error ? error.message : String(error));
-                  event.target.value = "";
-                  onAudioFile(null);
-                  onTrimmedAudio(null);
-                  return;
-                }
+              if (!file) {
+                onAudioFile(null);
+                onTrimmedAudio(null);
+                return;
               }
-              onAudioFile(file);
-              onTrimmedAudio(null);
+              handleFile(file);
+              if (uploadError) event.target.value = "";
             }}
             required={!trimmedAudio && !templateProvidesAudio}
           />
