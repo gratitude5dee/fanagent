@@ -17,6 +17,9 @@ export default function ConnectPage() {
         isConnected={ctx.isConnected}
         connectUrl={ctx.account ? tiktokConnectUrl(ctx.account.id) : null}
       />
+      <p className="text-sm text-muted-foreground -mt-2">
+        Optional — you can connect TikTok later, before publishing.
+      </p>
       {ctx.diagnostics ? (
         <section className="panel subtle-panel">
           <div className="panel-title">

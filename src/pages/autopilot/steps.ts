@@ -23,8 +23,8 @@ export const STEPS: AutopilotStep[] = [
     id: "connect",
     path: "/autopilot/connect",
     label: "Connect",
-    context: "Connect TikTok",
-    isComplete: (ctx) => ctx.isConnected,
+    context: "Connect TikTok (optional)",
+    isComplete: () => true,
   },
   {
     id: "upload",
