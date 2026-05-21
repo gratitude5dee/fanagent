@@ -24,7 +24,7 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<App />} />
+        <Route path="/" element={<AppShell><App /></AppShell>} />
         <Route path="/library" element={wrap(<LibraryLanding />)} />
         <Route path="/clips" element={wrap(<ClipsPage />)} />
         <Route path="/library/:audioClipId" element={wrap(<LibraryDetail />)} />
