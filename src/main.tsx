@@ -6,6 +6,7 @@ import "./styles.css";
 
 const LibraryLanding = lazy(() => import("./pages/library/LibraryLanding"));
 const LibraryDetail = lazy(() => import("./pages/library/LibraryDetail"));
+const ClipsPage = lazy(() => import("./pages/clips/ClipsPage"));
 const AccountsPage = lazy(() => import("./pages/settings/AccountsPage"));
 const LyricsHome = lazy(() => import("./pages/lyrics/LyricsHome"));
 const LyricsWizard = lazy(() => import("./pages/lyrics/LyricsWizard"));
