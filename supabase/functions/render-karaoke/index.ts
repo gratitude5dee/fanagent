@@ -17,7 +17,8 @@ import {
   renderedVideoSignedUrlSeconds,
   renderedVideoStoragePath,
 } from "../_shared/assets.ts";
-import { blocksToSrt, type RenderLyricBlock } from "../_shared/lyrics.ts";
+import { blocksToAss, blocksToSrt, type RenderLyricBlock } from "../_shared/lyrics.ts";
+import { pickFont } from "../_shared/fonts.ts";
 
 type GenerationItemRow = {
   id: string;
