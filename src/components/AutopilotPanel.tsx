@@ -168,6 +168,7 @@ async function callCampaign<T>(action: string, body?: Record<string, unknown>): 
 type AutopilotPanelProps = {
   initialTab?: "campaign" | "lyrics";
   focusLyricsStepSignal?: number;
+  initialLyricTemplateId?: string | null;
 };
 
 function tiktokConnectUrl(accountId: string): string {
@@ -258,6 +259,7 @@ function summarizeTemplate(template: LyricTemplate | LyricTemplateSummary): Lyri
 export default function AutopilotPanel({
   initialTab,
   focusLyricsStepSignal,
+  initialLyricTemplateId,
 }: AutopilotPanelProps = {}) {
   const [data, setData] = useState<CampaignList | null>(null);
   const [lyricTemplates, setLyricTemplates] = useState<LyricTemplateSummary[]>([]);
@@ -489,6 +491,21 @@ export default function AutopilotPanel({
   useEffect(() => {
     if (initialTab) setTab(initialTab);
   }, [initialTab]);
+
+  // Deep-link from "Remix": preselect the template, default to randomize so
+  // pool-size never blocks the first launch, and scroll the campaign step in.
+  const appliedInitialTemplateRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialLyricTemplateId) return;
+    if (appliedInitialTemplateRef.current === initialLyricTemplateId) return;
+    appliedInitialTemplateRef.current = initialLyricTemplateId;
+    setTab("campaign");
+    setLyricTemplateId(initialLyricTemplateId);
+    setRandomize(true);
+    window.requestAnimationFrame(() => {
+      campaignLyricsStepRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }, [initialLyricTemplateId]);
 
   useEffect(() => {
     if (!focusLyricsStepSignal) return;

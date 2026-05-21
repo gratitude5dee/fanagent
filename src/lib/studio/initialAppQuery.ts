@@ -2,14 +2,21 @@ export type InitialAppQuery = {
   mode: "autopilot" | "studio";
   studioView: "create" | "calendar";
   focusLyrics: boolean;
+  lyricTemplateId: string | null;
 };
 
 export function readInitialAppQuery(search?: string): InitialAppQuery {
   const source =
     search ?? (typeof window === "undefined" || !window.location ? "" : window.location.search);
   const params = new URLSearchParams(source);
+  const lyricTemplateId = params.get("lyricTemplateId");
   if (params.get("step") === "lyrics") {
-    return { mode: "autopilot", studioView: "create", focusLyrics: true };
+    return {
+      mode: "autopilot",
+      studioView: "create",
+      focusLyrics: true,
+      lyricTemplateId,
+    };
   }
   const modeParam = params.get("mode");
   const viewParam = params.get("view");
@@ -17,5 +24,6 @@ export function readInitialAppQuery(search?: string): InitialAppQuery {
     mode: modeParam === "studio" ? "studio" : "autopilot",
     studioView: modeParam === "studio" && viewParam === "calendar" ? "calendar" : "create",
     focusLyrics: false,
+    lyricTemplateId,
   };
 }

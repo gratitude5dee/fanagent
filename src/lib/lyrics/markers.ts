@@ -76,3 +76,45 @@ export class UndoStack<T> {
     return this.future.length > 0;
   }
 }
+
+// Word identity used for re-syncing markers when the lyric blocks change.
+export type WordKey = { id: string; startTime: number; endTime: number };
+
+// When a word is added we drop a marker at its start; when a word is removed
+// we drop the nearest marker IF it falls inside that word's time window
+// (with a small slack). Markers the user placed away from word boundaries
+// are preserved.
+export function resyncOnWordsChange(
+  prev: WordKey[],
+  next: WordKey[],
+  markers: number[],
+): number[] {
+  const SLACK = 0.2;
+  const prevIds = new Set(prev.map((w) => w.id));
+  const nextIds = new Set(next.map((w) => w.id));
+  const removed = prev.filter((w) => !nextIds.has(w.id));
+  const added = next.filter((w) => !prevIds.has(w.id));
+
+  let out = markers.slice();
+  for (const w of removed) {
+    const lo = w.startTime - SLACK;
+    const hi = w.endTime + SLACK;
+    // Find marker inside the word window
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    out.forEach((m, i) => {
+      if (m < lo || m > hi) return;
+      const center = (w.startTime + w.endTime) / 2;
+      const d = Math.abs(m - center);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = i;
+      }
+    });
+    if (bestIdx !== -1) out = out.filter((_, i) => i !== bestIdx);
+  }
+  for (const w of added) {
+    out = addMarker(out, w.startTime);
+  }
+  return out;
+}

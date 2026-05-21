@@ -546,6 +546,7 @@ export default function App() {
         <AutopilotPanel
           initialTab={lyricsFocusSignal ? "lyrics" : undefined}
           focusLyricsStepSignal={lyricsFocusSignal}
+          initialLyricTemplateId={initialQuery.current.lyricTemplateId}
         />
       ) : (
         <>

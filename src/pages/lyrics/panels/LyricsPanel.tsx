@@ -8,6 +8,7 @@ type Props = {
   engine: AudioEngine;
   onDone: (blocks: LyricBlock[]) => Promise<void>;
   onRetry: () => Promise<void>;
+  onBlocksLive?: (blocks: LyricBlock[]) => void;
 };
 
 function statusToTranscribe(t: LyricTemplate | null): TranscribeStatus {
@@ -29,7 +30,7 @@ const STATUS_LABEL: Record<TranscribeStatus, string> = {
   failed: "Transcription failed",
 };
 
-export default function LyricsPanel({ template, engine, onDone, onRetry }: Props) {
+export default function LyricsPanel({ template, engine, onDone, onRetry, onBlocksLive }: Props) {
   const status = statusToTranscribe(template);
   const [blocks, setBlocks] = useState<LyricBlock[]>(template?.lyric_blocks ?? []);
   const [editingWord, setEditingWord] = useState<string | null>(null);
@@ -37,6 +38,10 @@ export default function LyricsPanel({ template, engine, onDone, onRetry }: Props
   const [busy, setBusy] = useState(false);
   const wordRefs = useRef<Map<string, HTMLElement>>(new Map());
   const lastScrolledRef = useRef<string | null>(null);
+  const onBlocksLiveRef = useRef(onBlocksLive);
+  useEffect(() => {
+    onBlocksLiveRef.current = onBlocksLive;
+  }, [onBlocksLive]);
 
   useEffect(() => {
     setBlocks(template?.lyric_blocks ?? []);
@@ -44,6 +49,11 @@ export default function LyricsPanel({ template, engine, onDone, onRetry }: Props
 
   const time = engine.currentTime;
   const clipDur = (template?.selection_duration_ms ?? 15000) / 1000;
+
+  const applyBlocks = (next: LyricBlock[]) => {
+    setBlocks(next);
+    onBlocksLiveRef.current?.(next);
+  };
 
   function manualEntry() {
     const block: LyricBlock = {
@@ -60,7 +70,7 @@ export default function LyricsPanel({ template, engine, onDone, onRetry }: Props
         },
       ],
     };
-    setBlocks([block]);
+    applyBlocks([block]);
   }
 
   function commitWordEdit(blockId: string, wordId: string, text: string) {
@@ -69,49 +79,46 @@ export default function LyricsPanel({ template, engine, onDone, onRetry }: Props
       deleteWord(blockId, wordId);
       return;
     }
-    setBlocks((prev) =>
-      prev.map((b) =>
-        b.id === blockId
-          ? {
-              ...b,
-              words: b.words.map((w) => (w.id === wordId ? { ...w, text: trimmed } : w)),
-            }
-          : b,
-      ),
+    const next = blocks.map((b) =>
+      b.id === blockId
+        ? {
+            ...b,
+            words: b.words.map((w) => (w.id === wordId ? { ...w, text: trimmed } : w)),
+          }
+        : b,
     );
+    applyBlocks(next);
     setEditingWord(null);
   }
 
   function deleteWord(blockId: string, wordId: string) {
-    setBlocks((prev) =>
-      prev
-        .map((b) => (b.id === blockId ? { ...b, words: b.words.filter((w) => w.id !== wordId) } : b))
-        .filter((b) => b.words.length > 0),
-    );
+    const next = blocks
+      .map((b) => (b.id === blockId ? { ...b, words: b.words.filter((w) => w.id !== wordId) } : b))
+      .filter((b) => b.words.length > 0);
+    applyBlocks(next);
     setEditingWord(null);
   }
 
   function addWord(blockId: string) {
-    setBlocks((prev) =>
-      prev.map((b) => {
-        if (b.id !== blockId) return b;
-        const last = b.words[b.words.length - 1];
-        const start = last ? last.endTime : b.startTime;
-        const end = Math.min(clipDur, start + 0.4);
-        return {
-          ...b,
-          endTime: Math.max(b.endTime, end),
-          words: [
-            ...b.words,
-            { id: crypto.randomUUID(), text: "word", startTime: start, endTime: end },
-          ],
-        };
-      }),
-    );
+    const next = blocks.map((b) => {
+      if (b.id !== blockId) return b;
+      const last = b.words[b.words.length - 1];
+      const start = last ? last.endTime : b.startTime;
+      const end = Math.min(clipDur, start + 0.4);
+      return {
+        ...b,
+        endTime: Math.max(b.endTime, end),
+        words: [
+          ...b.words,
+          { id: crypto.randomUUID(), text: "word", startTime: start, endTime: end },
+        ],
+      };
+    });
+    applyBlocks(next);
   }
 
   function deleteBlock(blockId: string) {
-    setBlocks((prev) => prev.filter((b) => b.id !== blockId));
+    applyBlocks(blocks.filter((b) => b.id !== blockId));
   }
 
   async function done() {

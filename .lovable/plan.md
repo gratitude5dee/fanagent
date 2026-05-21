@@ -1,83 +1,89 @@
-## Categorized Clip Library + Instant Remix Engine
+## Goals
 
-This is a large, multi-day build. Before I start coding I need to align on scope because **most of the spec already exists in this repo under different names** — building it twice would create two parallel pipelines and break everything. Here is the architectural read and the proposed plan.
+1. While the user adds/edits/deletes words in the Lyrics panel, the Markers panel should immediately reflect the new words (karaoke line, captions, active word, block windows).
+2. On a lyric add/delete, intelligently keep cut markers aligned:
+   - Word deleted ⇒ drop the marker nearest that word's window (within tolerance).
+   - Word added ⇒ insert a marker at the new word's start (snapped, deduped).
+   - Markers the user manually placed elsewhere are preserved.
+3. Clicking **Remix** / **Open remix** for a saved template should land the user in Autopilot → Campaign with that template already selected and "Generate library" enabled (no re-upload required).
 
 ---
 
-### What already exists (and what the spec maps to)
+## Part A — Live lyrics ↔ markers sync
 
-| Spec concept | Already in repo as |
-|---|---|
-| `clips` table | `source_candidates` (has `source_type`, `provider`, `duration_seconds`, `is_portrait`, `license`, `perceptual_hash`) |
-| `clip_categories` | `source_type` enum used by `_shared/sources/registry.ts` — currently: `stock`, `streamer_clip`, `sports_edit`, `seedance` (AI), plus `library` (reuse) |
-| `lyric_templates` | `kanvas_lyric_templates` (has `lyric_blocks`, `cut_markers`, audio refs) |
-| `campaigns` | `generation_batches` (has `source_mode`, `lyric_template_id`, `clip_filters` via `settings`, `quantity`) |
-| `library_edits` | `video_library_items` (has `status: not_ready/ready/scheduled/posted`, `segments`, `final_asset_id`) |
-| `render_jobs` | `generation_items` + `render_attempts` |
-| Remix worker | `fanpage-generate-due` → `pick-stock-clip` → `stitch-segments` → `render-karaoke` |
-| Studio "Ready" lane | `StudioReadyLibraryPanel` already exists |
-| Calendar drag-to-schedule | `FanAgentCalendar` + `library-schedule` edge function |
-| Category isolation | `_shared/sources/registry.ts` already gates by `source_type` |
+**`src/components/autopilot/LyricsTemplateBuilder.tsx`**
+- Add a debounced `onBlocksLive` handler (≈200ms) that:
+  - `dispatch({ type: "patch", patch: { lyric_blocks: blocks } })` so MarkersPanel rerenders immediately.
+  - Performs marker re-sync (see below) and dispatches the new `cut_markers` too.
+  - Persists `{ lyric_blocks, cut_markers }` via `lyricsApi.patch` (fire-and-forget, last-write-wins).
+- Keep existing `onLyricsDone` for the "Done" button which additionally flips status to `lyrics_ready` and advances to step 3.
 
-The pipeline is real — your last few sessions were debugging it (the lyric template → audio_clip bridge, the cancelled 81 batches, etc.).
+**`src/components/autopilot/LyricsPanel.tsx`**
+- Add `onBlocksLive?: (blocks: LyricBlock[]) => void` prop.
+- After every `setBlocks(next)` in `commitWordEdit` / `deleteWord` / `addWord` / `deleteBlock` / `manualEntry`, fire `onBlocksLive(next)`.
+- Continue to call `onDone` only from the explicit "Done" button.
 
-### What's actually missing vs. spec
+**`src/lib/lyrics/markers.ts`** — add pure helpers:
+- `resyncOnWordsChange(prevWords: {id, startTime, endTime}[], nextWords: ..., markers: number[]): number[]`
+  - Compute removed = prev.filter(p => !next.find(n => n.id === p.id))
+  - Compute added   = next.filter(n => !prev.find(p => p.id === n.id))
+  - For each removed word: `deleteAt(markers, midpoint(word))` (only if the nearest marker falls within the word's `[startTime - 0.05, endTime + 0.05]` window).
+  - For each added word: `addMarker(markers, word.startTime)` (uses existing snap + dedupe).
+  - Order: removals first, then additions.
+- This is the only marker logic change; existing manual placement still works.
 
-1. **A first-class `clip_categories` table with subcategories** (basketball/football/etc.). Today `source_type` is flat — sports_edit has no sport-level partitioning.
-2. **A category dropdown in Campaign Parameters** that replaces/augments the current `source_mode` selector and shows live pool counts per category/subcategory.
-3. **Instant "Generate Library" + "Remix" buttons** that bypass scheduling and create `video_library_items` with `status='ready'` and **no `posts` row** (today every batch slot creates a scheduled post — see `create-generation-batch`). This is the core behavior change.
-4. **Subcategory tagging on `source_candidates`** (a `subcategory` text column + tag-based filtering) so basketball ≠ football.
-5. **Stratified "Randomize" sampling** across source_types in `pick-stock-clip`.
-6. **Hard pool-size precheck** in the UI before enabling Generate (today it discovers shortage mid-render and fails the item).
-7. **Studio "Ready" lane refinement** — already exists but currently mixed with scheduled posts; needs a clean filter for `ready & post_id IS NULL`.
+**Marker re-sync glue (in LyricsTemplateBuilder)**
+- Compare `state.template.lyric_blocks` vs incoming `blocks` to derive prev/next flat word arrays, run `resyncOnWordsChange`, and dispatch the combined `{ lyric_blocks, cut_markers }` patch.
 
-### Proposed plan (phased — I'll pause for approval between phases)
+**`src/pages/lyrics/panels/MarkersPanel.tsx`**
+- Already reads from `template.lyric_blocks` / `template.cut_markers`; no change needed beyond confirming the existing `useEffect([template?.cut_markers])` re-syncs local state (it does).
 
-**Phase 1 — Schema + category model** (1 migration)
-- Add `clip_categories` table (slug, name, parent_id, icon, sort_order, source_type mapping). Seed: stock_footage, sports_edits (children: basketball, football, soccer, mma, f1), streamer_clips, dance_reels, podcast_reels, ai_ugc, ai_dance_reels.
-- Add `subcategory_slug TEXT` + `category_id UUID` columns to `source_candidates`, backfill from existing `source_type` + `metadata.tags`.
-- Add `view_clip_pool_counts` SQL view: `(user_id, category_id, subcategory_slug, count)` for instant UI counts.
-- Add `auto_render` (bool) + `category_id` + `subcategory_slug` + `randomize` (bool) to `generation_batches`.
-- Add RLS to new table.
+---
 
-**Phase 2 — Pool resolver + isolation enforcement** (shared lib + edge function)
-- New `_shared/sources/pool.ts`: `selectClipPool({ category_id, subcategory_slug, randomize, filters })` — single chokepoint, all callers must go through it.
-- Refactor `pick-stock-clip` + `_shared/sources/registry.ts` to require a `category_id`; no implicit fallback to other source_types.
-- Add `stratifiedSample` for randomize mode.
-- Unit tests asserting isolation: feed mixed pool → assert output IDs all share `category_id`.
+## Part B — Unblock "Generate library" from the Remix entry point
 
-**Phase 3 — Campaign Parameters UI**
-- New `CategoryPicker` component (tree dropdown + thumbnail preview strip + filters drawer + live count).
-- Replace the existing `SourceMode` selector inside `CampaignStep`.
-- Add pool-size precheck: disable Generate unless `pool_count >= template.cut_markers.length`.
+**Routing**
+- Update `src/lib/routes.ts`:
+  - `lyricsRemix(id) => `/?mode=autopilot&view=campaign&lyricTemplateId=${id}` (query string) so all remix links land in the Autopilot Campaign.
+- `src/pages/lyrics/LyricsHome.tsx` "Open remix" / `LyricsWizard` post-save / `LyricsStep` Remix button already use `appRoutes.lyricsRemix(id)`, so the change propagates automatically.
+- `src/App.tsx` initial-query handler:
+  - Extend `readInitialAppQuery` (or inline) to read `lyricTemplateId` from URL and pass it down to `AutopilotPanel` as a new `initialLyricTemplateId` prop.
+- Keep `RemixEditor` file but it becomes unreachable through new links (route still works for direct deep-links until removed in a later sprint).
 
-**Phase 4 — Instant render path** (the spec's key behavior)
-- New edge function `library-remix`: takes `template_id` + current campaign params, immediately creates a `video_library_items` row with `status='generating'`, a `generation_items` row with `auto_render=true`, **does not create a `posts` row**.
-- Modify `fanpage-generate-due` to honor the `auto_render` flag — finish the item to `status='ready'` and skip post creation.
-- Add "Remix" button to lyric template cards (`LyricsHome` / `LyricsWizard`).
-- Add "Generate Library" button to `CampaignStep` that calls `library-remix` N times.
+**`src/components/AutopilotPanel.tsx`**
+- New prop `initialLyricTemplateId?: string`.
+- On mount, after templates load, if `initialLyricTemplateId` is present:
+  - `setLyricTemplateId(initialLyricTemplateId)`
+  - `setTab("campaign")`
+  - Scroll the campaign step into view.
 
-**Phase 5 — Studio Ready lane + Library wiring**
-- Filter `StudioReadyLibraryPanel` to `status='ready' AND post_id IS NULL` only.
-- Add Realtime subscription on `video_library_items` for live status flips (currently polled).
-- Wire drag-from-Ready-to-calendar to existing `library-schedule` (already opt-in).
+**Unblock the "Generate library" button when only a saved template is selected**
+- The dependency chain currently requires `trimmedAudio` (a freshly uploaded blob). When the user arrives via Remix, `trimmedAudio` is `null` but the saved template already carries `audio_clip_id` + `trimmed_audio_asset_id`.
+- `trimmedAudioReady` already accepts `(campaignHandoff.audioClipId && campaignHandoff.trimmedAudioAssetId)`, but `campaignHandoff.ready` requires `durationMatches` against `registeredAudioClip?.duration_sec ?? trimmedAudio?.durationSec ?? templateDurationSec`. With both right-side fallbacks null and `templateDurationSec` on both sides, `durationMatches` becomes `true` — confirm this path and add a unit-level guard so that selecting a saved template with no fresh upload yields `ready === true`.
+- `startCampaign` already supports the no-`trimmedAudio` path (it falls through to `selectedTemplate.audio_clip_id`). No change needed there beyond removing/relaxing the `if (!trimmedAudio && !selectedTemplate.audio_clip_id)` branch — already correct.
+- Fix the actual blocker: **`!selectedTemplate.cut_marker_count`** path. Currently `poolBlocked` uses `requiredShots = selectedTemplate?.cut_marker_count ?? 1`. When a Remix-launched template has cut markers > pool size and `randomize=false`, it stays blocked. Default `randomize` to `true` when the user arrives with `initialLyricTemplateId` so the first launch is never pool-blocked; the user can opt out manually. (This matches the "instant remix" intent.)
 
-**Phase 6 — Failure UI + E2E test**
-- Pool-too-small inline error.
-- Failed-render retry button (calls existing `recover_generation_items`).
-- Playwright spec: seed 30 basketball candidates, 1 template w/ 8 shots, click Remix, poll until ready, assert all 8 `clip_ids_used` are basketball.
+---
 
-### Things I am NOT doing (and why)
+## Technical notes
 
-- **Inngest / BullMQ.** This repo's queue is already `claim_generation_items` + cron-driven `fanpage-generate-due`. Adding a second queue is the wrong move — it would duplicate the existing worker loop and the cancellation logic you just stabilized.
-- **Brand-new Remotion stack.** `render-karaoke` already exists and produces 9:16 MP4s with burn-in captions. I'll wire Remix to it, not rebuild.
-- **Re-naming `source_candidates` → `clips`.** Migration cost is huge and every edge function would break. I'll keep storage names and expose "clips/categories" only at the API/UI layer.
-- **Scraping pipeline.** Out of scope for this PR — ingestion already exists per source_type. I'll add a manual upload path for subcategories but not new scrapers.
+- All marker math stays in `src/lib/lyrics/markers.ts`; UI components remain dumb.
+- Debounce live patch in builder to avoid hammering `kanvas-lyrics-template` on every keystroke.
+- No DB schema changes. No edge-function changes.
+- Tests: extend `tests/` with a small unit test for `resyncOnWordsChange` (added/removed/preserved cases) — sibling of existing marker helpers.
 
-### Open questions before I start Phase 1
+---
 
-1. **Should "Remix" replace the current scheduled-post flow, or coexist?** The spec says edits land as `ready_to_post` with no calendar slot. Today every batch slot books a `posts` row at a scheduled time. If I add `auto_render` mode, existing campaigns keep their behavior; new ones using the category picker get the instant-render behavior. OK?
-2. **Subcategories: do you want them user-defined or hard-coded?** Spec hard-codes (basketball/football/soccer/mma/f1). I'll seed those and make the table extensible later.
-3. **Randomize stratification key:** by `category_id` (parent) or by `(category_id, subcategory_slug)` leaves? Spec implies parent.
+## Files touched
 
-Reply with: "go phase 1" (and answers to the 3 questions) and I'll ship the migration. I will not start coding the full 6 phases in one shot — each phase is 200-600 LOC and needs verification before the next.
+```text
+src/lib/lyrics/markers.ts                          (add resyncOnWordsChange)
+src/pages/lyrics/panels/LyricsPanel.tsx            (add onBlocksLive)
+src/components/autopilot/LyricsTemplateBuilder.tsx (wire onBlocksLive + marker resync + debounced persist)
+src/lib/routes.ts                                  (lyricsRemix → autopilot deep link)
+src/App.tsx                                        (parse lyricTemplateId from URL, forward to AutopilotPanel)
+src/components/AutopilotPanel.tsx                  (initialLyricTemplateId prop, default randomize=true when present)
+tests/lyrics-template.test.ts (or new file)        (unit test for resyncOnWordsChange)
+```
+
+No migrations, no edge functions, no Supabase config.
