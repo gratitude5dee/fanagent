@@ -738,6 +738,7 @@ export default function AutopilotPanel({
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       lyricTemplateId: lyricTemplateId || null,
     });
+    setLastLaunchedAudioClipId(campaignHandoff.audioClipId);
   }
 
   async function setItemTemplate(itemId: string, templateId: string | null) {
