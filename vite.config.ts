@@ -29,8 +29,8 @@ export default defineConfig({
       "react/jsx-dev-runtime",
       "react/jsx-runtime",
     ],
-    force: true,
   },
+
   server: {
     host: "127.0.0.1",
     port: 5173,
