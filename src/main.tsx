@@ -6,6 +6,7 @@ import "./styles.css";
 
 const LibraryLanding = lazy(() => import("./pages/library/LibraryLanding"));
 const LibraryDetail = lazy(() => import("./pages/library/LibraryDetail"));
+const ClipsPage = lazy(() => import("./pages/clips/ClipsPage"));
 const AccountsPage = lazy(() => import("./pages/settings/AccountsPage"));
 const LyricsHome = lazy(() => import("./pages/lyrics/LyricsHome"));
 const LyricsWizard = lazy(() => import("./pages/lyrics/LyricsWizard"));
@@ -22,6 +23,7 @@ createRoot(document.getElementById("root")!).render(
       <Routes>
         <Route path="/" element={<App />} />
         <Route path="/library" element={wrap(<LibraryLanding />)} />
+        <Route path="/clips" element={wrap(<ClipsPage />)} />
         <Route path="/library/:audioClipId" element={wrap(<LibraryDetail />)} />
         <Route path="/settings/accounts" element={wrap(<AccountsPage />)} />
         <Route path="/lyrics" element={wrap(<LyricsHome />)} />

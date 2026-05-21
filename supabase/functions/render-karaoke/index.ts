@@ -17,7 +17,8 @@ import {
   renderedVideoSignedUrlSeconds,
   renderedVideoStoragePath,
 } from "../_shared/assets.ts";
-import { blocksToSrt, type RenderLyricBlock } from "../_shared/lyrics.ts";
+import { blocksToAss, blocksToSrt, type RenderLyricBlock } from "../_shared/lyrics.ts";
+import { pickFont } from "../_shared/fonts.ts";
 
 type GenerationItemRow = {
   id: string;
@@ -214,24 +215,60 @@ Deno.serve(async (request) => {
             .maybeSingle();
           const blocks = (lt.data?.lyric_blocks ?? []) as RenderLyricBlock[];
           if (blocks.length > 0) {
-            const srt = blocksToSrt(blocks, lt.data!.selection_start_ms ?? 0, totalSeconds);
-            // Upload SRT to public bucket so fal can fetch it.
-            const srtPath = `subtitles/${body.itemId}-${Date.now()}.srt`;
-            const up = await supabase.storage
+            const font = pickFont(body.itemId!);
+            const ass = blocksToAss(
+              blocks,
+              lt.data!.selection_start_ms ?? 0,
+              totalSeconds,
+              {
+                fontName: font.name,
+                fontWeight: font.weight,
+                primaryColour: font.primaryColour,
+                outlineColour: font.outlineColour,
+              },
+            );
+            const assPath = `subtitles/${body.itemId}-${Date.now()}.ass`;
+            const upAss = await supabase.storage
               .from("post-assets")
-              .upload(srtPath, new TextEncoder().encode(srt), {
-                contentType: "application/x-subrip",
+              .upload(assPath, new TextEncoder().encode(ass), {
+                contentType: "text/x-ssa",
                 upsert: true,
               });
-            if (up.error) throw up.error;
-            const { data: pub } = supabase.storage.from("post-assets").getPublicUrl(srtPath);
-            finalUrl = await composeWithSubtitles({
-              videoUrl: item.data.stock_clip_url,
-              audioUrl: audio.data.public_url,
-              subtitlesUrl: pub.publicUrl,
-              totalSeconds,
-            });
-            provider = "fal_ffmpeg";
+            if (upAss.error) throw upAss.error;
+            const { data: pubAss } = supabase.storage.from("post-assets").getPublicUrl(assPath);
+            try {
+              finalUrl = await composeWithSubtitles({
+                videoUrl: item.data.stock_clip_url,
+                audioUrl: audio.data.public_url,
+                subtitlesUrl: pubAss.publicUrl,
+                totalSeconds,
+              });
+              provider = "fal_ffmpeg";
+            } catch (assErr) {
+              // libass rejected the ASS file (rare). Fall back to plain SRT
+              // so we still ship the video — font variation is preserved as
+              // a metadata badge even when the visual font is uniform.
+              console.warn(
+                `[render-karaoke] ASS compose failed, falling back to SRT: ${assErr}`,
+              );
+              const srt = blocksToSrt(blocks, lt.data!.selection_start_ms ?? 0, totalSeconds);
+              const srtPath = `subtitles/${body.itemId}-${Date.now()}.srt`;
+              const up = await supabase.storage
+                .from("post-assets")
+                .upload(srtPath, new TextEncoder().encode(srt), {
+                  contentType: "application/x-subrip",
+                  upsert: true,
+                });
+              if (up.error) throw up.error;
+              const { data: pub } = supabase.storage.from("post-assets").getPublicUrl(srtPath);
+              finalUrl = await composeWithSubtitles({
+                videoUrl: item.data.stock_clip_url,
+                audioUrl: audio.data.public_url,
+                subtitlesUrl: pub.publicUrl,
+                totalSeconds,
+              });
+              provider = "fal_ffmpeg";
+            }
           }
         }
 
@@ -276,6 +313,25 @@ Deno.serve(async (request) => {
       })
       .eq("id", body.itemId);
     if (upd.error) throw upd.error;
+
+    // Persist the chosen font name on the library item so the UI can show a
+    // "Font: <name>" chip on each tile (and confirm visible per-video variation).
+    if (lyricTemplateId) {
+      const font = pickFont(body.itemId);
+      const existing = await supabase
+        .from("video_library_items")
+        .select("metadata")
+        .eq("id", libraryItemId)
+        .maybeSingle();
+      const baseMetadata = (existing.data?.metadata ?? {}) as Record<string, unknown>;
+      await supabase
+        .from("video_library_items")
+        .update({
+          metadata: { ...baseMetadata, lyric_font: font.name },
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", libraryItemId);
+    }
 
     const finalized = await withRenderAttempt(
       {

@@ -130,6 +130,13 @@ export default function LibraryTile({
                 {marker.label}
               </span>
             ))}
+            {typeof item.metadata?.lyric_font === "string" && item.metadata.lyric_font ? (
+              <span className="status-pill idle">Font: {String(item.metadata.lyric_font)}</span>
+            ) : null}
+          </div>
+        ) : typeof item.metadata?.lyric_font === "string" && item.metadata.lyric_font ? (
+          <div className="library-quality-markers">
+            <span className="status-pill idle">Font: {String(item.metadata.lyric_font)}</span>
           </div>
         ) : null}
         {attributions.length > 0 ? (
