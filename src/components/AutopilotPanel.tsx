@@ -492,6 +492,21 @@ export default function AutopilotPanel({
     if (initialTab) setTab(initialTab);
   }, [initialTab]);
 
+  // Deep-link from "Remix": preselect the template, default to randomize so
+  // pool-size never blocks the first launch, and scroll the campaign step in.
+  const appliedInitialTemplateRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialLyricTemplateId) return;
+    if (appliedInitialTemplateRef.current === initialLyricTemplateId) return;
+    appliedInitialTemplateRef.current = initialLyricTemplateId;
+    setTab("campaign");
+    setLyricTemplateId(initialLyricTemplateId);
+    setRandomize(true);
+    window.requestAnimationFrame(() => {
+      campaignLyricsStepRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }, [initialLyricTemplateId]);
+
   useEffect(() => {
     if (!focusLyricsStepSignal) return;
     setTab("lyrics");
