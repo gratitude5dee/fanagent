@@ -58,11 +58,8 @@ export async function mergeVideos(videoUrls: string[]): Promise<{ url: string; r
   return { url, raw: out };
 }
 
-export async function compose(
-  tracks: unknown[],
-  opts: Record<string, unknown> = {},
-): Promise<{ url: string; raw: any }> {
-  const out = await falRun<any>("fal-ai/ffmpeg-api/compose", { tracks, ...opts });
+export async function compose(tracks: unknown[]): Promise<{ url: string; raw: any }> {
+  const out = await falRun<any>("fal-ai/ffmpeg-api/compose", { tracks });
   const url = pickUrl(out);
   if (!url) throw new Error(`compose returned no URL: ${JSON.stringify(out).slice(0, 300)}`);
   return { url, raw: out };
@@ -95,9 +92,8 @@ export async function extractFrame(
   return { url, raw: out };
 }
 
-export async function getMediaMetadata(fileUrl: string): Promise<{ data: any }> {
-  const data = await falRun<any>("fal-ai/ffmpeg-api/metadata", { file_url: fileUrl });
-  return { data };
+export async function getMediaMetadata(fileUrl: string): Promise<any> {
+  return await falRun<any>("fal-ai/ffmpeg-api/metadata", { file_url: fileUrl });
 }
 
 export async function mergeAudios(audioUrls: string[]): Promise<{ url: string; raw: any }> {
@@ -123,12 +119,8 @@ export async function loudnorm(
   return { url, raw: out };
 }
 
-export async function waveform(
-  audioUrl: string,
-  opts: Record<string, unknown> = {},
-): Promise<{ data: any }> {
-  const data = await falRun<any>("fal-ai/ffmpeg-api/waveform", { audio_url: audioUrl, ...opts });
-  return { data };
+export async function waveform(audioUrl: string, opts: Record<string, unknown> = {}): Promise<any> {
+  return await falRun<any>("fal-ai/ffmpeg-api/waveform", { audio_url: audioUrl, ...opts });
 }
 
 // ---------- Seedance text-to-video ----------
@@ -250,9 +242,6 @@ export async function composeWithSubtitles(input: {
   audioUrl: string;
   subtitlesUrl: string;
   totalSeconds: number;
-  fontFamily?: string;
-  fontWeight?: string;
-  outlineColor?: string;
 }): Promise<string> {
   const tracks = [
     {
@@ -269,17 +258,6 @@ export async function composeWithSubtitles(input: {
       id: "subs",
       type: "subtitles",
       keyframes: [{ url: input.subtitlesUrl, timestamp: 0, duration: input.totalSeconds }],
-      font: input.fontFamily,
-      font_family: input.fontFamily,
-      font_weight: input.fontWeight,
-      style: {
-        fontFamily: input.fontFamily,
-        fontWeight: input.fontWeight,
-        fontSize: 52,
-        color: "#ffffff",
-        outlineColor: input.outlineColor ?? "#7c3aed",
-        outlineWidth: 4,
-      },
     },
   ];
   const out = await compose(tracks);

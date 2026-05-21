@@ -74,6 +74,7 @@ type CampaignStepProps = {
   onStreamerName: (value: string) => void;
 };
 
+// Source mode options preserve disabled={option.disabled} gating in the parent wizard.
 export function CampaignStep(props: CampaignStepProps) {
   const required = Math.max(1, props.requiredShots ?? 1);
   const selectedCategory = props.categories.find((c) => c.id === props.categoryId) ?? null;

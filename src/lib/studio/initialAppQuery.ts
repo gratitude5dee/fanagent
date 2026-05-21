@@ -2,7 +2,7 @@ export type InitialAppQuery = {
   mode: "autopilot" | "studio";
   studioView: "create" | "calendar";
   focusLyrics: boolean;
-  lyricTemplateId: string | null;
+  lyricTemplateId?: string;
 };
 
 export function readInitialAppQuery(search?: string): InitialAppQuery {
@@ -15,7 +15,7 @@ export function readInitialAppQuery(search?: string): InitialAppQuery {
       mode: "autopilot",
       studioView: "create",
       focusLyrics: true,
-      lyricTemplateId,
+      ...(lyricTemplateId ? { lyricTemplateId } : {}),
     };
   }
   const modeParam = params.get("mode");
@@ -24,6 +24,6 @@ export function readInitialAppQuery(search?: string): InitialAppQuery {
     mode: modeParam === "studio" ? "studio" : "autopilot",
     studioView: modeParam === "studio" && viewParam === "calendar" ? "calendar" : "create",
     focusLyrics: false,
-    lyricTemplateId,
+    ...(lyricTemplateId ? { lyricTemplateId } : {}),
   };
 }
