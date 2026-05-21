@@ -18,6 +18,7 @@ import { CampaignStep } from "@/components/autopilot/CampaignStep";
 import { ConnectStep } from "@/components/autopilot/ConnectStep";
 import { LyricsStep } from "@/components/autopilot/LyricsStep";
 import { UploadStep, type AudioClipStatus, type Duration } from "@/components/autopilot/UploadStep";
+import GeneratedLibraryPreview from "@/components/autopilot/GeneratedLibraryPreview";
 import { clipSelectionMatchesDuration } from "@/lib/audio/selection";
 import {
   isFanAgentSchemaReady,
