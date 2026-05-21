@@ -66,7 +66,11 @@ function validatePayload(body: CreateBatchRequest) {
     1,
     Math.min(Math.floor(Number(body.quantity ?? body.count ?? body.postCount ?? 1)), 250),
   );
-  const autoRender = body.autoRender === true;
+  // Default to auto-render when a lyric template is attached — the user has
+  // already curated the audio + captions and expects videos to populate the
+  // library immediately (not wait for a cron-driven scheduled post).
+  const autoRender =
+    typeof body.autoRender === "boolean" ? body.autoRender : !!body.lyricTemplateId;
   // Auto-render mode bypasses scheduling: items are claimed by the worker
   // immediately and rendered back-to-back into the library (no post rows).
   const cadenceMinutes = autoRender
