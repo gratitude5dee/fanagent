@@ -1,32 +1,50 @@
-# Unblock "Generate library" when a saved lyric template is preselected
+# Inline generated-library preview in Autopilot → Campaign
 
-## Problem
-Clicking **Generate library** after picking a saved template (e.g. via *Remix*) shows the browser tooltip *"Please select a file"* and blocks the form because the audio `<input type="file" required>` in step 2 still demands an upload — even though the template already carries its own `audio_clip_id` + `trimmed_audio_asset_id` and the edge function `create-generation-batch` accepts `audioClipId` alone (no `clipSelection` required).
+After the user clicks **Generate library**, render the just-created clips directly underneath the Campaign parameters form so they can review (and schedule) without navigating away to `/library/:id`.
 
-A saved template means: 5 cut markers → 6 stock clips edited against the template's existing audio with captions baked from `lyric_blocks`. No re-upload should be needed.
+## UX
 
-## Fix (frontend only)
+```text
+[ 4. Campaign parameters                ]
+   ...form fields...
+   [ Generate library ]
+   ─────────────────────────────────────
+   [ 5. Generated library preview     ]   ← NEW, appears after launch
+       POP OUT (feat. ZayBang).wav · 6 clips · 15s each
+       [All | Unscheduled | Scheduled | Posted | Blocked | Failed]
+       [Select visible] [Clear] [Schedule selected] [Regenerate selected]
+       <LibraryGrid> tiles (same component used by /library/:id)
+       "Open full library →" link to /library/<audioClipId>
+[ Active campaigns ]
+[ Upcoming posts ]
+```
 
-### 1. `src/components/autopilot/UploadStep.tsx`
-- Add prop `templateProvidesAudio: boolean`.
-- Change file input to `required={!trimmedAudio && !templateProvidesAudio}` so HTML5 validation no longer blocks submit when a template already supplies the audio.
-- When `templateProvidesAudio && !audioFile`, render a small banner: *"Using audio from the selected lyric template. Upload a file only to replace it."* (keeps the upload control visible but optional).
+Tiles match the screenshot layout (vertical aspect, status pill, caption). While items are still rendering they show the existing `NOT READY` / loader states from `LibraryTile`. The panel auto-refreshes every ~5s until every item is in a terminal state (`ready`, `failed`, `blocked`, `scheduled`, `posted`).
 
-### 2. `src/components/AutopilotPanel.tsx`
-- Compute `templateProvidesAudio = !!selectedTemplate?.audio_clip_id && !!selectedTemplate?.trimmed_audio_asset_id && selectedTemplate.status === "saved"`.
-- Pass it to `UploadStep`.
-- Audio-clip register effect: already short-circuits when `!trimmedAudio`, so template-only path is fine.
-- `campaignHandoff` already produces `ready=true` from the template alone (audioClipId falls back to `templateAudioClipId`; durations match against themselves; `templateMatchesAudio` is true when there is no registered upload). No changes needed there.
-- `startCampaign`: already gated on `campaignHandoff.ready`, and only sends `clipSelection` when `trimmedAudio` exists — the edge function derives selection from the stored audio clip otherwise. No changes needed there.
+## What to build
 
-### 3. `src/components/autopilot/CampaignStep.tsx`
-- `trimmedAudioReady` is already computed in the panel to be true when the handoff has both `audioClipId` and `trimmedAudioAssetId`, so the "Trim and register audio" warning and disabled state already clear once a saved template is selected. No changes needed.
+1. **`AutopilotPanel.tsx`**
+   - Add `lastLaunchedAudioClipId: string | null` state. Set it inside `startCampaign` after `callCampaign("create", …)` resolves, using `campaignHandoff.audioClipId` (the value already passed to the edge function).
+   - Clear it when the user switches templates or changes the trimmed audio (so an old preview doesn't linger over a new campaign).
+   - Below `<CampaignStep />` (still inside the same `<form>`'s parent, but outside the form so its buttons aren't submit triggers), render a new `<GeneratedLibraryPreview audioClipId={lastLaunchedAudioClipId} />` when set.
+
+2. **New `src/components/autopilot/GeneratedLibraryPreview.tsx`**
+   - Uses existing `getLibraryDetail(audioClipId)` from `@/lib/library/api` to load `{ clip, items }`.
+   - Polls every 5s while any item is in a non-terminal status; stops polling once all are terminal.
+   - Reuses `LibraryGrid` for the tiles and the existing bulk-select hooks.
+   - Bulk bar: **Schedule selected** (opens existing `BulkScheduleDialog`), **Regenerate selected** (calls `callCampaign("regenerate", { itemId })` per selection — same handler pattern already in `AutopilotPanel`).
+   - Header shows clip title, item count, source-clip duration; status filter chips mirror the screenshot (`All / Unscheduled / Scheduled / Posted / Blocked / Failed`).
+   - Includes a small `Link to={`/library/${audioClipId}`}` for the full page experience.
+
+3. **No edge-function or schema changes.** `fanpage-campaign` already creates `video_library_items` rows synchronously inside `create-generation-batch`, so `getLibraryDetail` returns the tiles immediately (initially with `not_ready` / `failed` status, then transitioning as `process-generation-due` and `render-callback` progress them).
 
 ## Out of scope
-- No edge-function or schema changes.
-- No changes to marker→clip pairing logic; cut-marker count already drives `requiredShots` for the category pool check.
-- Lyrics↔markers live sync from the previous turn is unaffected.
 
-## Files touched
-- `src/components/autopilot/UploadStep.tsx`
-- `src/components/AutopilotPanel.tsx`
+- No changes to marker→clip pairing, lyric overlay rendering, or generation pipeline.
+- No edits to `LibraryGrid` / `LibraryTile` themselves — reused as-is.
+- No moving of the existing **Upcoming posts** panel; the new preview sits above it.
+
+## Files
+
+- **Edit**: `src/components/AutopilotPanel.tsx`
+- **Create**: `src/components/autopilot/GeneratedLibraryPreview.tsx`

@@ -18,6 +18,7 @@ import { CampaignStep } from "@/components/autopilot/CampaignStep";
 import { ConnectStep } from "@/components/autopilot/ConnectStep";
 import { LyricsStep } from "@/components/autopilot/LyricsStep";
 import { UploadStep, type AudioClipStatus, type Duration } from "@/components/autopilot/UploadStep";
+import GeneratedLibraryPreview from "@/components/autopilot/GeneratedLibraryPreview";
 import { clipSelectionMatchesDuration } from "@/lib/audio/selection";
 import {
   isFanAgentSchemaReady,
@@ -262,6 +263,7 @@ export default function AutopilotPanel({
   initialLyricTemplateId,
 }: AutopilotPanelProps = {}) {
   const [data, setData] = useState<CampaignList | null>(null);
+  const [lastLaunchedAudioClipId, setLastLaunchedAudioClipId] = useState<string | null>(null);
   const [lyricTemplates, setLyricTemplates] = useState<LyricTemplateSummary[]>([]);
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [trimmedAudio, setTrimmedAudio] = useState<{
@@ -737,6 +739,7 @@ export default function AutopilotPanel({
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       lyricTemplateId: lyricTemplateId || null,
     });
+    setLastLaunchedAudioClipId(campaignHandoff.audioClipId);
   }
 
   async function setItemTemplate(itemId: string, templateId: string | null) {
@@ -1049,6 +1052,9 @@ export default function AutopilotPanel({
                   onStreamerName={setStreamerName}
                 />
               </form>
+              {lastLaunchedAudioClipId ? (
+                <GeneratedLibraryPreview audioClipId={lastLaunchedAudioClipId} />
+              ) : null}
             </>
           ) : null}
 
