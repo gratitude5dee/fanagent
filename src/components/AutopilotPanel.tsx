@@ -11,8 +11,8 @@ import {
   PlayCircle,
   RefreshCcw,
   RotateCcw,
-  Sparkles,
 } from "lucide-react";
+
 import { SUPABASE_URL } from "@/integrations/supabase/client";
 import { CampaignStep } from "@/components/autopilot/CampaignStep";
 import { ConnectStep } from "@/components/autopilot/ConnectStep";
