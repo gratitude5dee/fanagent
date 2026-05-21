@@ -328,11 +328,14 @@ Deno.serve(async (request) => {
         dedupe_strategy: input.dedupeStrategy,
         library_status: "building",
         lyric_template_id: input.lyricTemplateId,
-        settings: buildBatchSettings({
-          stockSettings: input.stockSettings,
-          seedanceSettings: input.seedanceSettings,
-          clipSelection: input.clipSelection,
-        }),
+        settings: {
+          ...buildBatchSettings({
+            stockSettings: input.stockSettings,
+            seedanceSettings: input.seedanceSettings,
+            clipSelection: input.clipSelection,
+          }),
+          autoRender: !!input.lyricTemplateId,
+        },
         publish_defaults: input.publishDefaults,
         category_id: input.categoryId,
         subcategory_slug: input.subcategorySlug,

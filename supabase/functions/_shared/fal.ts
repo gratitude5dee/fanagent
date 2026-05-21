@@ -250,6 +250,9 @@ export async function composeWithSubtitles(input: {
   audioUrl: string;
   subtitlesUrl: string;
   totalSeconds: number;
+  fontFamily?: string;
+  fontWeight?: string;
+  outlineColor?: string;
 }): Promise<string> {
   const tracks = [
     {
@@ -266,6 +269,17 @@ export async function composeWithSubtitles(input: {
       id: "subs",
       type: "subtitles",
       keyframes: [{ url: input.subtitlesUrl, timestamp: 0, duration: input.totalSeconds }],
+      font: input.fontFamily,
+      font_family: input.fontFamily,
+      font_weight: input.fontWeight,
+      style: {
+        fontFamily: input.fontFamily,
+        fontWeight: input.fontWeight,
+        fontSize: 52,
+        color: "#ffffff",
+        outlineColor: input.outlineColor ?? "#7c3aed",
+        outlineWidth: 4,
+      },
     },
   ];
   const out = await compose(tracks);

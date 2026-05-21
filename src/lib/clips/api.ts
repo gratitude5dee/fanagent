@@ -1,163 +1,120 @@
-// Grouped view of every rendered video in the workspace. Backs /clips.
-//
-// Source of truth: video_library_items, joined with audio_clips for the
-// group header and with media_assets for playback. We avoid hitting the
-// fanpage-campaign edge function — this page is intentionally read-only and
-// realtime-friendly.
-
 import { supabase } from "@/integrations/supabase/client";
-import type { AudioClip, LibraryItem, MediaAsset } from "@/lib/library/types";
 
-function metadataValue(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function arrayValue<T>(value: unknown): T[] {
-  return Array.isArray(value) ? (value as T[]) : [];
-}
-
-function coerceAudioClip(row: Record<string, unknown>): AudioClip {
-  return {
-    id: String(row.id),
-    account_id: String(row.account_id),
-    source_asset_id: String(row.source_asset_id),
-    trimmed_asset_id: typeof row.trimmed_asset_id === "string" ? row.trimmed_asset_id : null,
-    selection_start_sec: Number(row.selection_start_sec ?? 0),
-    selection_end_sec: Number(row.selection_end_sec ?? 0),
-    duration_sec: Number(row.duration_sec ?? 0),
-    file_name: typeof row.file_name === "string" ? row.file_name : null,
-    perceptual_hash: typeof row.perceptual_hash === "string" ? row.perceptual_hash : null,
-    transcription_status: String(row.transcription_status ?? "pending"),
-    metadata: metadataValue(row.metadata),
-    created_at: String(row.created_at),
-    updated_at: String(row.updated_at),
-  };
-}
-
-function coerceMediaAsset(row: Record<string, unknown>): MediaAsset {
-  return {
-    id: String(row.id),
-    kind: typeof row.kind === "string" ? row.kind : null,
-    source: typeof row.source === "string" ? row.source : null,
-    public_url: typeof row.public_url === "string" ? row.public_url : null,
-    mime_type: typeof row.mime_type === "string" ? row.mime_type : null,
-    storage_bucket: typeof row.storage_bucket === "string" ? row.storage_bucket : null,
-    storage_path: typeof row.storage_path === "string" ? row.storage_path : null,
-    metadata: metadataValue(row.metadata),
-  };
-}
-
-function coerceLibraryItem(
-  row: Record<string, unknown>,
-  media: MediaAsset | null,
-): LibraryItem {
-  return {
-    id: String(row.id),
-    account_id: String(row.account_id),
-    audio_clip_id: String(row.audio_clip_id),
-    batch_id: typeof row.batch_id === "string" ? row.batch_id : null,
-    generation_item_id: typeof row.generation_item_id === "string" ? row.generation_item_id : null,
-    library_index: Number(row.library_index ?? 0),
-    status: String(row.status ?? "not_ready") as LibraryItem["status"],
-    final_asset_id: typeof row.final_asset_id === "string" ? row.final_asset_id : null,
-    thumbnail_url: typeof row.thumbnail_url === "string" ? row.thumbnail_url : null,
-    duration_sec: Number(row.duration_sec ?? 0),
-    segments: arrayValue(row.segments),
-    provenance: arrayValue(row.provenance),
-    perceptual_hash: typeof row.perceptual_hash === "string" ? row.perceptual_hash : null,
-    reused_flags: metadataValue(row.reused_flags),
-    default_caption: typeof row.default_caption === "string" ? row.default_caption : null,
-    default_hashtags: arrayValue<string>(row.default_hashtags),
-    metadata: metadataValue(row.metadata),
-    created_at: String(row.created_at),
-    updated_at: String(row.updated_at),
-    media,
-  };
-}
-
-export type ClipGroup = {
-  audioClip: AudioClip;
-  items: LibraryItem[];
-  latestUpdatedAt: string;
+export type ClipItem = {
+  id: string;
+  batch_id: string;
+  audio_clip_id: string | null;
+  status: string;
+  category_id: string | null;
+  created_at: string;
+  scheduled_at: string | null;
+  video_url: string | null;
+  thumbnail_url: string | null;
+  font_name: string | null;
+  duration_sec: number | null;
+  file_name: string;
 };
 
-export async function fetchAllClipGroups(): Promise<ClipGroup[]> {
-  const items = await supabase
-    .from("video_library_items")
-    .select("*")
-    .neq("status", "archived")
-    .order("created_at", { ascending: false })
-    .limit(500);
-  if (items.error) throw items.error;
-  const itemRows = (items.data ?? []) as Record<string, unknown>[];
-  if (itemRows.length === 0) return [];
+export type ClipGroup = {
+  audioClipId: string;
+  fileName: string;
+  durationSec: number | null;
+  status: string;
+  categoryId: string | null;
+  createdAt: string;
+  items: ClipItem[];
+};
 
-  const audioClipIds = Array.from(
-    new Set(itemRows.map((row) => String(row.audio_clip_id ?? "")).filter(Boolean)),
-  );
-  const assetIds = Array.from(
-    new Set(
-      itemRows
-        .map((row) => row.final_asset_id)
-        .filter((id): id is string => typeof id === "string" && id.length > 0),
-    ),
-  );
+type Row = {
+  id: string;
+  batch_id: string;
+  status: string;
+  scheduled_at: string | null;
+  created_at: string;
+  duration_seconds: number | null;
+  final_asset_id: string | null;
+  stock_clip_url: string | null;
+  input_payload: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+  generation_batches?: {
+    id: string;
+    audio_asset_id: string | null;
+    status: string;
+    source_mode: string;
+    settings?: Record<string, unknown> | null;
+  } | null;
+};
 
-  const [clipsRes, mediaRes] = await Promise.all([
-    audioClipIds.length > 0
-      ? supabase.from("audio_clips").select("*").in("id", audioClipIds)
-      : Promise.resolve({ data: [], error: null } as const),
-    assetIds.length > 0
-      ? supabase
-          .from("media_assets")
-          .select("id,kind,source,public_url,mime_type,storage_bucket,storage_path,metadata")
-          .in("id", assetIds)
-      : Promise.resolve({ data: [], error: null } as const),
-  ]);
-  if (clipsRes.error) throw clipsRes.error;
-  if (mediaRes.error) throw mediaRes.error;
+type Asset = { id: string; public_url: string; file_name: string | null; metadata?: Record<string, unknown> | null };
 
-  const clipById = new Map<string, AudioClip>();
-  for (const row of (clipsRes.data ?? []) as Record<string, unknown>[]) {
-    const clip = coerceAudioClip(row);
-    clipById.set(clip.id, clip);
-  }
-  const mediaById = new Map<string, MediaAsset>();
-  for (const row of (mediaRes.data ?? []) as Record<string, unknown>[]) {
-    const asset = coerceMediaAsset(row);
-    mediaById.set(asset.id, asset);
+function getCategory(row: Row): string | null {
+  const payloadStock = (row.input_payload?.stock_settings ?? {}) as Record<string, unknown>;
+  const batchStock = (row.generation_batches?.settings?.stock ?? {}) as Record<string, unknown>;
+  return String(payloadStock.categoryId ?? payloadStock.category ?? batchStock.categoryId ?? batchStock.category ?? "") || null;
+}
+
+export async function fetchAllClips(): Promise<ClipGroup[]> {
+  const { data, error } = await supabase
+    .from("generation_items")
+    .select(`
+      id,batch_id,status,scheduled_at,created_at,duration_seconds,final_asset_id,stock_clip_url,input_payload,metadata,
+      generation_batches ( id,audio_asset_id,status,source_mode,settings )
+    `)
+    .not("status", "eq", "archived")
+    .order("created_at", { ascending: false });
+
+  if (error) throw error;
+  const rows = (data ?? []) as unknown as Row[];
+  const finalAssetIds = Array.from(new Set(rows.map((row) => row.final_asset_id).filter(Boolean))) as string[];
+  const audioAssetIds = Array.from(new Set(rows.map((row) => row.generation_batches?.audio_asset_id).filter(Boolean))) as string[];
+  const allAssetIds = Array.from(new Set([...finalAssetIds, ...audioAssetIds]));
+  const assetsById = new Map<string, Asset>();
+
+  if (allAssetIds.length) {
+    const assets = await supabase
+      .from("media_assets")
+      .select("id,public_url,file_name,metadata")
+      .in("id", allAssetIds);
+    if (assets.error) throw assets.error;
+    for (const asset of (assets.data ?? []) as unknown as Asset[]) assetsById.set(asset.id, asset);
   }
 
   const groups = new Map<string, ClipGroup>();
-  for (const row of itemRows) {
-    const audioClipId = String(row.audio_clip_id ?? "");
-    if (!audioClipId) continue;
-    const audioClip = clipById.get(audioClipId);
-    if (!audioClip) continue;
-    const media =
-      typeof row.final_asset_id === "string" ? (mediaById.get(row.final_asset_id) ?? null) : null;
-    const item = coerceLibraryItem(row, media);
-    const existing = groups.get(audioClipId);
-    if (existing) {
-      existing.items.push(item);
-      if (item.updated_at > existing.latestUpdatedAt) {
-        existing.latestUpdatedAt = item.updated_at;
-      }
-    } else {
-      groups.set(audioClipId, {
-        audioClip,
-        items: [item],
-        latestUpdatedAt: item.updated_at,
-      });
-    }
+  for (const row of rows) {
+    const audioClipId = row.generation_batches?.audio_asset_id ?? row.batch_id;
+    const finalAsset = row.final_asset_id ? assetsById.get(row.final_asset_id) : undefined;
+    const audioAsset = row.generation_batches?.audio_asset_id ? assetsById.get(row.generation_batches.audio_asset_id) : undefined;
+    const finalMeta = finalAsset?.metadata ?? {};
+    const itemMeta = row.metadata ?? {};
+    const clip: ClipItem = {
+      id: row.id,
+      batch_id: row.batch_id,
+      audio_clip_id: audioClipId,
+      status: row.status,
+      category_id: getCategory(row),
+      created_at: row.created_at,
+      scheduled_at: row.scheduled_at,
+      video_url: finalAsset?.public_url ?? row.stock_clip_url ?? null,
+      thumbnail_url: typeof finalMeta.thumbnail_url === "string" ? finalMeta.thumbnail_url : null,
+      font_name: String(itemMeta.lyric_font ?? finalMeta.lyric_font ?? "") || null,
+      duration_sec: row.duration_seconds,
+      file_name: finalAsset?.file_name ?? `${row.id}.mp4`,
+    };
+
+    const group = groups.get(audioClipId) ?? {
+      audioClipId,
+      fileName: audioAsset?.file_name ?? `Audio ${audioClipId.slice(0, 8)}`,
+      durationSec: row.duration_seconds,
+      status: row.generation_batches?.status ?? row.status,
+      categoryId: clip.category_id,
+      createdAt: row.created_at,
+      items: [],
+    };
+    group.items.push(clip);
+    if (row.created_at > group.createdAt) group.createdAt = row.created_at;
+    groups.set(audioClipId, group);
   }
 
-  return Array.from(groups.values())
-    .map((group) => ({
-      ...group,
-      items: [...group.items].sort((a, b) => a.library_index - b.library_index),
-    }))
-    .sort((a, b) => (a.latestUpdatedAt < b.latestUpdatedAt ? 1 : -1));
+  return Array.from(groups.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
+

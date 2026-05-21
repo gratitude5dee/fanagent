@@ -2,39 +2,52 @@ import { StrictMode, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import App from "./App";
-import { AppShell } from "./components/AppShell";
 import "./styles.css";
 
-const LibraryLanding = lazy(() => import("./pages/library/LibraryLanding"));
-const LibraryDetail = lazy(() => import("./pages/library/LibraryDetail"));
-const ClipsPage = lazy(() => import("./pages/clips/ClipsPage"));
-const AccountsPage = lazy(() => import("./pages/settings/AccountsPage"));
-const LyricsHome = lazy(() => import("./pages/lyrics/LyricsHome"));
+const LyricsLanding = lazy(() => import("./pages/lyrics/LyricsLanding"));
 const LyricsWizard = lazy(() => import("./pages/lyrics/LyricsWizard"));
-const RemixEditor = lazy(() => import("./pages/lyrics/RemixEditor"));
-const RemixJobs = lazy(() => import("./pages/lyrics/RemixJobs"));
-
-const wrap = (node: React.ReactNode) => (
-  <AppShell>
-    <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>{node}</Suspense>
-  </AppShell>
-);
+const ClipsPage = lazy(() => import("./pages/clips/ClipsPage"));
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<AppShell><App /></AppShell>} />
-        <Route path="/library" element={wrap(<LibraryLanding />)} />
-        <Route path="/clips" element={wrap(<ClipsPage />)} />
-        <Route path="/library/:audioClipId" element={wrap(<LibraryDetail />)} />
-        <Route path="/settings/accounts" element={wrap(<AccountsPage />)} />
-        <Route path="/lyrics" element={wrap(<LyricsHome />)} />
-        <Route path="/lyrics/new" element={wrap(<LyricsWizard />)} />
-        <Route path="/lyrics/:templateId" element={wrap(<LyricsWizard />)} />
-        <Route path="/lyrics/:templateId/remix" element={wrap(<RemixEditor />)} />
-        <Route path="/lyrics/:templateId/jobs" element={wrap(<RemixJobs />)} />
-        <Route path="/calendar" element={<Navigate to="/?mode=studio&view=calendar" replace />} />
+        <Route path="/" element={<App />} />
+        <Route path="/calendar" element={<App />} />
+        <Route path="/library" element={<App />} />
+        <Route path="/settings/accounts" element={<App />} />
+        <Route
+          path="/clips"
+          element={
+            <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
+              <ClipsPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/lyrics"
+          element={
+            <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
+              <LyricsLanding />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/lyrics/new"
+          element={
+            <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
+              <LyricsWizard />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/lyrics/templates/:templateId"
+          element={
+            <Suspense fallback={<div className="lyrics-loading">Loading…</div>}>
+              <LyricsWizard />
+            </Suspense>
+          }
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

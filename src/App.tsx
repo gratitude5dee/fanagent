@@ -1,41 +1,42 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { EventDropArg } from "@fullcalendar/core";
+import { lazy, Suspense, useEffect, useMemo, useState, useTransition } from "react";
+import type { EventDropArg, EventInput } from "@fullcalendar/core";
 import {
   CalendarDays,
+  Clapperboard,
+  Library,
   PlugZap,
   RefreshCcw,
   Send,
+  Settings,
+  Sparkles,
   UploadCloud,
   WandSparkles,
+  Zap,
 } from "lucide-react";
-import AutopilotWizard from "@/components/AutopilotWizard";
-import BulkScheduleDialog from "@/components/calendar/BulkScheduleDialog";
-import StudioCalendarPanel from "@/components/studio/StudioCalendarPanel";
-import StudioPostReview from "@/components/studio/StudioPostReview";
-import StudioReadyLibraryPanel from "@/components/studio/StudioReadyLibraryPanel";
-import { SUPABASE_URL } from "@/integrations/supabase/client";
+import { Link, useLocation } from "react-router-dom";
+import AutopilotPanel from "@/components/AutopilotPanel";
+import { SUPABASE_URL, supabase } from "@/integrations/supabase/client";
+import type { Account, DashboardPost, GenerationBatch, SourceMode } from "@/lib/fanagent/types";
 
-import {
-  buildTikTokPrivacySettings,
-  filterCalendarLibraryItems,
-  isCreatorCommentDisabled,
-  isPastScheduleDrop,
-  toLocalInputValue,
-  type CalendarFilters,
-  type CalendarView,
-} from "@/lib/calendar/posts";
-import { buildTikTokConnectUrl } from "@/lib/fanagent/accounts";
-import { invokeEdgeFunction } from "@/lib/fanagent/invokeFunction";
-import type { SourceMode } from "@/lib/fanagent/types";
-import { scheduleLibraryItems } from "@/lib/library/api";
-import { readInitialAppQuery } from "@/lib/studio/initialAppQuery";
-import { useStudioData } from "@/lib/studio/useStudioData";
+const FanAgentCalendar = lazy(() => import("@/components/FanAgentCalendar"));
+
+const privacyLevels = [
+  "SELF_ONLY",
+  "MUTUAL_FOLLOW_FRIENDS",
+  "FOLLOWER_OF_CREATOR",
+  "PUBLIC_TO_EVERYONE",
+];
 
 function statusClass(status: string): string {
   if (status === "posted" || status === "complete") return "good";
   if (status === "failed" || status === "partial") return "bad";
   if (status === "posting" || status === "generating" || status === "rendering") return "warn";
   return "idle";
+}
+
+function toLocalInputValue(date: Date): string {
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
 async function fileToBase64(file: File): Promise<string> {
@@ -51,17 +52,25 @@ async function fileToBase64(file: File): Promise<string> {
 }
 
 async function invokeFunction<T>(name: string, body?: Record<string, unknown>): Promise<T> {
-  return invokeEdgeFunction<T>(name, body);
+  const { data, error } = await supabase.functions.invoke<T>(name, { body: body ?? {} });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data as T;
+}
+
+function tiktokConnectUrl(accountId: string): string {
+  return `${SUPABASE_URL}/functions/v1/tiktok-oauth-callback?action=connect&accountId=${encodeURIComponent(accountId)}`;
 }
 
 export default function App() {
-  const initialQuery = useRef(readInitialAppQuery());
-  const { data, refresh, busy: studioBusy, error: studioError } = useStudioData();
-  const libraryPanelRef = useRef<HTMLDivElement>(null);
-  const [mode, setMode] = useState<"autopilot" | "studio">(initialQuery.current.mode);
-  const [studioView, setStudioView] = useState<"create" | "calendar">(
-    initialQuery.current.studioView,
-  );
+  const location = useLocation();
+  const [mode, setMode] = useState<"autopilot" | "studio">(location.pathname === "/calendar" ? "studio" : "autopilot");
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [posts, setPosts] = useState<DashboardPost[]>([]);
+  const [batches, setBatches] = useState<GenerationBatch[]>([]);
   const [accountId, setAccountId] = useState("");
   const [audio, setAudio] = useState<File | null>(null);
   const [count, setCount] = useState(6);
@@ -72,110 +81,77 @@ export default function App() {
   );
   const [cadence, setCadence] = useState(240);
   const [message, setMessage] = useState<string | null>(null);
+  const [setupError, setSetupError] = useState<string | null>(null);
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
-  const [selectedLibraryIds, setSelectedLibraryIds] = useState<Set<string>>(() => new Set());
-  const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
-  const [readyLibraryOpen, setReadyLibraryOpen] = useState(false);
-  const [calendarView, setCalendarView] = useState<CalendarView>("week");
-  const [filters, setFilters] = useState<CalendarFilters>({
-    accountId: "",
-    audioClipId: "",
-    status: "all",
-  });
-  const [actionBusy, setActionBusy] = useState(false);
-  const [lyricsFocusSignal, setLyricsFocusSignal] = useState(
-    initialQuery.current.focusLyrics ? 1 : 0,
-  );
+  const [isPending, startTransition] = useTransition();
 
-  const selectedAccount = data.accounts.find((account) => account.id === accountId) ?? null;
-  const selectedPost = data.posts.find((post) => post.id === selectedPostId) ?? null;
-  const previewById = useMemo(
-    () => new Map(data.libraryPreviews.map((preview) => [preview.id, preview])),
-    [data.libraryPreviews],
-  );
-  const accountById = useMemo(
-    () => new Map(data.accounts.map((account) => [account.id, account])),
-    [data.accounts],
-  );
-  const selectedPreview = selectedPost?.library_item_id
-    ? (previewById.get(selectedPost.library_item_id) ?? null)
-    : null;
-  const selectedPostAccount = selectedPost
-    ? (accountById.get(selectedPost.account_id) ?? null)
-    : null;
-  const filteredLibraryItems = useMemo(
-    () => filterCalendarLibraryItems(data.libraryItems, filters),
-    [data.libraryItems, filters],
-  );
-  const blockedPostCount = data.posts.filter((post) =>
-    post.publish_status?.startsWith("blocked_"),
-  ).length;
-  const audioClipIds = useMemo(
-    () =>
-      Array.from(
-        new Set([
-          ...data.libraryPreviews.map((preview) => preview.audio_clip_id),
-          ...data.libraryItems.map((item) => item.audio_clip_id),
-        ]),
-      ).sort(),
-    [data.libraryItems, data.libraryPreviews],
-  );
+  const selectedAccount = accounts.find((account) => account.id === accountId) ?? null;
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const modeParam = params.get("mode");
-    const viewParam = params.get("view");
-    const stepParam = params.get("step");
-    if (!modeParam && !viewParam && !stepParam) return;
+    setMode(location.pathname === "/calendar" ? "studio" : "autopilot");
+  }, [location.pathname]);
+  const selectedPost = posts.find((post) => post.id === selectedPostId) ?? posts[0] ?? null;
+  const calendarEvents = useMemo<EventInput[]>(
+    () =>
+      posts.map((post) => ({
+        id: post.id,
+        title: `${post.status.toUpperCase()} ${post.caption}`,
+        start: post.scheduled_at,
+        classNames: [`event-${statusClass(post.status)}`],
+      })),
+    [posts],
+  );
 
-    if (stepParam === "lyrics") {
-      setMode("autopilot");
-      setLyricsFocusSignal(Date.now());
-    } else {
-      if (modeParam === "autopilot" || modeParam === "studio") {
-        setMode(modeParam);
-      }
-      if (modeParam === "studio" && (viewParam === "create" || viewParam === "calendar")) {
-        setStudioView(viewParam);
-      }
-    }
-    window.history.replaceState(null, "", window.location.pathname || "/");
+  async function loadDashboard() {
+    setSetupError(null);
+
+    const [accountsResult, postsResult, batchesResult] = await Promise.all([
+      supabase
+        .from("accounts")
+        .select(
+          "id,platform,handle,status,tiktok_connected_at,tiktok_display_name,tiktok_creator_info",
+        )
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("posts")
+        .select(
+          "id,account_id,generation_item_id,caption,hashtags,scheduled_at,status,publish_status,video_url,tiktok_privacy_level,tiktok_disable_duet,tiktok_disable_stitch,tiktok_disable_comment",
+        )
+        .order("scheduled_at", { ascending: true })
+        .limit(200),
+      supabase
+        .from("generation_batches")
+        .select("id,account_id,source_mode,status,post_count,prompt,created_at")
+        .order("created_at", { ascending: false })
+        .limit(20),
+    ]);
+
+    if (accountsResult.error) throw accountsResult.error;
+    if (postsResult.error) throw postsResult.error;
+    if (batchesResult.error) throw batchesResult.error;
+
+    const nextAccounts = (accountsResult.data ?? []) as Account[];
+    const nextPosts = (postsResult.data ?? []) as DashboardPost[];
+    setAccounts(nextAccounts);
+    setPosts(nextPosts);
+    setBatches((batchesResult.data ?? []) as GenerationBatch[]);
+    setAccountId((current) => current || nextAccounts[0]?.id || "");
+    setSelectedPostId((current) => current || nextPosts[0]?.id || null);
+  }
+
+  useEffect(() => {
+    loadDashboard().catch((error) =>
+      setSetupError(error instanceof Error ? error.message : String(error)),
+    );
   }, []);
 
-  useEffect(() => {
-    setAccountId((current) => {
-      if (current && data.accounts.some((account) => account.id === current)) return current;
-      return data.accounts[0]?.id ?? "";
+  function runAction(label: string, action: () => Promise<unknown>) {
+    startTransition(() => {
+      action()
+        .then(() => loadDashboard())
+        .then(() => setMessage(`${label} complete.`))
+        .catch((error) => setMessage(error instanceof Error ? error.message : String(error)));
     });
-  }, [data.accounts]);
-
-  useEffect(() => {
-    setSelectedPostId((current) => {
-      if (current && data.posts.some((post) => post.id === current)) return current;
-      return data.posts[0]?.id ?? null;
-    });
-  }, [data.posts]);
-
-  useEffect(() => {
-    const visibleIds = new Set(filteredLibraryItems.map((item) => item.id));
-    setSelectedLibraryIds((current) => {
-      const next = new Set(Array.from(current).filter((itemId) => visibleIds.has(itemId)));
-      return next.size === current.size ? current : next;
-    });
-  }, [filteredLibraryItems]);
-
-  async function runAction(label: string, action: () => Promise<unknown>) {
-    setActionBusy(true);
-    setMessage(null);
-    try {
-      await action();
-      await refresh();
-      setMessage(`${label} complete.`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setActionBusy(false);
-    }
   }
 
   async function createBatch(event: React.FormEvent<HTMLFormElement>) {
@@ -186,8 +162,7 @@ export default function App() {
     if (audio.size > 12 * 1024 * 1024)
       throw new Error("Audio uploads are limited to 12MB in hosted v1.");
 
-    await invokeFunction("fanpage-campaign", {
-      action: "create",
+    await invokeFunction("create-generation-batch", {
       accountId,
       audioBase64: await fileToBase64(audio),
       audioMimeType: audio.type || "audio/mpeg",
@@ -201,389 +176,310 @@ export default function App() {
     });
   }
 
-  async function updatePostSchedule(arg: EventDropArg) {
-    const droppedAt = arg.event.start;
-    if (!droppedAt) return;
-    if (isPastScheduleDrop(droppedAt)) {
-      arg.revert();
-      setMessage("Cannot reschedule into the past.");
-      return;
-    }
+  function handleEventDrop(arg: EventDropArg) {
+    const scheduledAt = arg.event.start?.toISOString();
+    if (!scheduledAt) return;
 
-    setActionBusy(true);
-    setMessage(null);
-    try {
-      await invokeFunction("update-post-schedule", {
+    runAction("Schedule update", () =>
+      invokeFunction("update-post-schedule", {
         postId: arg.event.id,
-        scheduledAt: droppedAt.toISOString(),
-      });
-      await refresh();
-      setMessage("Schedule update complete.");
-    } catch (error) {
-      arg.revert();
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setActionBusy(false);
-    }
+        scheduledAt,
+      }),
+    );
   }
 
-  async function scheduleDrop(libraryItemId: string, scheduledAt: Date) {
-    if (isPastScheduleDrop(scheduledAt)) {
-      setMessage("Cannot reschedule into the past.");
-      return;
-    }
-    setActionBusy(true);
-    setMessage(null);
-    try {
-      await scheduleLibraryItems([{ libraryItemId, scheduledAt: scheduledAt.toISOString() }]);
-      setSelectedLibraryIds(new Set());
-      await refresh();
-      setMessage("Library item scheduled.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-      await refresh();
-    } finally {
-      setActionBusy(false);
-    }
-  }
-
-  function toggleLibraryItem(itemId: string) {
-    setSelectedLibraryIds((current) => {
-      const next = new Set(current);
-      if (next.has(itemId)) next.delete(itemId);
-      else next.add(itemId);
-      return next;
-    });
-  }
-
-  async function saveSelectedPost(form: HTMLFormElement) {
+  async function saveSelectedPost(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     if (!selectedPost) return;
-    const creatorInfo = selectedPostAccount?.tiktok_creator_info ?? null;
-    const commentLocked = isCreatorCommentDisabled(creatorInfo);
-    const formData = new FormData(form);
+    const formData = new FormData(event.currentTarget);
     const hashtags = String(formData.get("hashtags") || "")
       .split(/\s+/)
       .map((tag) => tag.trim())
       .filter(Boolean);
-    const privacyLevel = String(formData.get("privacyLevel") || "") || null;
-    const disableDuet = formData.get("disableDuet") === "on";
-    const disableStitch = formData.get("disableStitch") === "on";
-    const disableComment = commentLocked || formData.get("disableComment") === "on";
-    const isAigc = formData.get("isAigc") === "on";
-    const brandContentToggle = formData.get("brandContentToggle") === "on";
-    const brandOrganicToggle = formData.get("brandOrganicToggle") === "on";
 
-    setActionBusy(true);
-    setMessage(null);
-    try {
-      await invokeFunction("update-post-schedule", {
-        postId: selectedPost.id,
-        scheduledAt: new Date(String(formData.get("scheduledAt"))).toISOString(),
-        caption: String(formData.get("caption") || ""),
-        hashtags,
-        privacyLevel,
-        disableDuet,
-        disableStitch,
-        disableComment,
-        isAigc,
-        brandContentToggle,
-        brandOrganicToggle,
-        privacySettings: buildTikTokPrivacySettings({
-          privacyLevel,
-          disableDuet,
-          disableStitch,
-          disableComment,
-          isAigc,
-          brandContentToggle,
-          brandOrganicToggle,
-        }),
-      });
-      await refresh();
-      setMessage("Post review saved.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setActionBusy(false);
-    }
+    await invokeFunction("update-post-schedule", {
+      postId: selectedPost.id,
+      scheduledAt: new Date(String(formData.get("scheduledAt"))).toISOString(),
+      caption: String(formData.get("caption") || ""),
+      hashtags,
+      privacyLevel: String(formData.get("privacyLevel") || "") || null,
+      disableDuet: formData.get("disableDuet") === "on",
+      disableStitch: formData.get("disableStitch") === "on",
+      disableComment: formData.get("disableComment") === "on",
+    });
   }
 
-  const createPanel = (
-    <aside className="panel create-panel">
-      <div className="panel-title">
-        <WandSparkles size={18} />
-        <h2>Create Batch</h2>
-      </div>
-      <form
-        onSubmit={(event) => void runAction("Batch creation", () => createBatch(event))}
-        className="stack"
-      >
-        <label>
-          Audio source
-          <input
-            type="file"
-            accept="audio/*"
-            onChange={(event) => setAudio(event.target.files?.[0] ?? null)}
-          />
-        </label>
-        <label>
-          Visual prompt
-          <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={4} />
-        </label>
-        <div className="split source-split">
-          <label>
-            Posts
-            <input
-              type="number"
-              min={1}
-              max={250}
-              value={count}
-              onChange={(event) => setCount(Number(event.target.value))}
-            />
-          </label>
-          <label>
-            Source
-            <select
-              value={sourceMode}
-              onChange={(event) => setSourceMode(event.target.value as SourceMode)}
-            >
-              <option value="stock">Stock footage (fal pipeline)</option>
-              <option value="mixed">Mixed: stock + Seedance (fal)</option>
-              <option value="seedance">Seedance via fal.ai</option>
-              <option value="gmi_seedance">GMI Seedance 2</option>
-            </select>
-          </label>
-        </div>
-        <div className="split schedule-split">
-          <label>
-            Start
-            <input
-              type="datetime-local"
-              value={startAt}
-              onChange={(event) => setStartAt(event.target.value)}
-            />
-          </label>
-          <label>
-            Cadence min
-            <input
-              type="number"
-              min={5}
-              value={cadence}
-              onChange={(event) => setCadence(Number(event.target.value))}
-            />
-          </label>
-        </div>
-        <button className="button primary" disabled={!accountId || actionBusy} type="submit">
-          <UploadCloud size={16} /> Queue generation
-        </button>
-      </form>
-
-      <div className="action-row">
-        <button
-          className="button"
-          disabled={actionBusy}
-          onClick={() =>
-            void runAction("Generation worker", () =>
-              invokeFunction("fanpage-campaign", { action: "runGenerationWorkers" }),
-            )
-          }
-        >
-          <RefreshCcw size={16} /> Generate due
-        </button>
-        <button
-          className="button"
-          disabled={actionBusy}
-          onClick={() =>
-            void runAction("Publish worker", () =>
-              invokeFunction("fanpage-campaign", { action: "runPublishWorker" }),
-            )
-          }
-        >
-          <Send size={16} /> Publish due
-        </button>
-      </div>
-
-      <div className="batch-list">
-        {data.batches.slice(0, 6).map((batch) => (
-          <div className="batch-row" key={batch.id}>
-            <span className={`dot ${statusClass(batch.status)}`} />
-            <div>
-              <strong>{batch.source_mode}</strong>
-              <span>
-                {batch.post_count} posts - {batch.status}
-              </span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </aside>
-  );
-
-  const calendarPanel = (
-    <StudioCalendarPanel
-      posts={data.posts}
-      libraryPreviews={data.libraryPreviews}
-      accounts={data.accounts}
-      view={calendarView}
-      onViewChange={setCalendarView}
-      filters={filters}
-      onFiltersChange={setFilters}
-      onEventDrop={(arg) => void updatePostSchedule(arg)}
-      onEventClick={(postId) => {
-        setSelectedPostId(postId);
-        setMessage(null);
-      }}
-      externalLibraryContainerRef={libraryPanelRef}
-      onExternalLibraryDrop={(libraryItemId, scheduledAt) =>
-        void scheduleDrop(libraryItemId, scheduledAt)
-      }
-      audioClipIds={audioClipIds}
-    />
-  );
-
-  const readyLibraryPanel = (
-    <StudioReadyLibraryPanel
-      libraryItems={filteredLibraryItems}
-      selectedIds={selectedLibraryIds}
-      onToggle={toggleLibraryItem}
-      onBulkScheduleOpen={() => setBulkDialogOpen(true)}
-      containerRef={libraryPanelRef}
-    />
-  );
-
-  const postReviewPanel = (
-    <StudioPostReview
-      post={selectedPost}
-      account={selectedPostAccount}
-      libraryPreview={selectedPreview}
-      busy={actionBusy || studioBusy}
-      onSave={saveSelectedPost}
-      onClose={() => setSelectedPostId(null)}
-    />
-  );
+  const navItems = [
+    { to: "/", label: "Autopilot", icon: Zap },
+    { to: "/clips", label: "Clips", icon: Clapperboard },
+    { to: "/library", label: "Library", icon: Library },
+    { to: "/calendar", label: "Calendar", icon: CalendarDays },
+  ];
 
   return (
-    <main
-      className={`app-shell ${mode === "studio" ? "studio-shell" : ""}`}
-      data-studio-view={mode === "studio" ? studioView : undefined}
-    >
-      <header className="topbar">
-        <div>
-          <h1 style={{ fontSize: 18 }}>
-            {mode === "studio" ? "Studio" : "Autopilot"}
-          </h1>
-          <p>
-            {mode === "studio"
-              ? "Calendar + post review for queued TikTok publishes"
-              : "Guided audio → captions → library workflow"}
-          </p>
-        </div>
-        <div className="topbar-actions">
-          {mode === "studio" ? (
-            <div className="studio-view-toggle" role="tablist" aria-label="Studio view">
-              <button
-                type="button"
-                className={`button ${studioView === "create" ? "primary" : "ghost"}`}
-                onClick={() => setStudioView("create")}
-              >
-                Create
-              </button>
-              <button
-                type="button"
-                className={`button ${studioView === "calendar" ? "primary" : "ghost"}`}
-                onClick={() => setStudioView("calendar")}
-              >
-                Calendar
-              </button>
-            </div>
-          ) : null}
-          <select
-            value={accountId}
-            onChange={(event) => setAccountId(event.target.value)}
-            aria-label="Account"
-          >
-            {data.accounts.length === 0 ? <option value="">No accounts</option> : null}
-            {data.accounts.map((account) => (
-              <option key={account.id} value={account.id}>
-                {account.handle || account.tiktok_display_name || account.id.slice(0, 8)}
-              </option>
-            ))}
-          </select>
-          {accountId ? (
-            <a className="button ghost" href={buildTikTokConnectUrl(SUPABASE_URL, accountId)}>
-              <PlugZap size={16} />{" "}
-              {selectedAccount?.tiktok_connected_at ? "Reconnect" : "Connect TikTok"}
-            </a>
-          ) : null}
-        </div>
-      </header>
+    <main className="app-shell">
+      <aside className="sidebar">
+        <Link className="brand-mark" to="/">
+          <span className="brand-logo">⚡</span>
+          <span>FanAgent</span>
+        </Link>
+        <nav className="sidebar-nav" aria-label="Primary">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const active = location.pathname === item.to || (item.to === "/" && location.pathname === "/");
+            return (
+              <Link key={item.to} className={`sidebar-link ${active ? "active" : ""}`} to={item.to}>
+                <Icon size={18} />
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
+        </nav>
+        <div className="sidebar-divider" />
+        <Link className="sidebar-link" to="/settings/accounts">
+          <Settings size={18} />
+          <span>Accounts</span>
+        </Link>
+      </aside>
 
+      <section className="app-main">
+        <header className="topbar">
+          <div>
+            <h1>{mode === "studio" ? "Calendar" : "Autopilot"}</h1>
+            <p>{mode === "studio" ? "Schedule and post review" : "Build a ready-to-schedule video library"}</p>
+          </div>
+          <div className="topbar-actions">
+            <select value={accountId} onChange={(event) => setAccountId(event.target.value)} aria-label="Account">
+              {accounts.length === 0 ? <option value="">No accounts</option> : null}
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.handle || account.tiktok_display_name || account.id.slice(0, 8)}
+                </option>
+              ))}
+            </select>
+            {accountId ? (
+              <a className="button ghost" href={tiktokConnectUrl(accountId)}>
+                <PlugZap size={16} /> {selectedAccount?.tiktok_connected_at ? "Reconnect" : "Connect TikTok"}
+              </a>
+            ) : null}
+          </div>
+        </header>
 
-      {studioError ? <div className="banner bad">{studioError}</div> : null}
+      {setupError ? <div className="banner bad">{setupError}</div> : null}
       {message ? <div className="banner">{message}</div> : null}
 
       {mode === "autopilot" ? (
-        <AutopilotWizard
-          initialTab={lyricsFocusSignal ? "lyrics" : undefined}
-          focusLyricsStepSignal={lyricsFocusSignal}
-          initialLyricTemplateId={initialQuery.current.lyricTemplateId}
-        />
+        <AutopilotPanel />
       ) : (
-
-        <>
-          {blockedPostCount > 0 ? (
-            <div className="banner warn">
-              {blockedPostCount} scheduled post{blockedPostCount === 1 ? "" : "s"} need publishing
-              attention.
+        <section className="dashboard-grid">
+          <aside className="panel create-panel">
+            <div className="panel-title">
+              <WandSparkles size={18} />
+              <h2>Create Batch</h2>
             </div>
-          ) : null}
+            <form
+              onSubmit={(event) => runAction("Batch creation", () => createBatch(event))}
+              className="stack"
+            >
+              <label>
+                Audio source
+                <input
+                  type="file"
+                  accept="audio/*"
+                  onChange={(event) => setAudio(event.target.files?.[0] ?? null)}
+                />
+              </label>
+              <label>
+                Visual prompt
+                <textarea
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  rows={4}
+                />
+              </label>
+              <div className="split source-split">
+                <label>
+                  Posts
+                  <input
+                    type="number"
+                    min={1}
+                    max={250}
+                    value={count}
+                    onChange={(event) => setCount(Number(event.target.value))}
+                  />
+                </label>
+                <label>
+                  Source
+                  <select
+                    value={sourceMode}
+                    onChange={(event) => setSourceMode(event.target.value as SourceMode)}
+                  >
+                    <option value="stock">Stock footage (fal pipeline)</option>
+                    <option value="mixed">Mixed: stock + Seedance (fal)</option>
+                    <option value="seedance">Seedance via fal.ai</option>
+                    <option value="gmi_seedance">GMI Seedance 2</option>
+                  </select>
+                </label>
+              </div>
+              <div className="split schedule-split">
+                <label>
+                  Start
+                  <input
+                    type="datetime-local"
+                    value={startAt}
+                    onChange={(event) => setStartAt(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Cadence min
+                  <input
+                    type="number"
+                    min={5}
+                    value={cadence}
+                    onChange={(event) => setCadence(Number(event.target.value))}
+                  />
+                </label>
+              </div>
+              <button className="button primary" disabled={!accountId || isPending} type="submit">
+                <UploadCloud size={16} /> Queue generation
+              </button>
+            </form>
 
-          {studioView === "create" ? (
-            <section className="dashboard-grid">
-              {createPanel}
-              <section className="stack">
-                <div className="action-row">
-                  <button
-                    type="button"
-                    className="button ghost"
-                    onClick={() => setReadyLibraryOpen((open) => !open)}
-                  >
-                    <CalendarDays size={14} /> Ready library
-                  </button>
-                  <button
-                    className="button ghost"
-                    type="button"
-                    disabled={studioBusy}
-                    onClick={refresh}
-                  >
-                    <RefreshCcw className={studioBusy ? "spin" : undefined} size={14} /> Refresh
-                  </button>
+            <div className="action-row">
+              <button
+                className="button"
+                disabled={isPending}
+                onClick={() =>
+                  runAction("Generation worker", () =>
+                    invokeFunction("fanpage-campaign", { action: "runGenerationWorkers" }),
+                  )
+                }
+              >
+                <RefreshCcw size={16} /> Generate due
+              </button>
+              <button
+                className="button"
+                disabled={isPending}
+                onClick={() =>
+                  runAction("Publish worker", () =>
+                    invokeFunction("fanpage-campaign", { action: "runPublishWorker" }),
+                  )
+                }
+              >
+                <Send size={16} /> Publish due
+              </button>
+            </div>
+
+            <div className="batch-list">
+              {batches.slice(0, 6).map((batch) => (
+                <div className="batch-row" key={batch.id}>
+                  <span className={`dot ${statusClass(batch.status)}`} />
+                  <div>
+                    <strong>{batch.source_mode}</strong>
+                    <span>
+                      {batch.post_count} posts · {batch.status}
+                    </span>
+                  </div>
                 </div>
-                {readyLibraryOpen ? readyLibraryPanel : null}
-                {calendarPanel}
-              </section>
-              {postReviewPanel}
-            </section>
-          ) : (
-            <div className={`calendar-workspace ${selectedPost ? "has-review" : ""}`}>
-              {readyLibraryPanel}
-              <section className="stack">{calendarPanel}</section>
-              {selectedPost ? postReviewPanel : null}
+              ))}
             </div>
-          )}
+          </aside>
 
-          {bulkDialogOpen ? (
-            <BulkScheduleDialog
-              libraryItemIds={Array.from(selectedLibraryIds)}
-              onClose={() => setBulkDialogOpen(false)}
-              onScheduled={() => {
-                setBulkDialogOpen(false);
-                setSelectedLibraryIds(new Set());
-                void refresh();
-              }}
-            />
-          ) : null}
-        </>
+          <section className="panel calendar-panel">
+            <div className="panel-title">
+              <CalendarDays size={18} />
+              <h2>Schedule</h2>
+            </div>
+            <Suspense fallback={<div className="calendar-loading">Loading schedule...</div>}>
+              <FanAgentCalendar
+                events={calendarEvents}
+                onEventDrop={handleEventDrop}
+                onEventClick={setSelectedPostId}
+              />
+            </Suspense>
+          </section>
+
+          <aside className="panel post-panel">
+            <div className="panel-title">
+              <Send size={18} />
+              <h2>Post Review</h2>
+            </div>
+            {selectedPost ? (
+              <form
+                onSubmit={(event) => runAction("Post save", () => saveSelectedPost(event))}
+                className="stack"
+              >
+                <div className={`status-pill ${statusClass(selectedPost.status)}`}>
+                  {selectedPost.status} · {selectedPost.publish_status || "not sent"}
+                </div>
+                <label>
+                  Caption
+                  <textarea name="caption" rows={5} defaultValue={selectedPost.caption} />
+                </label>
+                <label>
+                  Hashtags
+                  <input name="hashtags" defaultValue={(selectedPost.hashtags ?? []).join(" ")} />
+                </label>
+                <label>
+                  Scheduled
+                  <input
+                    name="scheduledAt"
+                    type="datetime-local"
+                    defaultValue={toLocalInputValue(new Date(selectedPost.scheduled_at))}
+                  />
+                </label>
+                <label>
+                  TikTok privacy
+                  <select
+                    name="privacyLevel"
+                    defaultValue={selectedPost.tiktok_privacy_level ?? ""}
+                  >
+                    <option value="">Choose before publish</option>
+                    {privacyLevels.map((level) => (
+                      <option key={level} value={level}>
+                        {level}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="check">
+                  <input
+                    name="disableDuet"
+                    type="checkbox"
+                    defaultChecked={selectedPost.tiktok_disable_duet ?? true}
+                  />{" "}
+                  Disable duet
+                </label>
+                <label className="check">
+                  <input
+                    name="disableStitch"
+                    type="checkbox"
+                    defaultChecked={selectedPost.tiktok_disable_stitch ?? true}
+                  />{" "}
+                  Disable stitch
+                </label>
+                <label className="check">
+                  <input
+                    name="disableComment"
+                    type="checkbox"
+                    defaultChecked={selectedPost.tiktok_disable_comment ?? false}
+                  />{" "}
+                  Disable comments
+                </label>
+                {selectedPost.video_url ? (
+                  <video src={selectedPost.video_url} controls muted playsInline />
+                ) : null}
+                <button className="button primary" disabled={isPending} type="submit">
+                  Save post
+                </button>
+              </form>
+            ) : (
+              <div className="empty-state">Select a scheduled item.</div>
+            )}
+          </aside>
+        </section>
       )}
+      </section>
     </main>
   );
 }
