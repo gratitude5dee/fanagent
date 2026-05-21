@@ -1,48 +1,75 @@
 ## Goal
 
-Get the app to a clean running state (no runtime errors) and close the remaining open items from the "premium creator tool" overhaul that were deferred for risk.
+Make `/` actually look and behave like the spec: dark-mode design tokens, left sidebar shell, vertical stepped Autopilot wizard, and a real Clips page. No more `?wizard=1` opt-in, no more flat top-row buttons.
 
-## 1. Fix the "Invalid hook call" runtime error (root cause)
+## 1. Design tokens (`src/styles.css`)
 
-The stack trace shows **two different prebundled copies** of `react-dom/client` loaded in the same page:
+Add the full token set at the top of `:root` (keep existing variables that other components consume; new tokens shadow them where needed):
 
-- `react-dom_client.js?v=64fb7c3f`
-- `react-dom_client.js?v=17f34875`
+- Palette: `--bg-base #0a0a0f`, `--bg-surface #12121a`, `--bg-elevated #1c1c28`, `--bg-overlay #252535`
+- Borders: `--border #2a2a3d`, `--border-subtle #1e1e2e`
+- Accent: `--accent #7c3aed`, `--accent-glow #a855f7`, `--accent-muted rgba(124,58,237,.15)`
+- Status: `--status-good #22c55e`, `--status-warn #f59e0b`, `--status-bad #ef4444`, `--status-idle #6b7280`
+- Type: `--font-sans 'Inter', system-ui, sans-serif`, `--font-mono 'JetBrains Mono', monospace`
+- Radius: `--radius-sm 6 / --radius-md 12 / --radius-lg 20 / --radius-xl 28`
 
-That happens when Vite re-optimizes deps mid-session (we recently added a sidebar route + lazy chunks) and HMR keeps the old module instance alive alongside the new one. Two React instances → `useRef` throws *Invalid hook call* the moment `App` re-mounts on `/`.
+Restyle `body`, `.app-shell`, `.topbar`, `.panel`, `.button`, `.button.primary`, `.batch-row`, `.dot.{good,warn,bad,idle}`, `.banner`, `.banner.warn`, `.banner.bad` to consume the new tokens. Existing classnames stay; only the values change.
 
-Fix:
-- Restart the dev server to drop the stale prebundle cache (`code--restart_dev_server`).
-- Remove `optimizeDeps.force: true` from `vite.config.ts` — forcing on every boot is what re-issues a new hash and orphans the previous one. With `dedupe` + explicit aliases, `force` is unnecessary and actively harmful here.
-- Verify `/` loads with no console error and `/clips`, `/library`, `/lyrics` still mount through `AppShell`.
+Add new utility classes for the wizard + clips:
 
-## 2. Wire the sidebar into the root route
+- `.wizard-shell`, `.wizard-step`, `.wizard-step.active`, `.wizard-step.complete`, `.step-number`, `.step-header`, `.step-summary`, `.step-body`
+- `.clip-grid`, `.clip-group`, `.clip-group-header`, `.clip-tile`, `.clip-tile .clip-actions`, `.clip-tile:hover .clip-actions`
 
-Right now `App.tsx` (`/`) renders its own `topbar` and is NOT wrapped in `AppShell`, so the new sidebar only appears on sub-routes. Wrap `/` in `AppShell` too and drop the duplicate topbar's redundant nav links so the sidebar is the single navigation surface.
+## 2. Shell + sidebar on the root route (`src/main.tsx`, `src/App.tsx`)
 
-## 3. Finish the deferred items (smallest viable slice)
+- Wrap `/` in `<AppShell>` (already imported by sub-routes) so every page shares the sidebar.
+- `AppSidebar`: add the FanAgent wordmark header, group the items as Autopilot / Clips / Library / Calendar (separator) / Accounts, and use NavLink active state styled with `--accent-muted` background + `--accent` text.
+- `App.tsx`: drop the mode-switch buttons from `.topbar`. Topbar keeps only the account selector + TikTok connect CTA on the right. On `/`, render `<AutopilotWizard />` as the primary view (no `?wizard=1` gate). Studio view stays reachable via `?mode=studio` and the Calendar sidebar link.
+- Mobile (`< 768px`): the existing shadcn sidebar already collapses to an offcanvas drawer; keep that behavior. Add a CSS rule that pins `SidebarTrigger` to the topbar on narrow screens.
 
-- **Inline render in `fanpage-generate-due`**: when an item finishes stitching inside the cron tick and we still have >15s of wall-clock budget, call `render-karaoke` synchronously before returning, so the first clip appears in `/clips` without waiting for the next tick.
-- **Category-locked sourcing**: flip `lockCategory` default to `true` in `create-generation-batch` whenever a `categoryId` is set on the batch (adapter already supports it from the prior pass).
-- **CategoryPicker polish**: add the clip-count badge we stubbed and a keyboard-accessible focus ring; no logic changes.
+## 3. Real Autopilot wizard (`src/components/AutopilotWizard.tsx`)
 
-## 4. Verify
+Replace the shim. New component owns the stepped flow but DELEGATES all business logic to the existing handlers exported from `AutopilotPanel`. To avoid rewriting the 1231-line monolith we will:
 
-- Hard reload `/`, confirm no "Invalid hook call" in console.
-- `/?wizard=1` still renders the wizard chrome.
-- Run `bunx vitest run` for the touched edge-function unit tests (`tests/campaign.test.ts`, `tests/sources.test.ts`).
-- Quick manual: upload audio → generate library → confirm first tile appears in `/clips` within one cron cycle.
+1. Extract the state + actions from `AutopilotPanel.tsx` into a new hook `src/components/autopilot/useAutopilotController.ts` — pure mechanical move of the existing hooks, no behavior change.
+2. `AutopilotPanel.tsx` becomes a 10-line wrapper: `return <AutopilotWizard {...props} />` (preserves the exported prop interface listed in §7).
+3. `AutopilotWizard` consumes the controller hook and renders six stacked `<WizardStep>` cards:
+   - **connect** → uses existing `ConnectStep` body; collapsed summary = handle + status dot.
+   - **upload** → existing `UploadStep` body (already drag-drop + trimmer); summary = filename + duration chip.
+   - **lyrics** → existing `LyricsStep`; summary = template title + word count + Saved badge; "Skip (no captions)" advances with warning.
+   - **category** → existing refined `CategoryPicker` (grid already done last sprint); summary = icon + name.
+   - **campaign** → existing `CampaignStep` body; Generate Library CTA disabled until prior steps complete.
+   - **generating** → live progress panel reading `activeBatches` from the controller; polling reduced from 15s → 5s while `activeBatches.length > 0`. On first `status === 'ready'` item, fire a sonner toast "🎬 Your first video is ready!" and `navigate('/clips?audioClipId=' + lastLaunchedAudioClipId)`.
 
-## Out of scope
+Step gating uses the rule table from §2.3 of the spec.
 
-- Full `AutopilotPanel` monolith rewrite (still high-risk; wizard shim stays).
-- Global design-token CSS reskin.
-- E2E flake hardening beyond the existing `wizard-flow.spec.ts`.
+## 4. Clips page polish (`src/pages/clips/ClipsPage.tsx`, `src/lib/clips/api.ts`)
+
+The route + grouping already exist from last sprint. This pass:
+
+- Restyle with the new tokens (group cards, sticky group headers, status filter chips along the top).
+- Add hover autoplay (muted) on `LibraryTile` via `onMouseEnter`/`Leave`.
+- Add the per-tile font badge (already stored in `metadata.lyric_font`).
+- Bulk select bar at the bottom: "Select all in group", "Schedule Selected" (opens existing `BulkScheduleDialog`).
+- Filter dropdowns: status (all/unscheduled/scheduled/posted/failed), audio clip, category.
+
+## 5. Verify
+
+- `/` shows sidebar + 6 collapsed/active wizard cards. No old tab UI.
+- Drag-drop audio → status pill animates → step auto-collapses.
+- Generate Library → step 6 appears, polls every 5s, toast fires when first item lands.
+- `/clips` renders groups with hover-play, font badge, working bulk schedule.
+- `/library`, `/lyrics`, `/calendar` still work (they already use `AppShell`).
+- No "Invalid hook call"; `bunx vitest run tests/autopilot.test.ts tests/autopilot-lyrics-handoff.test.ts` still pass after the controller extraction.
+
+## Out of scope (per spec §10 + risk)
+
+- Rewriting `render-karaoke` font integration — already shipped last sprint (`pickFont`, ASS subtitles, metadata.lyric_font).
+- Category-locked sourcing — already shipped (`lockCategory` defaults true when categoryId set).
+- Inline render in `fanpage-generate-due` — already present at line 353.
+- Multi-tenant auth, new social platforms, AI music gen.
 
 ## Files touched
 
-- `vite.config.ts` (remove `force`)
-- `src/App.tsx` (wrap in `AppShell`, trim duplicate nav)
-- `src/components/autopilot/CategoryPicker.tsx` (count badge, focus ring)
-- `supabase/functions/fanpage-generate-due/index.ts` (inline render budget)
-- `supabase/functions/create-generation-batch/index.ts` (default `lockCategory`)
+- **Edit**: `src/styles.css`, `src/main.tsx`, `src/App.tsx`, `src/components/AppSidebar.tsx`, `src/components/AppShell.tsx`, `src/components/AutopilotPanel.tsx`, `src/components/AutopilotWizard.tsx`, `src/pages/clips/ClipsPage.tsx`, `src/components/library/LibraryTile.tsx`.
+- **Create**: `src/components/autopilot/useAutopilotController.ts`, `src/components/autopilot/WizardStep.tsx`.
