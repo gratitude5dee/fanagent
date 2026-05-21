@@ -138,7 +138,13 @@ function validatePayload(body: CreateBatchRequest) {
     dedupeStrategy,
     lyricTemplateId: body.lyricTemplateId ?? null,
     clipSelection,
-    stockSettings: body.stockSettings ?? {},
+    stockSettings: {
+      // Default to category-locked sourcing when a category was picked so
+      // a "Basketball" campaign cannot leak into unrelated stock footage.
+      ...(body.categoryId ? { lockCategory: true } : {}),
+      ...(body.stockSettings ?? {}),
+    },
+
     seedanceSettings: body.seedanceSettings ?? {},
     publishDefaults: {
       privacyLevel: "SELF_ONLY",
