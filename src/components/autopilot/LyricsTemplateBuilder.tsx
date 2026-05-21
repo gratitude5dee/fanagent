@@ -310,6 +310,7 @@ export default function LyricsTemplateBuilder({
             template={state.template}
             engine={engine}
             onDone={onLyricsDone}
+            onBlocksLive={onBlocksLive}
             onRetry={async () => {
               if (!state.template) return;
               try {
