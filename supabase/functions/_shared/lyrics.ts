@@ -119,6 +119,68 @@ export function blocksToSrt(
     .join("\n");
 }
 
+function fmtAssTs(ms: number): string {
+  if (ms < 0) ms = 0;
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  const s = Math.floor((ms % 60_000) / 1000);
+  const cs = Math.floor((ms % 1000) / 10);
+  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+  return `${h}:${pad(m)}:${pad(s)}.${pad(cs)}`;
+}
+
+/**
+ * Build an ASS subtitle file with custom Fontname / weight / colours.
+ * libass on fal.ai falls back to a system font when the named font isn't
+ * installed, but PrimaryColour + OutlineColour always render — guaranteeing
+ * visible per-video variation.
+ */
+export function blocksToAss(
+  blocks: RenderLyricBlock[],
+  selectionStartMs: number,
+  totalSeconds: number,
+  style: { fontName: string; fontWeight: string; primaryColour: string; outlineColour: string },
+): string {
+  const totalMs = totalSeconds * 1000;
+  const cues: { start: number; end: number; text: string }[] = [];
+  for (const block of blocks ?? []) {
+    const words = Array.isArray(block.words) ? block.words : [];
+    const text = (block.text ?? words.map(wordText).join(" ")).trim().replace(/\s+/g, " ");
+    if (!text) continue;
+    const startMs = blockStartMs(block, words);
+    const endMs = blockEndMs(block, words, startMs);
+    const s = startMs - selectionStartMs;
+    const e = endMs - selectionStartMs;
+    if (e <= 0 || s >= totalMs) continue;
+    cues.push({ start: Math.max(0, s), end: Math.min(totalMs, e), text });
+  }
+
+  const bold = Number(style.fontWeight) >= 600 ? "-1" : "0";
+  const header = [
+    "[Script Info]",
+    "ScriptType: v4.00+",
+    "PlayResX: 720",
+    "PlayResY: 1280",
+    "ScaledBorderAndShadow: yes",
+    "",
+    "[V4+ Styles]",
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+    `Style: Lyric,${style.fontName},72,${style.primaryColour},${style.primaryColour},${style.outlineColour},&H80000000,${bold},0,0,0,100,100,0,0,1,4,2,2,40,40,180,1`,
+    "",
+    "[Events]",
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+  ].join("\n");
+
+  const events = cues
+    .map(
+      (cue) =>
+        `Dialogue: 0,${fmtAssTs(cue.start)},${fmtAssTs(cue.end)},Lyric,,0,0,0,,${cue.text.replace(/\n/g, "\\N")}`,
+    )
+    .join("\n");
+
+  return `${header}\n${events}\n`;
+}
+
 export function transcriptToKanvasLyricBlocks(transcript: Transcript): KanvasLyricBlock[] {
   const words = transcript.words.map((word, index) => ({
     id: `word-${index + 1}`,
