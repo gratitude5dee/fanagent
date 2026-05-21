@@ -471,77 +471,55 @@ export default function App() {
     >
       <header className="topbar">
         <div>
-          <h1>FanAgent</h1>
-          <p>React + Supabase audio-to-TikTok queue</p>
+          <h1 style={{ fontSize: 18 }}>
+            {mode === "studio" ? "Studio" : "Autopilot"}
+          </h1>
+          <p>
+            {mode === "studio"
+              ? "Calendar + post review for queued TikTok publishes"
+              : "Guided audio → captions → library workflow"}
+          </p>
         </div>
         <div className="topbar-actions">
-          <div className="mode-switch" role="tablist" aria-label="Mode">
-            <button
-              type="button"
-              className={`button ${mode === "autopilot" ? "primary" : "ghost"}`}
-              onClick={() => setMode("autopilot")}
-            >
-              <Sparkles size={14} /> Autopilot
-            </button>
-            <button
-              type="button"
-              className={`button ${mode === "studio" ? "primary" : "ghost"}`}
-              onClick={() => setMode("studio")}
-            >
-              <WandSparkles size={14} /> Studio
-            </button>
-            {mode === "studio" ? (
-              <div className="studio-view-toggle" role="tablist" aria-label="Studio view">
-                <button
-                  type="button"
-                  className={`button ${studioView === "create" ? "primary" : "ghost"}`}
-                  onClick={() => setStudioView("create")}
-                >
-                  Create
-                </button>
-                <button
-                  type="button"
-                  className={`button ${studioView === "calendar" ? "primary" : "ghost"}`}
-                  onClick={() => setStudioView("calendar")}
-                >
-                  Calendar
-                </button>
-              </div>
-            ) : null}
-            <Link className="button ghost" to="/clips">
-              <Images size={14} /> Clips
-            </Link>
-            <Link className="button ghost" to="/library">
-              <Images size={14} /> Library
-            </Link>
-            <Link className="button ghost" to="/settings/accounts">
-              <PlugZap size={14} /> Accounts
-            </Link>
-          </div>
           {mode === "studio" ? (
-            <>
-              <select
-                value={accountId}
-                onChange={(event) => setAccountId(event.target.value)}
-                aria-label="Account"
+            <div className="studio-view-toggle" role="tablist" aria-label="Studio view">
+              <button
+                type="button"
+                className={`button ${studioView === "create" ? "primary" : "ghost"}`}
+                onClick={() => setStudioView("create")}
               >
-                {data.accounts.length === 0 ? <option value="">No accounts</option> : null}
-                {data.accounts.map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {account.handle || account.tiktok_display_name || account.id.slice(0, 8)}
-                  </option>
-                ))}
-              </select>
-              {accountId ? (
-                <a className="button ghost" href={buildTikTokConnectUrl(SUPABASE_URL, accountId)}>
-                  <PlugZap size={16} />{" "}
-                  {selectedAccount?.tiktok_connected_at ? "Reconnect" : "Connect TikTok"}
-                </a>
-              ) : null}
-            </>
+                Create
+              </button>
+              <button
+                type="button"
+                className={`button ${studioView === "calendar" ? "primary" : "ghost"}`}
+                onClick={() => setStudioView("calendar")}
+              >
+                Calendar
+              </button>
+            </div>
+          ) : null}
+          <select
+            value={accountId}
+            onChange={(event) => setAccountId(event.target.value)}
+            aria-label="Account"
+          >
+            {data.accounts.length === 0 ? <option value="">No accounts</option> : null}
+            {data.accounts.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.handle || account.tiktok_display_name || account.id.slice(0, 8)}
+              </option>
+            ))}
+          </select>
+          {accountId ? (
+            <a className="button ghost" href={buildTikTokConnectUrl(SUPABASE_URL, accountId)}>
+              <PlugZap size={16} />{" "}
+              {selectedAccount?.tiktok_connected_at ? "Reconnect" : "Connect TikTok"}
+            </a>
           ) : null}
         </div>
       </header>
+
 
       {studioError ? <div className="banner bad">{studioError}</div> : null}
       {message ? <div className="banner">{message}</div> : null}
