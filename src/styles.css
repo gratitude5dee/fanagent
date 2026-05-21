@@ -144,16 +144,21 @@
 }
 
 :root {
-  /* Premium creator-tool tokens (spec v2) */
-  --bg-base: #0a0a0f;
-  --bg-surface: #12121a;
-  --bg-elevated: #1c1c28;
-  --bg-overlay: #252535;
-  --border: #2a2a3d;
-  --border-subtle: #1e1e2e;
-  --accent: #7c3aed;
-  --accent-glow: #a855f7;
-  --accent-muted: rgba(124, 58, 237, 0.15);
+  /* Prism Glass tokens (v7 direction) */
+  --bg-base: #030303;
+  --bg-surface: rgba(255, 255, 255, 0.03);
+  --bg-elevated: rgba(255, 255, 255, 0.05);
+  --bg-overlay: rgba(255, 255, 255, 0.08);
+  --bg-input: rgba(255, 255, 255, 0.04);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  --hairline-strong: rgba(255, 255, 255, 0.12);
+  --accent: oklch(0.62 0.22 295);
+  --accent-glow: oklch(0.72 0.18 290);
+  --accent-muted: oklch(0.62 0.22 295 / 0.15);
+  --accent-ring: oklch(0.62 0.22 295 / 0.35);
+  --grad-brand: linear-gradient(135deg, oklch(0.72 0.18 290), oklch(0.55 0.22 285), oklch(0.42 0.20 270));
+  --ease-glass: cubic-bezier(0.34, 1.56, 0.64, 1);
   --status-good: #22c55e;
   --status-warn: #f59e0b;
   --status-bad: #ef4444;
@@ -162,12 +167,10 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --radius-pill: 999px;
 
-  /* Legacy fanagent-* tokens re-pointed at the dark palette so existing
-   * rules (which there are many) flip themes without a rewrite. */
   --fanagent-bg: var(--bg-base);
   --fanagent-surface: var(--bg-surface);
   --fanagent-surface-2: var(--bg-elevated);
-  --fanagent-text: #e7e9f3;
+  --fanagent-text: #f4f4f8;
   --fanagent-muted: #8a8fa3;
   --fanagent-line: var(--border);
   --fanagent-accent: var(--accent);
@@ -175,7 +178,7 @@
   --fanagent-good: var(--status-good);
   --fanagent-warn: var(--status-warn);
   --fanagent-bad: var(--status-bad);
-  --fanagent-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+  --fanagent-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.04) inset;
 }
 
 button,
