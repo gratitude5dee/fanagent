@@ -168,6 +168,7 @@ async function callCampaign<T>(action: string, body?: Record<string, unknown>): 
 type AutopilotPanelProps = {
   initialTab?: "campaign" | "lyrics";
   focusLyricsStepSignal?: number;
+  initialLyricTemplateId?: string | null;
 };
 
 function tiktokConnectUrl(accountId: string): string {
@@ -258,6 +259,7 @@ function summarizeTemplate(template: LyricTemplate | LyricTemplateSummary): Lyri
 export default function AutopilotPanel({
   initialTab,
   focusLyricsStepSignal,
+  initialLyricTemplateId,
 }: AutopilotPanelProps = {}) {
   const [data, setData] = useState<CampaignList | null>(null);
   const [lyricTemplates, setLyricTemplates] = useState<LyricTemplateSummary[]>([]);
