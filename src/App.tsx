@@ -507,6 +507,9 @@ export default function App() {
                 </button>
               </div>
             ) : null}
+            <Link className="button ghost" to="/clips">
+              <Images size={14} /> Clips
+            </Link>
             <Link className="button ghost" to="/library">
               <Images size={14} /> Library
             </Link>
