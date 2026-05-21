@@ -314,6 +314,25 @@ Deno.serve(async (request) => {
       .eq("id", body.itemId);
     if (upd.error) throw upd.error;
 
+    // Persist the chosen font name on the library item so the UI can show a
+    // "Font: <name>" chip on each tile (and confirm visible per-video variation).
+    if (lyricTemplateId) {
+      const font = pickFont(body.itemId);
+      const existing = await supabase
+        .from("video_library_items")
+        .select("metadata")
+        .eq("id", libraryItemId)
+        .maybeSingle();
+      const baseMetadata = (existing.data?.metadata ?? {}) as Record<string, unknown>;
+      await supabase
+        .from("video_library_items")
+        .update({
+          metadata: { ...baseMetadata, lyric_font: font.name },
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", libraryItemId);
+    }
+
     const finalized = await withRenderAttempt(
       {
         generationItemId: body.itemId,
